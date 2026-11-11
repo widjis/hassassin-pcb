@@ -70,7 +70,9 @@ export class StyleEngine {
   private compiledDefaults: Compiled[] = [];
   private matchCounts = new Map<string, number>();
 
-  constructor(private readonly doc: Doc) {
+  private readonly doc: Doc;
+  constructor(doc: Doc) {
+    this.doc = doc;
     this.recompute();
   }
 

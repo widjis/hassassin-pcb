@@ -37,7 +37,10 @@ export class GLRenderer {
   private vao: WebGLVertexArrayObject;
   private batches = new Map<string, Batch>();
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  private readonly canvas: HTMLCanvasElement;
+
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
     const gl = canvas.getContext('webgl2', { antialias: true, premultipliedAlpha: true, alpha: false });
     if (!gl) throw new Error('This browser does not support WebGL2.');
     this.gl = gl;

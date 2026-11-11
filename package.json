@@ -6,7 +6,8 @@
     "dev": "pnpm --filter @hassassin/web dev",
     "build": "pnpm --filter @hassassin/web build",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "hassassin": "node apps/cli/bin/hassassin.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",

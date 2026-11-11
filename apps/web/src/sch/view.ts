@@ -65,10 +65,12 @@ export class SchematicView {
   private drag: { x: number; y: number; moved: boolean; kind: 'pan' | 'move'; start: Vec2; key: string; items: { uid: string; rules: Record<string, Vec2> }[] } | null = null;
   private frame = 0;
 
-  constructor(
-    private app: App,
-    readonly canvas: HTMLCanvasElement,
-  ) {
+  private app: App;
+  readonly canvas: HTMLCanvasElement;
+
+  constructor(app: App, canvas: HTMLCanvasElement) {
+    this.app = app;
+    this.canvas = canvas;
     new ResizeObserver(() => this.requestRender()).observe(canvas);
     this.bind();
   }

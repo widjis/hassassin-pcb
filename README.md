@@ -10,7 +10,8 @@ Editor PCB berbasis browser (schematic, layout, kolaborasi real-time, AI agent),
 
 ## Dokumen
 - [docs/01-flux-behavior-spec.md](docs/01-flux-behavior-spec.md) — spesifikasi perilaku referensi.
-- [docs/02-roadmap.md](docs/02-roadmap.md) — 8 fase pengembangan.
+- [docs/02-roadmap.md](docs/02-roadmap.md) — fase pengembangan.
+- [docs/03-agents.md](docs/03-agents.md) — CLI `hassassin` dan MCP server untuk Claude Code / Codex.
 
 ## Menjalankan
 ```sh

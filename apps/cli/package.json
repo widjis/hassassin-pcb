@@ -1,0 +1,16 @@
+{
+  "name": "@hassassin/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hassassin": "bin/hassassin.mjs"
+  },
+  "dependencies": {
+    "@hassassin/core": "workspace:*",
+    "@hassassin/kicad-import": "workspace:*",
+    "@hassassin/fab": "workspace:*",
+    "js-angusj-clipper": "1.3.1",
+    "@hassassin/tools": "workspace:*"
+  }
+}

@@ -162,7 +162,10 @@ export class History {
   private listeners = new Set<ChangeListener>();
   limit = 500;
 
-  constructor(private doc: Doc) {}
+  private doc: Doc;
+  constructor(doc: Doc) {
+    this.doc = doc;
+  }
 
   onChange(fn: ChangeListener): () => void {
     this.listeners.add(fn);

@@ -97,10 +97,12 @@ export class App {
   private move: MoveState | null = null;
   readonly renderer: GLRenderer;
 
-  constructor(
-    readonly glCanvas: HTMLCanvasElement,
-    readonly overlay: HTMLCanvasElement,
-  ) {
+  readonly glCanvas: HTMLCanvasElement;
+  readonly overlay: HTMLCanvasElement;
+
+  constructor(glCanvas: HTMLCanvasElement, overlay: HTMLCanvasElement) {
+    this.glCanvas = glCanvas;
+    this.overlay = overlay;
     this.renderer = new GLRenderer(glCanvas);
     this.route = new RouteTool(this);
     new ResizeObserver(() => this.requestRender()).observe(glCanvas);

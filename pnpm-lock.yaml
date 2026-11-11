@@ -24,6 +24,24 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@24.19.2)
 
+  apps/cli:
+    dependencies:
+      '@hassassin/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@hassassin/fab':
+        specifier: workspace:*
+        version: link:../../packages/fab
+      '@hassassin/kicad-import':
+        specifier: workspace:*
+        version: link:../../packages/kicad-import
+      '@hassassin/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
+      js-angusj-clipper:
+        specifier: 1.3.1
+        version: 1.3.1
+
   apps/web:
     dependencies:
       '@hassassin/core':
@@ -35,6 +53,9 @@ importers:
       '@hassassin/kicad-import':
         specifier: workspace:*
         version: link:../../packages/kicad-import
+      '@hassassin/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       earcut:
         specifier: ^3.0.2
         version: 3.2.4
@@ -54,7 +75,23 @@ importers:
         specifier: workspace:*
         version: link:../core
 
-  packages/kicad-import: {}
+  packages/kicad-import:
+    dependencies:
+      '@hassassin/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/tools:
+    dependencies:
+      '@hassassin/core':
+        specifier: workspace:*
+        version: link:../core
+      '@hassassin/fab':
+        specifier: workspace:*
+        version: link:../fab
+      '@hassassin/kicad-import':
+        specifier: workspace:*
+        version: link:../kicad-import
 
 packages:
 

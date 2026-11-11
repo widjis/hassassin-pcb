@@ -24,7 +24,10 @@ export class RouteTool {
   private target: Target | null = null;
   private preview: Vec2[] = [];
 
-  constructor(private app: App) {}
+  private app: App;
+  constructor(app: App) {
+    this.app = app;
+  }
 
   get active(): boolean {
     return this.net !== null;

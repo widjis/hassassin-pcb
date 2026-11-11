@@ -250,11 +250,14 @@ export class SceneCache {
   private pickCache: Pickable[] | null = null;
   private textCache: TextItem[] | null = null;
 
-  constructor(
-    private doc: Doc,
-    private engine: StyleEngine,
-    private copper: string[],
-  ) {
+  private doc: Doc;
+  private engine: StyleEngine;
+  private copper: string[];
+
+  constructor(doc: Doc, engine: StyleEngine, copper: string[]) {
+    this.doc = doc;
+    this.engine = engine;
+    this.copper = copper;
     this.rebuildAll();
   }
 

@@ -1,6 +1,6 @@
 # Roadmap — Hassassin AI PCB Designer
 
-Delapan fase. Setiap fase berakhir dengan sesuatu yang bisa dicoba di browser.
+Sembilan fase (termasuk 3.5). Setiap fase berakhir dengan sesuatu yang bisa dicoba di browser.
 Urutan disusun mengikuti ketergantungan: **mesin rules** dan **command layer** dibangun
 paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya.
 
@@ -10,9 +10,10 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **1** ✅ | Editor PCB dasar | Pilih/geser/putar komponen, routing manual, via, ratsnest, undo/redo, simpan/buka format kita sendiri |
 | **2** ✅ | Benar secara elektrik | DRC inkremental (clearance, unrouted, overlap), copper pour, panel Review, ekspor Gerber/drill/BOM/pick-and-place |
 | **3** ✅ | Schematic + alur proyek | Editor schematic, netlist, ERC, sinkron schematic → PCB (satu sumber data), dokumen spesifikasi proyek, tahap & gerbang pemeriksaan |
-| **4** | Kolaborasi | Edit multi-user real-time (CRDT), kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View |
+| **3.5** ✅ | Akses untuk agent | CLI `hassassin` + MCP server (stdio) di atas file `.hpcb`/KiCad: query, inspect, ubah rule, tambah part, kabel, update PCB, DRC/ERC, refill pour, ekspor fab — dipakai Claude Code, Codex, atau klien MCP lain |
+| **4** | Kolaborasi | Edit multi-user real-time, kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View; **MCP live** (agent mengedit proyek yang sedang terbuka) |
 | **5** | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
-| **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, semua aksi lewat command layer, DRC/ERC-fix, placement & routing berbantuan AI; MCP server + CLI untuk Claude Code / Codex |
+| **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, memakai definisi tool yang sama dengan CLI/MCP (Fase 3.5), DRC/ERC-fix, placement & routing berbantuan AI |
 | **7** | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
 
 ## Lapisan alur proyek (lintas fase)
@@ -138,6 +139,14 @@ Batasan yang diketahui:
 - Penamaan net otomatis tidak selalu sama dengan KiCad (konektivitas sama).
 - Footprint untuk part baru masih sementara (generik) sampai Fase 5 (library).
 - Belum ada sinkron balik PCB → schematic (mis. *swap* pin/gate).
+
+## Fase 3.5 — yang sudah dibangun
+
+Lihat [03-agents.md](03-agents.md). `packages/tools` (20+ tool dengan skema & deskripsi untuk agent,
+logika gerbang tahap dipindah ke sini), CLI `hassassin` (JSON, `--fail-on-error` untuk CI), MCP server
+stdio tanpa SDK (initialize, tools/list, tools/call, ping). Paket inti kini berjalan langsung di Node
+(sintaks TypeScript yang bisa dihapus saja). Diuji end-to-end: alur LED dari proyek kosong sampai ZIP
+fabrikasi lewat CLI, dan sesi MCP lewat stdio (termasuk undo dalam sesi).
 
 ## Di luar cakupan (untuk sekarang)
 Simulasi SPICE, mekanik/enclosure, firmware, wire harness, pemesanan pabrikasi.

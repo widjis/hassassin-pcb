@@ -82,7 +82,10 @@ export function shapeGap(a: CopperShape, b: CopperShape): { gap: number; at: Vec
 
 class Grid {
   private cells = new Map<string, number[]>();
-  constructor(private size: number) {}
+  private size: number;
+  constructor(size: number) {
+    this.size = size;
+  }
   private key(i: number, j: number) {
     return `${i},${j}`;
   }

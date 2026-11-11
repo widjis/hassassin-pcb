@@ -48,7 +48,10 @@ export class SelectorError extends Error {}
 
 class Parser {
   private i = 0;
-  constructor(private readonly s: string) {}
+  private readonly s: string;
+  constructor(s: string) {
+    this.s = s;
+  }
 
   private peek(): string {
     return this.s[this.i] ?? '';
