@@ -13,6 +13,9 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  withJunctionsOps,
+  junctionOps,
+  dragWireOps,
   copyItems,
   pasteOps,
   isClip,
@@ -94,6 +97,8 @@ export class SchematicView {
     y: number;
     moved: boolean;
     kind: 'pan' | 'move' | 'box' | 'none';
+    /** Dragging one wire segment: its neighbours stretch (S4). */
+    wireOnly?: string;
     /** Grid offset applied by the last drag frame. */
     last?: Vec2;
     /** Selection box corners in screen pixels (kind 'box'). */
@@ -294,7 +299,7 @@ export class SchematicView {
       index: s.children.length + i,
       tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: p! }, { name: 'end', value: q! }], parent: s.uid, children: [] }] },
     }));
-    this.app.apply('Draw wire', ops);
+    this.app.apply('Draw wire', this.withJunctions(ops));
   }
 
   cancelWire(): void {
@@ -340,7 +345,7 @@ export class SchematicView {
       e.recompute();
       if (after !== before) return this.app.say(`${verb} here would connect a pin or wire to another net. Move the part to a spot with more room first.`);
     }
-    this.app.apply(label, ops);
+    this.app.apply(label, this.withJunctions(ops));
   }
 
   /** Flip the selection left↔right ('h', key X) or top↔bottom ('v', key Y); wires follow. */
@@ -351,6 +356,23 @@ export class SchematicView {
     const ops = transformSelectionOps(doc, e, [...this.app.selection], axis === 'h' ? 'mirror-h' : 'mirror-v', SCH_GRID);
     if (ops.length) this.applyKeepingNets(axis === 'h' ? 'Mirror left–right' : 'Mirror top–bottom', ops, 'Mirroring');
     else this.app.say('Select something to mirror.');
+  }
+
+  /** Add / remove junction dots on this sheet, merged into the undo step `key`. */
+  private fixJunctions(key: string): void {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    const s = this.sheet();
+    if (!doc || !e || !s) return;
+    const ops = junctionOps(doc, e, s.uid);
+    if (ops.length) this.app.apply('Junctions', ops, key);
+  }
+
+  /** `ops` plus the junction dots they add or make unnecessary. */
+  private withJunctions(ops: Op[]): Op[] {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    return doc && e ? withJunctionsOps(doc, e, ops) : ops;
   }
 
   // ---------- copy / paste ----------
@@ -417,7 +439,9 @@ export class SchematicView {
   /** Drop a paste in progress where it is (one undo step). */
   finishPaste(): boolean {
     if (!this.pasting) return false;
+    const key = this.pasting.key;
     this.pasting = null;
+    this.fixJunctions(key);
     this.app.history?.seal();
     this.app.say('');
     return true;
@@ -440,7 +464,7 @@ export class SchematicView {
       if (n && ['symbol', 'wire', 'label', 'junction', 'noconnect'].includes(n.type) && !(n.type === 'label' && this.app.node(n.parent ?? '')?.type === 'symbol')) ops.push({ op: 'remove', uid });
     }
     if (ops.length) {
-      this.app.apply(`Delete ${ops.length} item${ops.length > 1 ? 's' : ''}`, ops);
+      this.app.apply(`Delete ${ops.length} item${ops.length > 1 ? 's' : ''}`, this.withJunctions(ops));
       this.app.select([]);
     }
   }
@@ -521,10 +545,14 @@ export class SchematicView {
           }
         } else if (!hit) kind = 'box';
       }
+      // One wire on its own: drag the segment, neighbours stretch.
+      const only = kind === 'move' && this.app.selection.size === 1 ? this.app.node([...this.app.selection][0]!) : undefined;
+      const wireOnly = only?.type === 'wire' ? only.uid : undefined;
+      if (wireOnly) items.length = 0;
       const sheetUid = this.sheet()?.uid;
       const wires = kind === 'move' && sheetUid && this.app.doc && this.app.engine ? snapshotWires(this.app.doc, this.app.engine, sheetUid) : null;
       const nets = kind === 'move' ? this.netPartition() : null;
-      this.drag = { x: e.clientX, y: e.clientY, moved: false, kind, start: p, key: newUid('smv'), items, symbols, wires, nets, ...(kind === 'box' ? { box: { a: { x: sx, y: sy }, b: { x: sx, y: sy } } } : {}) };
+      this.drag = { x: e.clientX, y: e.clientY, moved: false, kind, start: p, key: newUid('smv'), items, symbols, wires, nets, ...(wireOnly ? { wireOnly } : {}), ...(kind === 'box' ? { box: { a: { x: sx, y: sy }, b: { x: sx, y: sy } } } : {}) };
       if (kind === 'pan') c.style.cursor = 'grabbing';
     });
     c.addEventListener('pointermove', (e) => {
@@ -546,6 +574,13 @@ export class SchematicView {
           d.y = e.clientY;
         } else if (d.moved && d.kind === 'move') {
           const delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, SCH_GRID);
+          if (d.wireOnly && this.app.doc && this.app.engine) {
+            const last = d.last ?? { x: 0, y: 0 };
+            const step = dragWireOps(this.app.doc, this.app.engine, d.wireOnly, { x: delta.x - last.x, y: delta.y - last.y });
+            if (step.length) this.app.apply('Move wire', step, d.key);
+            d.last = delta;
+            return this.requestRender();
+          }
           const ops: Op[] = [];
           for (const it of d.items) for (const [k, v] of Object.entries(it.rules)) ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: { x: v.x + delta.x, y: v.y + delta.y } } });
           if (this.app.doc && this.app.engine) {
@@ -588,6 +623,7 @@ export class SchematicView {
           const fix = d.nets !== null ? straightenSafelyOps(this.app.doc, this.app.engine, d.wires, d.nets) : [];
           if (fix.length) this.app.apply('Move', fix, d.key);
         }
+        this.fixJunctions(d.key);
         this.app.history?.seal();
         if (d.nets !== null && this.netPartition() !== d.nets) this.app.say('This move changed connections: a pin or wire now touches another net. Undo (Cmd/Ctrl+Z) if that was not intended.');
       }
@@ -666,6 +702,8 @@ export class SchematicView {
         const a = vec(e.get(n.uid, 'start')?.value);
         const b = vec(e.get(n.uid, 'end')?.value);
         if (a && b && (dist(a, p) < 1e-3 || dist(b, p) < 1e-3) && this.wireStart && dist(this.wireStart, p) > 1e-3) return true;
+        // Ending on the middle of another wire joins it (a junction dot is added).
+        if (a && b && dist(a, p) > 1e-3 && dist(b, p) > 1e-3 && distToSegment(p, a, b) < 1e-3) return true;
       }
     }
     return false;

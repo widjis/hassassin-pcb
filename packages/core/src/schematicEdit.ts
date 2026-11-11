@@ -934,3 +934,145 @@ export function transformSelectionOps(doc: Doc, engine: StyleEngine, uids: strin
   const sheet = sheetOf(doc, nodes[0]!);
   return moveSymbolsOps(doc, engine, moves, { skip: new Set(uids), points, pre: ops, ...(sheet ? { sheet: sheet.uid } : {}) });
 }
+
+// ---------- junctions and wire dragging (S4) ----------
+
+/**
+ * Junction upkeep on a sheet: a dot wherever three or more connections meet (wire ends,
+ * pins, a wire passing through counts twice), none anywhere else. Two wires that only cross
+ * stay unconnected; a junction already placed on a crossing is kept (it connects them).
+ */
+export function junctionOps(doc: Doc, engine: StyleEngine, sheetUid: string): Op[] {
+  const sheet = doc.nodes.get(sheetUid);
+  if (!sheet) return [];
+  const segs: [Vec2, Vec2][] = [];
+  const ends: Vec2[] = [];
+  const pins: Vec2[] = [];
+  const junctions: { uid: string; at: Vec2 }[] = [];
+  for (const c of sheet.children) {
+    const n = doc.nodes.get(c);
+    if (!n) continue;
+    if (n.type === 'wire') {
+      const a = vec(engine.get(n.uid, 'start')?.value);
+      const b = vec(engine.get(n.uid, 'end')?.value);
+      if (a && b && !same(a, b)) (segs.push([a, b]), ends.push(a, b));
+    } else if (n.type === 'junction') {
+      const at = vec(engine.get(n.uid, 'position')?.value);
+      if (at) junctions.push({ uid: n.uid, at });
+    } else if (n.type === 'symbol') {
+      const f = symbolFrame(engine, n.uid);
+      for (const pc of n.children) {
+        const k = doc.nodes.get(pc);
+        const local = k?.type === 'pin' ? vec(engine.get(k.uid, 'position')?.value) : undefined;
+        if (local) pins.push(symToSheet(f, local));
+      }
+    }
+  }
+  const degree = (p: Vec2) =>
+    ends.filter((e) => same(e, p)).length +
+    pins.filter((q) => same(q, p)).length +
+    2 * segs.filter(([a, b]) => !same(a, p) && !same(b, p) && onSeg(p, a, b)).length;
+  const need = new Map<string, Vec2>();
+  for (const p of [...ends, ...pins]) if (!need.has(key(p)) && degree(p) >= 3) need.set(key(p), p);
+  const ops: Op[] = [];
+  const have = new Set<string>();
+  for (const j of junctions) {
+    const k = key(j.at);
+    const crossingKept = degree(j.at) >= 4 && !ends.some((e) => same(e, j.at)) && !pins.some((q) => same(q, j.at));
+    if ((need.has(k) || crossingKept) && !have.has(k)) have.add(k);
+    else ops.push({ op: 'remove', uid: j.uid });
+  }
+  let i = 0;
+  for (const [k, p] of need) {
+    if (have.has(k)) continue;
+    ops.push({ op: 'add', parent: sheetUid, index: sheet.children.length + i++, tree: { nodes: [{ uid: newUid('jct'), type: 'junction', name: '', props: {}, rules: [{ name: 'position', value: round(p) }], parent: sheetUid, children: [] }] } });
+  }
+  return ops;
+}
+
+/** Sheets an op list touches (looked up before the ops are applied). */
+function sheetsOfOps(doc: Doc, ops: Op[]): Set<string> {
+  const out = new Set<string>();
+  const add = (uid: string) => {
+    const n = doc.nodes.get(uid);
+    if (!n) return;
+    if (n.type === 'sheet') return void out.add(n.uid);
+    const s = sheetOf(doc, n);
+    if (s) out.add(s.uid);
+  };
+  for (const op of ops) {
+    if (op.op === 'add') add(op.parent);
+    else if ('uid' in op && typeof op.uid === 'string') add(op.uid);
+  }
+  return out;
+}
+
+/** `ops` plus the junction changes they make necessary on the sheets they touch. */
+export function withJunctionsOps(doc: Doc, engine: StyleEngine, ops: Op[]): Op[] {
+  if (!ops.length) return ops;
+  const sheets = sheetsOfOps(doc, ops);
+  if (!sheets.size) return ops;
+  const res = applyOps(doc, ops);
+  engine.recompute();
+  try {
+    const more: Op[] = [];
+    for (const sid of sheets) if (doc.nodes.has(sid)) more.push(...junctionOps(doc, engine, sid));
+    return more.length ? [...ops, ...more] : ops;
+  } finally {
+    applyOps(doc, res.inverse);
+    engine.recompute();
+  }
+}
+
+/**
+ * Drag one wire segment by `d` (sheet mm). A horizontal wire only moves up / down and a vertical
+ * one only left / right. At each end, wires running along the drag stretch; anything else there
+ * (a pin, label, junction, a wire in line or a wire the end rests on) stays put and a new short
+ * wire keeps it connected.
+ */
+export function dragWireOps(doc: Doc, engine: StyleEngine, uid: string, d: Vec2): Op[] {
+  const w = doc.nodes.get(uid);
+  if (!w || w.type !== 'wire' || !w.parent) return [];
+  const a = vec(engine.get(uid, 'start')?.value);
+  const b = vec(engine.get(uid, 'end')?.value);
+  if (!a || !b) return [];
+  const horiz = Math.abs(a.y - b.y) < EPS;
+  const vert = Math.abs(a.x - b.x) < EPS;
+  const dd = horiz && !vert ? { x: 0, y: d.y } : vert && !horiz ? { x: d.x, y: 0 } : d;
+  if (Math.abs(dd.x) < EPS && Math.abs(dd.y) < EPS) return [];
+  const sheet = doc.nodes.get(w.parent)!;
+  const o = obstacles(doc, engine, sheet.uid, uid);
+  const ops: Op[] = [];
+  const mv = (p: Vec2) => round({ x: p.x + dd.x, y: p.y + dd.y });
+  ops.push({ op: 'setRule', uid, name: 'start', decl: { name: 'start', value: mv(a) } });
+  ops.push({ op: 'setRule', uid, name: 'end', decl: { name: 'end', value: mv(b) } });
+  const alongDrag = (p: Vec2, q: Vec2) => (Math.abs(dd.x) < EPS ? Math.abs(p.x - q.x) < EPS : Math.abs(p.y - q.y) < EPS);
+  let n = 0;
+  for (const e of [a, b]) {
+    let fixed = false;
+    // Other wires with an end here.
+    for (const c of sheet.children) {
+      const v = doc.nodes.get(c);
+      if (!v || v.type !== 'wire' || v.uid === uid) continue;
+      const s = vec(engine.get(v.uid, 'start')?.value);
+      const t = vec(engine.get(v.uid, 'end')?.value);
+      if (!s || !t) continue;
+      const atS = same(s, e), atT = same(t, e);
+      if (!atS && !atT) {
+        if (onSeg(e, s, t)) fixed = true; // our end rests on that wire's middle
+        continue;
+      }
+      if (alongDrag(s, t) && !(Math.abs(dd.x) > EPS && Math.abs(dd.y) > EPS)) ops.push({ op: 'setRule', uid: v.uid, name: atS ? 'start' : 'end', decl: { name: atS ? 'start' : 'end', value: mv(e) } });
+      else fixed = true;
+    }
+    // Pins, labels, junctions, no-connects sitting on this end stay where they are.
+    o.points.forEach((p, i) => {
+      const owner = doc.nodes.get(o.pointOwners?.[i] ?? '');
+      if (owner && owner.type !== 'wire' && same(p, e)) fixed = true;
+    });
+    if (fixed) {
+      ops.push({ op: 'add', parent: sheet.uid, index: sheet.children.length + n++, tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: round(e) }, { name: 'end', value: mv(e) }], parent: sheet.uid, children: [] }] } });
+    }
+  }
+  return ops;
+}

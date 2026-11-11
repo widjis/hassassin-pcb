@@ -64,6 +64,7 @@ import {
   type Vec2,
   copyItems,
   pasteOps,
+  withJunctionsOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -135,7 +136,8 @@ const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x'
 
 function apply(p: Project, label: string, ops: Op[]): void {
   if (!ops.length) return;
-  p.history.apply(label, ops);
+  // Schematic edits also add / remove junction dots where wires meet.
+  p.history.apply(label, withJunctionsOps(p.doc, p.engine, ops));
 }
 
 export function summarize(p: Project, n: DocNode) {
