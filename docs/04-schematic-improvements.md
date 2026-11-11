@@ -65,7 +65,7 @@ only when all of its criteria pass.
   - Panning, which uses that drag today, moves to the middle mouse button, Space + drag, and trackpad
     two-finger scroll; the keyboard hints on screen are updated.
   - Shift adds to the selection; the selection can then be moved, rotated, mirrored or deleted as one step.
-- [x] **S3. Copy, paste and duplicate.** — done
+- [x] **S3. Copy, paste and duplicate.** — `dba98df`
   - Delivered: Cmd/Ctrl+C / V / D on symbols (with power symbols), wires, labels, junctions and
     no-connects. Pasted parts get the next free references (units of one part share the new one); the
     paste follows the mouse, a click drops it as one undo step, Esc cancels. The copy is also kept in
