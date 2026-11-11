@@ -28,3 +28,4 @@ export * from './schematicEdit.ts';
 export * from './clipboard.ts';
 export * from './annotate.ts';
 export * from './tidy.ts';
+export * from './textLayout.ts';

@@ -13,6 +13,8 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  layoutSheetTexts,
+  type PlacedText,
   pinGridOrigin,
   symbolPinLocals,
   PIN_GRID,
@@ -128,6 +130,7 @@ export class SchematicView {
   /** A paste in progress: follows the mouse until a click places it. */
   private swallowClick = false;
   private wirePathCache: { key: string; value: { path: Vec2[]; clean: boolean } } | null = null;
+  private layoutCache: { key: string; value: Map<string, PlacedText[]> } | null = null;
   /** Bumped on every document change (invalidates cached wire paths). */
   private rev = 0;
   private pasting: { key: string; positions: { uid: string; name: string; value: Vec2 }[]; base: Vec2 } | null = null;
@@ -393,20 +396,27 @@ export class SchematicView {
     return doc && e ? withJunctionsOps(doc, e, ops) : ops;
   }
 
+  /** Text placement of the current sheet, by owner uid (recomputed after document changes). */
+  private textLayout(): Map<string, PlacedText[]> {
+    const sheet = this.sheet();
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    const key = `${sheet?.uid}|${this.rev}`;
+    if (this.layoutCache?.key === key) return this.layoutCache.value;
+    const value = new Map<string, PlacedText[]>();
+    if (sheet && doc && e) for (const t of layoutSheetTexts(doc, e, sheet.uid)) (value.get(t.owner) ?? value.set(t.owner, []).get(t.owner)!).push(t);
+    this.layoutCache = { key, value };
+    return value;
+  }
+
   // ---------- in-place editing (S5) ----------
   /** Screen rectangles of a symbol's reference and value texts (as drawn). */
   private fieldRects(n: DocNode): { field: 'ref' | 'value'; text: string; at: Vec2; size: number; minX: number; minY: number; maxX: number; maxY: number }[] {
     if (n.type !== 'symbol' || n.props.power) return [];
-    const b = this.symbolBox(n);
     const out = [];
-    const ref = String(n.props.ref ?? n.name);
-    const val = String(n.props.Value ?? '');
-    for (const [field, text, at, size] of [
-      ['ref', ref, { x: b.maxX + 0.8, y: b.minY + 0.8 }, 1.3],
-      ['value', val || ' ', { x: b.maxX + 0.8, y: b.minY + 2.6 }, 1.1],
-    ] as const) {
-      const w = Math.max(2, text.length * size * 0.6);
-      out.push({ field, text, at, size, minX: at.x - 0.3, minY: at.y - size * 0.6, maxX: at.x + w + 0.3, maxY: at.y + size * 0.6 });
+    for (const t of this.textLayout().get(n.uid) ?? []) {
+      if (t.field !== 'ref' && t.field !== 'value') continue;
+      out.push({ field: t.field, text: t.text, at: t.at, size: t.size, minX: t.box.minX - 0.3, minY: t.box.minY - 0.2, maxX: t.box.maxX + 0.3, maxY: t.box.maxY + 0.2 });
     }
     return out;
   }
@@ -839,6 +849,7 @@ export class SchematicView {
     }
     const s = this.view.scale;
     const S = (p: Vec2) => this.toScreen(p);
+    const layout = this.textLayout();
     const lw = (mm: number) => Math.max(1, mm * s);
 
     // Grid dots
@@ -985,15 +996,10 @@ export class SchematicView {
           }
         }
       }
-      const b = this.symbolBox(n);
-      if (n.props.power) {
-        const lbl = n.children.map((u) => doc.nodes.get(u)).find((x) => x?.type === 'label');
-        // Ground names go under the symbol, supply names above it.
-        if (lbl) isGroundNet(lbl.name) ? text(lbl.name, { x: (b.minX + b.maxX) / 2, y: b.maxY + 0.4 }, 1.2, C.power, 'center', 'top') : text(lbl.name, { x: (b.minX + b.maxX) / 2, y: b.minY - 0.4 }, 1.2, C.power, 'center', 'bottom');
-      } else {
-        text(String(n.props.ref ?? n.name), { x: b.maxX + 0.8, y: b.minY + 0.8 }, 1.3, selected ? C.sel : C.ref);
-        const v = String(n.props.Value ?? '');
-        if (v) text(v.length > 28 ? `${v.slice(0, 27)}…` : v, { x: b.maxX + 0.8, y: b.minY + 2.6 }, 1.1, C.value);
+      // References, values and power names: placed by the text layout so they do not overlap.
+      for (const t of layout.get(n.uid) ?? []) {
+        const color = t.field === 'power' ? C.power : t.field === 'ref' ? (selected ? C.sel : C.ref) : C.value;
+        text(t.text, t.at, t.size, color, t.align, t.base);
       }
     }
 
@@ -1033,7 +1039,12 @@ export class SchematicView {
           ctx.lineWidth = 1;
           ctx.strokeRect(right ? q.x - tw - 2 : q.x + 2, q.y - 0.9 * s, tw, 1.8 * s);
           text(n.name, { x: p.x + (right ? -0.5 - (tw - 4) / s : 0.5 + 4 / s), y: p.y }, 1.2, color, 'left');
-        } else text(n.name, { x: p.x + (right ? -0.4 : 0.4), y: p.y - 0.4 }, 1.2, color, right ? 'right' : 'left', 'bottom');
+        } else {
+          // A local label's text goes above or below its wire, whichever is free.
+          const t = layout.get(n.uid)?.[0];
+          if (t) text(t.text, t.at, t.size, color, t.align, t.base);
+          else text(n.name, { x: p.x + (right ? -0.4 : 0.4), y: p.y - 0.4 }, 1.2, color, right ? 'right' : 'left', 'bottom');
+        }
       }
     }
 

@@ -97,4 +97,24 @@ describe('S8: pin grid and jog removal', () => {
     expect(dangling()).toBe(0);
     expect(core.looseCount(p.doc, p.engine, s.uid)).toBeLessThanOrEqual(loose);
   });
+
+  it('texts do not overlap each other, part bodies or wires (owner report: +20V over PWR_FLAG)', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    // A fuse with +20V and a PWR_FLAG on the same pin, and parts packed close together.
+    await runTool(p, 'add_part', { kind: 'resistor', x: 0, y: 0, value: '2A' });
+    await runTool(p, 'add_power', { pin: 'R1.1', net: '+20V' });
+    await runTool(p, 'add_power', { pin: 'R1.1', flag: true });
+    for (const [i, x] of [5.08, 10.16, 15.24].entries()) {
+      await runTool(p, 'add_part', { kind: 'capacitor', x, y: 0, value: i === 0 ? '10u 50V' : '100n 50V' });
+      await runTool(p, 'add_power', { pin: `C${i + 1}.1`, net: '+20V' });
+      await runTool(p, 'add_power', { pin: `C${i + 1}.2`, net: 'GND' });
+    }
+    const s = sheet(p).uid;
+    const naive = core.layoutSheetTexts(p.doc, p.engine, s, { naive: true });
+    const laid = core.layoutSheetTexts(p.doc, p.engine, s);
+    expect(core.textClashes(p.doc, p.engine, s, naive)).toBeGreaterThan(0);
+    expect(core.textClashes(p.doc, p.engine, s, laid)).toBe(0);
+    expect(laid.filter((t) => t.crowded)).toEqual([]);
+  });
 });
