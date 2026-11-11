@@ -157,8 +157,24 @@ export function summarize(p: Project, n: DocNode) {
 /** "R1" (part), "R1.2" (pin/pad), a uid, or a selector like "net[netClass=power] > trace". */
 export function resolveTargets(p: Project, target: string): DocNode[] {
   const t = target.trim();
-  const byUid = p.doc.nodes.get(t);
+  const byUid = p.doc.nodes.get(t) ?? (t.startsWith('#') ? p.doc.nodes.get(t.slice(1)) : undefined);
   if (byUid) return [byUid];
+  // A list of uids / refs / pins ("tr1, tr2", "R1 R2 C3", "#tr1, #tr2"): the union.
+  if (/[,\s]/.test(t) && !/[[\]>:()*=]/.test(t)) {
+    const parts = t.split(/[,\s]+/).filter(Boolean);
+    const out: DocNode[] = [];
+    let all = true;
+    for (const part of parts) {
+      const one = p.doc.nodes.get(part) ?? (part.startsWith('#') ? p.doc.nodes.get(part.slice(1)) : undefined);
+      if (one) out.push(one);
+      else if (/^[A-Za-z#_]*[A-Za-z]+\d+[A-Za-z]?(\.[\w+~-]+)?$/.test(part)) {
+        const hits = resolveTargets(p, part);
+        if (hits.length) out.push(...hits);
+        else all = false;
+      } else all = false;
+    }
+    if (all && out.length) return [...new Map(out.map((n) => [n.uid, n])).values()];
+  }
   if (/^[A-Za-z#_]*[A-Za-z]+\d+[A-Za-z]?$/.test(t)) {
     const hits = [...p.doc.nodes.values()].filter((n) => (n.type === 'element' || n.type === 'symbol') && (n.name === t || n.props.ref === t));
     if (hits.length) return hits;
@@ -236,6 +252,13 @@ export const TOOLS: ToolDef[] = [
         name: p.name,
         counts: { parts: count('element'), symbols: nodes.filter((n) => n.type === 'symbol' && !n.props.power).length, pads: count('pad'), nets: count('net'), traces: count('trace'), vias: count('via'), pours: count('fill'), sheets: count('sheet') },
         copperLayers: p.copper,
+        board: (() => {
+          const loop = boardOutline(p.doc, p.engine).loops[0];
+          if (!loop) return 'no outline';
+          const xs = loop.map((q) => q.x);
+          const ys = loop.map((q) => q.y);
+          return { width: +(Math.max(...xs) - Math.min(...xs)).toFixed(2), height: +(Math.max(...ys) - Math.min(...ys)).toFixed(2), minX: +Math.min(...xs).toFixed(2), minY: +Math.min(...ys).toFixed(2), points: loop.length };
+        })(),
         sheets: nodes.filter((n) => n.type === 'sheet').map((s) => sheetPath(p.doc, s)),
         checks: {
           erc: c.erc ? countBy(c.erc.violations) : 'no schematic',
@@ -657,6 +680,69 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'get_board_outline',
+    description: 'The board shape: bounding box, size, area, and the outline points (simplified to at most max_points, default 64, within 0.05 mm where possible), plus cut-outs and mounting holes. Use it to see where parts fit before placing them.',
+    mutates: false,
+    input: { type: 'object', properties: { max_points: { type: 'number' } } },
+    run: (p, a) => {
+      const o = boardOutline(p.doc, p.engine);
+      const loop = o.loops[0];
+      if (!loop) throw new ToolError('The board has no closed outline yet (use set_board_outline).');
+      const max = Math.max(4, Math.min(2000, optNum(a.max_points, 'max_points') ?? 64));
+      const simplify = (pts: Vec2[], tol: number): Vec2[] => {
+        if (pts.length < 3) return pts;
+        const seg = (q: Vec2, s0: Vec2, s1: Vec2) => {
+          const dx = s1.x - s0.x;
+          const dy = s1.y - s0.y;
+          const l = dx * dx + dy * dy || 1e-12;
+          const t = Math.max(0, Math.min(1, ((q.x - s0.x) * dx + (q.y - s0.y) * dy) / l));
+          return Math.hypot(q.x - (s0.x + t * dx), q.y - (s0.y + t * dy));
+        };
+        const keep = new Uint8Array(pts.length);
+        keep[0] = keep[pts.length - 1] = 1;
+        const stack: [number, number][] = [[0, pts.length - 1]];
+        while (stack.length) {
+          const [i0, i1] = stack.pop()!;
+          let best = -1;
+          let bd = tol;
+          for (let i = i0 + 1; i < i1; i++) {
+            const d = seg(pts[i]!, pts[i0]!, pts[i1]!);
+            if (d > bd) (bd = d), (best = i);
+          }
+          if (best >= 0) (keep[best] = 1), stack.push([i0, best], [best, i1]);
+        }
+        return pts.filter((_, i) => keep[i]);
+      };
+      // Split the closed loop at its farthest point pair so the simplification keeps both ends.
+      const closed = [...loop, loop[0]!];
+      let tol = 0.05;
+      let pts = simplify(closed, tol).slice(0, -1);
+      while (pts.length > max && tol < 50) pts = simplify(closed, (tol *= 1.6)).slice(0, -1);
+      const xs = loop.map((q) => q.x);
+      const ys = loop.map((q) => q.y);
+      let area = 0;
+      for (let i = 0; i < loop.length; i++) {
+        const q = loop[i]!;
+        const r = loop[(i + 1) % loop.length]!;
+        area += q.x * r.y - r.x * q.y;
+      }
+      const holes = [...p.doc.nodes.values()]
+        .filter((n) => n.type === 'element' && n.children.some((c) => p.engine.get(c, 'padType')?.value === 'npth' || /^H\d+$/.test(n.name)))
+        .map((n) => ({ ref: n.name, at: vec(p.engine.get(n.uid, 'position')?.value) }));
+      return {
+        bbox: { minX: +Math.min(...xs).toFixed(3), minY: +Math.min(...ys).toFixed(3), maxX: +Math.max(...xs).toFixed(3), maxY: +Math.max(...ys).toFixed(3) },
+        width: +(Math.max(...xs) - Math.min(...xs)).toFixed(3),
+        height: +(Math.max(...ys) - Math.min(...ys)).toFixed(3),
+        areaMm2: +Math.abs(area / 2).toFixed(1),
+        pointsInFile: loop.length,
+        tolerance: +tol.toFixed(3),
+        points: pts.map((q) => [+q.x.toFixed(3), +q.y.toFixed(3)]),
+        cutouts: o.loops.length - 1,
+        mountingHoles: holes,
+      };
+    },
+  },
+  {
     name: 'set_board_outline',
     description: 'Set the board shape (Edge.Cuts): a rectangle of width × height mm (top-left corner at x, y; defaults keep the current top-left), optionally with rounded corners (corner_radius), or any polygon via points ("x y, x y, …" in mm). Replaces the existing outline. Then move parts inside (auto_place) before routing.',
     mutates: true,
@@ -827,6 +913,32 @@ export const TOOLS: ToolDef[] = [
         p.history.undo();
       }
       throw new ToolError('A serpentine here would break clearance on both sides; move nearby copper or tune a different segment by hand.');
+    },
+  },
+  {
+    name: 'delete',
+    description: 'Delete objects: traces, vias, wires, labels, power symbols, parts (schematic symbols or board components), graphics, pours. `target` is a part ("R3"), a pin/pad is not deletable, a uid, a list of uids/refs separated by commas, or a selector ("net#GND > via", "trace[layer=B.Cu]"). purge_disabled=true removes every object whose `enabled` rule is false (leftovers from earlier edits). Structural objects (board, sheets, nets that still hold copper) are never deleted.',
+    mutates: true,
+    input: { type: 'object', properties: { target: TARGET, purge_disabled: { type: 'boolean' } } },
+    run: (p, a) => {
+      const DELETABLE = new Set(['trace', 'via', 'wire', 'label', 'junction', 'noconnect', 'symbol', 'element', 'text', 'line', 'circle', 'arc', 'polygon', 'rectangle', 'fill', 'zone', 'group']);
+      let hits: DocNode[] = [];
+      if (typeof a.target === 'string' && a.target.trim()) hits.push(...resolveTargets(p, a.target));
+      if (a.purge_disabled) for (const n of p.doc.nodes.values()) if (p.engine.get(n.uid, 'enabled')?.value === false) hits.push(n);
+      if (!hits.length) throw new ToolError(typeof a.target === 'string' ? `Nothing matches "${a.target}"` : 'Give `target` and/or purge_disabled=true.');
+      const refused = hits.filter((n) => !DELETABLE.has(n.type) || (n.type === 'label' && n.parent && p.doc.nodes.get(n.parent)?.type === 'symbol'));
+      hits = hits.filter((n) => !refused.includes(n));
+      // Remove each subtree once: skip anything inside another selected object.
+      const chosen = new Set(hits.map((n) => n.uid));
+      const insideChosen = (n: DocNode) => {
+        for (let q = n.parent ? p.doc.nodes.get(n.parent) : undefined; q; q = q.parent ? p.doc.nodes.get(q.parent) : undefined) if (chosen.has(q.uid)) return true;
+        return false;
+      };
+      const top = [...new Map(hits.map((n) => [n.uid, n])).values()].filter((n) => !insideChosen(n));
+      const byType: Record<string, number> = {};
+      for (const n of top) byType[n.type] = (byType[n.type] ?? 0) + 1;
+      apply(p, `Delete ${top.length} object(s)`, top.map((n) => ({ op: 'remove', uid: n.uid }) as Op));
+      return { deleted: top.length, byType, ...(refused.length ? { notDeleted: [...new Set(refused.map((n) => n.type))].map((t) => `${t} (structural or part of a symbol)`) } : {}) };
     },
   },
   {

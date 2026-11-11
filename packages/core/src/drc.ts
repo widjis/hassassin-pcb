@@ -8,6 +8,7 @@ import { boxValid, dist, pointInPolygon, segSegDist, segSegMid, type BBox } from
 import { boardOutline, clearanceFor, collectCopper, inArea, type CopperShape } from './copper.ts';
 import { computeRatsnest, type Ratsnest } from './connectivity.ts';
 import { formatLength } from './units.ts';
+import { frameOf, toWorld } from './frames.ts';
 
 export type Severity = 'error' | 'warning';
 
@@ -19,7 +20,8 @@ export type ViolationKind =
   | 'outsideBoard'
   | 'traceWidth'
   | 'holeSize'
-  | 'noOutline';
+  | 'noOutline'
+  | 'partOutsideBoard';
 
 export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   short: 'Short circuit',
@@ -30,6 +32,7 @@ export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   traceWidth: 'Trace too narrow',
   holeSize: 'Hole too small',
   noOutline: 'Board outline missing',
+  partOutsideBoard: 'Part outside board',
 };
 
 export interface Violation {
@@ -208,6 +211,33 @@ export function runDrc(doc: Doc, engine: StyleEngine, copper: string[], opts: Dr
       }
       if (best + EPS < need) {
         push({ kind: 'edgeClearance', severity: 'error', layer: s.layer, at, uids: [s.uid], message: `${s.kind} ${s.net ?? ''} is ${L(Math.max(0, best))} from the board edge; need ${L(need)}`, actual: best, required: need });
+      }
+    }
+  }
+
+  // ---- part bodies (courtyards) outside the board ----
+  // A warning, not an error: some parts overhang on purpose (antennas, edge connectors);
+  // set the part's allowOverhang property to accept it.
+  if (board) {
+    for (const el of doc.nodes.values()) {
+      if (el.type !== 'element' || el.props.allowOverhang || engine.get(el.uid, 'enabled')?.value === false) continue;
+      const pts: Vec2[] = [];
+      for (const c of el.children) {
+        const g = doc.nodes.get(c);
+        if (!g || !String(engine.get(g.uid, 'layer')?.value ?? '').includes('CrtYd')) continue;
+        const f = frameOf(doc, engine, g);
+        const P = (q: unknown) => q && typeof q === 'object' && 'x' in q && pts.push(toWorld(f, q as Vec2));
+        const list = engine.get(g.uid, 'points')?.value;
+        if (Array.isArray(list)) (list as Vec2[]).forEach(P);
+        P(engine.get(g.uid, 'start')?.value);
+        P(engine.get(g.uid, 'end')?.value);
+        const ctr = engine.get(g.uid, 'center')?.value as Vec2 | undefined;
+        const r = Number(engine.get(g.uid, 'radius')?.value ?? 0);
+        if (ctr && r > 0) for (let k = 0; k < 8; k++) P({ x: ctr.x + Math.cos((k * Math.PI) / 4) * r, y: ctr.y + Math.sin((k * Math.PI) / 4) * r });
+      }
+      const out = pts.filter((q) => !pointInPolygon(q, board));
+      if (out.length) {
+        push({ kind: 'partOutsideBoard', severity: 'warning', at: out[0]!, uids: [el.uid], message: `${el.name} (${String(el.props.Footprint ?? 'part')}) sticks out of the board outline` });
       }
     }
   }

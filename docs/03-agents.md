@@ -83,7 +83,10 @@ CLI juga menerima link yang sama: `pnpm hassassin run-drc "http://…?p=…&t=�
 | set_part_info | tulis | MPN, pabrikan, datasheet, LCSC, nilai, DNP |
 | import_offers / set_offer | tulis | Data harga & stok (CSV / manual) |
 | import_kicad_library | tulis | Salin `.kicad_sym` / `.kicad_mod` ke proyek |
-| auto_place / autoroute | tulis | Penempatan & routing otomatis |
+| auto_place / autoroute | tulis | Penempatan & routing otomatis (via tidak pernah di pad) |
+| get_board_outline / set_board_outline | baca / tulis | Bentuk board: baca titik (disederhanakan) / ubah ukuran atau poligon |
+| delete | tulis | Hapus objek (uid, daftar, ref, selector); `purge_disabled` membersihkan sisa yang dinonaktifkan |
+| add_power | tulis | Simbol power (GND, rail) + wire pendek, atau PWR_FLAG |
 | get_stackup / set_stackup | baca / tulis | Stackup lapisan (termasuk preset flex) |
 | impedance | baca | Impedansi dari lebar, atau lebar untuk target impedansi |
 | net_lengths / tune_length | baca / tulis | Panjang net, diff-pair & skew, serpentine |

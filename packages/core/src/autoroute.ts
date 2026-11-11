@@ -201,6 +201,35 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     }
   };
   const layerIdx = new Map(layers.map((l, i) => [l, i]));
+  // Cells covered by any pad on any layer: a via may never sit in (or touch) a pad, own net
+  // included (solder would wick into the hole, and castellated module pads have no room).
+  const padMask = new Uint8Array(N);
+  for (const s of shapes) {
+    if (s.kind !== 'pad') continue;
+    for (const ar of s.areas) {
+      let y0 = Infinity, y1 = -Infinity;
+      for (const ring of ar) for (const q of ring) (y0 = Math.min(y0, q.y)), (y1 = Math.max(y1, q.y));
+      const j0 = Math.max(0, Math.floor((y0 - minY) / g));
+      const j1 = Math.min(H - 1, Math.ceil((y1 - minY) / g));
+      for (let j = j0; j <= j1; j++) {
+        const y = cy(j);
+        const xs: number[] = [];
+        for (const ring of ar)
+          for (let k = 0; k < ring.length; k++) {
+            const a0 = ring[k]!;
+            const b0 = ring[(k + 1) % ring.length]!;
+            if ((a0.y > y) !== (b0.y > y)) xs.push(a0.x + ((y - a0.y) * (b0.x - a0.x)) / (b0.y - a0.y));
+          }
+        xs.sort((u, v) => u - v);
+        for (let k = 0; k + 1 < xs.length; k += 2) {
+          const i0 = Math.max(0, Math.floor((xs[k]! - minX) / g));
+          const i1 = Math.min(W - 1, Math.ceil((xs[k + 1]! - minX) / g));
+          for (let i = i0; i <= i1; i++) padMask[j * W + i] = 1;
+        }
+      }
+    }
+  }
+
   for (const s of shapes) {
     const li = layerIdx.get(s.layer);
     if (li === undefined) continue;
@@ -250,7 +279,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
             if (di * di + dj * dj > viaR * viaR) continue;
             const ii = i + di;
             const jj = j + dj;
-            if (ii < 0 || jj < 0 || ii >= W || jj >= H || !usable(li, jj * W + ii)) return false;
+            if (ii < 0 || jj < 0 || ii >= W || jj >= H || padMask[jj * W + ii] || !usable(li, jj * W + ii)) return false;
           }
       return true;
     };
