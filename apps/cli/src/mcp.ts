@@ -12,6 +12,26 @@ import { openLive, parseLiveLink, runLive, type LiveSession } from './live.ts';
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
+/**
+ * When the server is started for one project (the in-app agent runs Claude Code or
+ * Codex with it), HASSASSIN_PROJECT binds every tool to that project (no `project`
+ * argument), HASSASSIN_MCP_READONLY=1 offers read tools only, and file-writing tools
+ * are hidden. An `update_tasks` tool lets the agent publish its task list.
+ */
+const BOUND = process.env.HASSASSIN_PROJECT || '';
+const READONLY = process.env.HASSASSIN_MCP_READONLY === '1';
+const HIDDEN_WHEN_BOUND = new Set(['export_fab', 'import_kicad_library', 'apply_ops', 'import_offers']);
+const TASKS_TOOL = {
+  name: 'update_tasks',
+  description: 'Replace the task list shown to the user in Hassassin. Use it to plan any multi-step request and keep statuses current (todo, doing, done, blocked).',
+  inputSchema: {
+    type: 'object',
+    properties: { tasks: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, status: { type: 'string', enum: ['todo', 'doing', 'done', 'blocked'] }, stage: { type: 'string' } }, required: ['title', 'status'] } } },
+    required: ['tasks'],
+  },
+};
+const visible = (t: { name: string; mutates: boolean }) => !BOUND || (!HIDDEN_WHEN_BOUND.has(t.name) && (!READONLY || !t.mutates));
+
 const INSTRUCTIONS = `Hassassin PCB: design electronics end to end.
 Typical flow: project_status → set_spec (requirements) → add_part / connect_pins / add_label (schematic) → run_erc → update_pcb → move_part / route / set_rule / refill_pours (layout) → run_drc → export_fab.
 Projects are .hpcb files; create one with new_project or import_kicad. Targets accept a part ("R1"), a pin/pad ("R1.2"), a uid, or a CSS-like selector ("net[netClass=power] > trace"). Values take units ("0.4mm", "10mil").`;
@@ -53,6 +73,12 @@ export async function serveMcp(version: string): Promise<void> {
   };
 
   const callTool = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+    if (BOUND) {
+      if (name === 'update_tasks') return { ok: true };
+      const t = TOOLS.find((x) => x.name === name);
+      if (!t || !visible(t)) throw new ToolError(READONLY && t?.mutates ? 'Ask mode is read-only; switch the Agent tab to Agent mode to allow edits.' : `Unknown tool ${name}`);
+      args = { ...args, project: BOUND };
+    }
     if (name === 'new_project') {
       const path = String(args.path ?? '');
       if (!isHpcb(path)) throw new ToolError('path must end with .hpcb');
@@ -115,11 +141,13 @@ export async function serveMcp(version: string): Promise<void> {
       case 'tools/list':
         return reply({
           tools: [
-            ...EXTRA_TOOLS,
-            ...TOOLS.map((t) => ({
+            ...(BOUND ? [TASKS_TOOL] : EXTRA_TOOLS),
+            ...TOOLS.filter(visible).map((t) => ({
               name: t.name,
               description: t.description,
-              inputSchema: { type: 'object', properties: { project: projectProp, ...t.input.properties }, required: ['project', ...(t.input.required ?? [])] },
+              inputSchema: BOUND
+                ? { type: 'object', properties: { ...t.input.properties }, ...(t.input.required?.length ? { required: t.input.required } : {}) }
+                : { type: 'object', properties: { project: projectProp, ...t.input.properties }, required: ['project', ...(t.input.required ?? [])] },
               annotations: { readOnlyHint: !t.mutates, destructiveHint: false, idempotentHint: !t.mutates },
             })),
           ],

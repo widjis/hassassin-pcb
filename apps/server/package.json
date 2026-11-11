@@ -7,11 +7,13 @@
     "start": "node src/main.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.322",
     "@hassassin/core": "workspace:*",
+    "@hassassin/kicad-import": "workspace:*",
     "@hassassin/sync": "workspace:*",
-    "ws": "^8.18.3",
     "@hassassin/tools": "workspace:*",
-    "@hassassin/kicad-import": "workspace:*"
+    "@openai/codex": "^0.167.1",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1"

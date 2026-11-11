@@ -29,6 +29,7 @@ import { TeamLibrary } from './teamLib.ts';
 import { AgentSession, runTool, TOOLS, type AgentEvent, type AgentMode, type ModelCall } from '@hassassin/tools';
 import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
 import { openLive, runLive, type LiveSession } from '../../cli/src/live.ts';
+import { CLI_LABEL, CliAgentSession, cliStatus, LoginJob, type CliId } from './cliAgents.ts';
 
 interface Client {
   id: string;
@@ -51,14 +52,20 @@ export interface ServerOptions {
   agentModel?: ModelCall | null;
 }
 
+type Backend = 'api' | CliId;
+
 interface Chat {
   id: string;
   project: string;
-  session: AgentSession;
-  live: LiveSession;
+  backend: Backend;
+  session: AgentSession | CliAgentSession;
+  live: LiveSession | null;
   abort: AbortController | null;
   lastUsed: number;
 }
+
+/** Requests from this machine (the CLI backends and sign-in act on the local user's accounts). */
+const isLocal = (req: IncomingMessage) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '');
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.wasm': 'application/wasm', '.png': 'image/png', '.ico': 'image/x-icon' };
 
@@ -75,7 +82,7 @@ export async function startServer(opts: ServerOptions) {
   const chats = new Map<string, Chat>();
   let boundPort = opts.port;
   const sweep = setInterval(() => {
-    for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (c.live.client.close(), chats.delete(k));
+    for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (c.live?.client.close(), chats.delete(k));
   }, 60 * 1000);
   sweep.unref?.();
 
@@ -85,47 +92,98 @@ export async function startServer(opts: ServerOptions) {
    * GET  /api/agent/status
    * The agent joins the shared project as a collaborator, so its edits reach everyone live.
    */
+  const logins = new Map<CliId, LoginJob>();
+  const isCli = (v: unknown): v is CliId => v === 'claude' || v === 'codex';
+
+  /**
+   * GET  /api/agent/status                       → {available, clis:[{id,label,installed,loggedIn}]}
+   * POST /api/agent/login {cli}                  start signing in a CLI (this machine only)
+   * GET  /api/agent/login?cli=                   → {lines, urls, done, ok}
+   * POST /api/agent/login/input {cli, line}      send a code to the sign-in
+   * POST /api/agent/:id?token=  {prompt, chat?, mode?, backend?, user?}  → text/event-stream of AgentEvent
+   * POST /api/agent/:id/stop?token= {chat}
+   * The agent joins the shared project as a collaborator, so its edits reach everyone live.
+   */
   const agentApi = async (req: IncomingMessage, res: ServerResponse, url: URL) => {
     const parts = url.pathname.split('/').filter(Boolean); // api agent :id [stop]
-    if (req.method === 'GET' && parts[2] === 'status') return json(res, 200, { available: !!agentModel, model: agentModel ? 'claude-opus-5-5' : null });
+    if (req.method === 'GET' && parts[2] === 'status') {
+      const clis = isLocal(req) ? await Promise.all((['claude', 'codex'] as const).map(cliStatus)) : [];
+      return json(res, 200, { available: !!agentModel, model: agentModel ? 'claude-opus-5-5' : null, clis });
+    }
+    if (parts[2] === 'login') {
+      if (!isLocal(req)) return json(res, 403, { error: 'Signing in a CLI is only possible from the machine the server runs on.' });
+      if (req.method === 'GET') {
+        const cli = url.searchParams.get('cli');
+        const job = isCli(cli) ? logins.get(cli) : undefined;
+        if (!job) return json(res, 404, { error: 'No sign-in in progress' });
+        return json(res, 200, { lines: job.lines.slice(-40), urls: job.urls, done: job.done, ok: job.ok });
+      }
+      const b = await body(req);
+      if (!isCli(b.cli)) return json(res, 400, { error: 'cli must be claude or codex' });
+      if (parts[3] === 'input') {
+        logins.get(b.cli)?.write(String(b.line ?? ''));
+        return json(res, 200, { ok: true });
+      }
+      logins.get(b.cli)?.cancel();
+      logins.set(b.cli, new LoginJob(b.cli));
+      log(`signing in ${b.cli}`);
+      return json(res, 202, { started: true });
+    }
     const id = parts[2];
     if (!id || !store.exists(id)) return json(res, 404, { error: 'No such project' });
     const tok = url.searchParams.get('token') ?? '';
-    const role = store.roleFor(await store.get(id), tok);
+    const lp = await store.get(id);
+    const role = store.roleFor(lp, tok);
     if (!role) return json(res, 403, { error: 'This link does not give access to the project.' });
     const b = await body(req);
     if (parts[3] === 'stop') {
       chats.get(String(b.chat ?? ''))?.abort?.abort();
       return json(res, 200, { ok: true });
     }
-    if (!agentModel) return json(res, 503, { error: 'The AI agent is not configured on this server: set ANTHROPIC_API_KEY (or sign in with `ant auth login`) and restart it.' });
+    const backend: Backend = isCli(b.backend) ? b.backend : 'api';
+    if (backend === 'api' && !agentModel) return json(res, 503, { error: 'The API backend is not configured: put ANTHROPIC_API_KEY in .env and restart the server, or choose Claude Code / Codex (your subscription) in the Agent tab.' });
+    if (backend !== 'api' && !isLocal(req)) return json(res, 403, { error: 'Subscription backends (Claude Code / Codex) are for the server on your own machine; use the API backend here.' });
     const prompt = String(b.prompt ?? '').trim();
     if (!prompt) return json(res, 400, { error: 'Empty message' });
     const mode: AgentMode = b.mode === 'ask' || role !== 'edit' ? 'ask' : 'agent';
-    const chatId = typeof b.chat === 'string' && chats.has(b.chat) && chats.get(b.chat)!.project === id ? b.chat : `chat-${Math.random().toString(36).slice(2, 10)}`;
+    const reuse = typeof b.chat === 'string' ? chats.get(b.chat) : undefined;
+    const chatId = reuse && reuse.project === id && reuse.backend === backend ? reuse.id : `chat-${Math.random().toString(36).slice(2, 10)}`;
     let chat = chats.get(chatId);
+    const who = String((b.user as { name?: string } | undefined)?.name ?? '').slice(0, 30);
+    const agentName = who ? `AI agent (for ${who})` : 'AI agent';
     if (!chat) {
-      const who = String((b.user as { name?: string } | undefined)?.name ?? '').slice(0, 30);
-      const live = await openLive({ ws: `ws://127.0.0.1:${boundPort}/ws`, id, token: tok }, { id: `agent-${chatId}`, name: who ? `AI agent (for ${who})` : 'AI agent', color: '#b48cff' });
-      const session = new AgentSession({
-        model: agentModel,
-        runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
-      });
-      chat = { id: chatId, project: id, session, live, abort: null, lastUsed: Date.now() };
+      if (backend === 'api') {
+        const live = await openLive({ ws: `ws://127.0.0.1:${boundPort}/ws`, id, token: tok }, { id: `agent-${chatId}`, name: agentName, color: '#b48cff' });
+        const session = new AgentSession({
+          model: agentModel!,
+          runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
+        });
+        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now() };
+      } else {
+        const st = await cliStatus(backend);
+        if (!st.installed) return json(res, 503, { error: `${CLI_LABEL[backend]} is not installed here (run pnpm install).` });
+        if (!st.loggedIn) return json(res, 401, { error: `${CLI_LABEL[backend]} is not signed in yet: use Sign in in the Agent tab.` });
+        const tokenFor = (r: string) => Object.entries(lp.meta.tokens).find(([, v]) => v === r)?.[0];
+        const link = (t: string | undefined) => `http://127.0.0.1:${boundPort}/?p=${id}&t=${t ?? tok}`;
+        const session = new CliAgentSession({ cli: backend, editLink: link(role === 'edit' ? tok : undefined), viewLink: link(tokenFor('view') ?? tok), workDir: join(opts.dataDir, 'agent-work', chatId), agentName: `${agentName} · ${backend === 'claude' ? 'Claude Code' : 'Codex'}` });
+        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now() };
+      }
       chats.set(chatId, chat);
     }
     if (chat.session.running) return json(res, 409, { error: 'The agent is still working on the previous message.' });
     chat.session.mode = mode;
     chat.lastUsed = Date.now();
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode }) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-    send({ type: 'chat', chat: chatId, mode });
+    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend }) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+    send({ type: 'chat', chat: chatId, mode, backend });
     const abort = new AbortController();
     chat.abort = abort;
     req.on('close', () => !res.writableEnded && abort.abort());
-    log(`agent (${mode}) on ${id}: ${prompt.slice(0, 80)}`);
+    log(`agent (${backend}, ${mode}) on ${id}: ${prompt.slice(0, 80)}`);
     try {
       await chat.session.send(prompt, send, abort.signal);
+    } catch (e) {
+      send({ type: 'error', message: (e as Error).message });
     } finally {
       chat.abort = null;
       chat.lastUsed = Date.now();
@@ -355,7 +413,8 @@ export async function startServer(opts: ServerOptions) {
     close: () =>
       new Promise<void>((r) => {
         clearInterval(sweep);
-        for (const c of chats.values()) c.live.client.close();
+        for (const c of chats.values()) c.live?.client.close();
+        for (const l of logins.values()) l.cancel();
         for (const c of wss.clients) c.terminate();
         wss.close();
         http.close(() => r());

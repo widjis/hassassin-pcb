@@ -17,7 +17,8 @@ Editor PCB berbasis browser (schematic, layout, kolaborasi real-time, AI agent),
 ```sh
 pnpm install
 pnpm dev        # http://localhost:5178 — buka file .kicad_pcb lewat tombol Open atau drag-and-drop
-pnpm run server # server kolaborasi di :5179 (Vite mem-proxy /api dan /ws ke sini) — perlu untuk Share
+pnpm run server # server kolaborasi di :5179 (Vite mem-proxy /api dan /ws ke sini) — perlu untuk Share dan tab Agent
+                # (pakai `pnpm run server`: `pnpm server` adalah perintah bawaan pnpm)
 pnpm start      # produksi: build web lalu satu proses melayani aplikasi + kolaborasi di :5179
 pnpm test       # unit test (set KICAD_SAMPLE=/path/board.kicad_pcb untuk uji board nyata)
 pnpm typecheck

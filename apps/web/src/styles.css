@@ -228,3 +228,7 @@ table.stack input { font-size: 11px; padding: 1px 3px; }
 .imp-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; font-size: 12px; margin-bottom: 4px; }
 .len-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; padding: 1px 0; min-width: 0; }
 .len-list { max-height: 220px; overflow: auto; margin-top: 4px; }
+.agent-backend { display: flex; gap: 6px; align-items: center; font-size: 11.5px; flex-wrap: wrap; }
+.live-dot.offline { background: #888; }
+.agent-login { font-size: 11.5px; display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.agent-login pre { white-space: pre-wrap; max-height: 90px; overflow: auto; margin: 0; opacity: 0.75; font-size: 10.5px; }

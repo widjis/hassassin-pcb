@@ -35,7 +35,22 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
   let chat: string | null = null;
   let mode: 'agent' | 'ask' = 'agent';
   let busy = false;
-  let available: boolean | null = null;
+  interface Cli {
+    id: 'claude' | 'codex';
+    label: string;
+    installed: boolean;
+    loggedIn: boolean;
+    detail: string;
+  }
+  let status: { available: boolean; clis: Cli[] } | null = null;
+  let backend: 'api' | 'claude' | 'codex' = 'claude';
+  try {
+    backend = (localStorage.getItem('hassassin:agent:backend') as typeof backend) ?? 'claude';
+  } catch {
+    /* storage blocked */
+  }
+  const loginBox = h('div', { class: 'agent-login' });
+  let loginTimer = 0;
   let usage = { input: 0, output: 0, cacheRead: 0 };
 
   const log = h('div', { class: 'agent-log' });
@@ -64,7 +79,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
     }
     sendBtn.disabled = busy;
     stopBtn.style.display = busy ? '' : 'none';
-    footer.textContent = usage.input ? `This chat: ${usage.input + usage.cacheRead} input tokens (${usage.cacheRead} cached), ${usage.output} output tokens` : '';
+    footer.textContent = usage.input || usage.output ? `This chat: ${usage.input + usage.cacheRead} input tokens (${usage.cacheRead} cached), ${usage.output} output tokens${backend === 'api' ? '' : ' · on your subscription'}` : '';
   };
 
   const drawSuggest = () => {
@@ -79,24 +94,90 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
     );
   };
 
+  const loadStatus = async () => {
+    status = await fetch('/api/agent/status').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  };
+
+  /** Sign a CLI in: the server starts its sign-in, which opens the provider's page in the browser. */
+  const signIn = async (cli: Cli['id']) => {
+    clear(loginBox);
+    loginBox.append(h('div', { class: 'dim' }, 'Starting sign-in… a browser page should open; finish signing in there.'));
+    const r = await fetch('/api/agent/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cli }) });
+    if (!r.ok) return void loginBox.append(h('div', { class: 'err-text' }, ((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`));
+    const code = h('input', { placeholder: 'Paste the code from the sign-in page (if it shows one)' });
+    code.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !code.value.trim()) return;
+      void fetch('/api/agent/login/input', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cli, line: code.value.trim() }) });
+      code.value = '';
+    });
+    const out = h('div', { class: 'agent-login-out' });
+    loginBox.append(out, code);
+    clearInterval(loginTimer);
+    loginTimer = window.setInterval(async () => {
+      const j = await fetch(`/api/agent/login?cli=${cli}`).then((x) => (x.ok ? x.json() : null)).catch(() => null);
+      if (!j) return;
+      clear(out);
+      for (const u of j.urls as string[]) out.append(h('a', { href: u, target: '_blank', rel: 'noopener' }, 'Open the sign-in page ↗'));
+      out.append(h('pre', {}, (j.lines as string[]).slice(-6).join('\n')));
+      if (j.done) {
+        clearInterval(loginTimer);
+        await loadStatus();
+        clear(loginBox);
+        if (!j.ok) loginBox.append(h('div', { class: 'err-text' }, 'Sign-in did not finish. Try again.'));
+        void render();
+      }
+    }, 1500);
+  };
+
   const render = async () => {
     clear(root);
-    if (available === null) {
-      const s = await fetch('/api/agent/status').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      available = !!s?.available;
-      if (!s) available = null;
-    }
+    if (!status) await loadStatus();
     if (!app.collab || !collab.session) {
       root.append(h('div', { class: 'empty' }, 'The AI agent works on shared projects: it joins as a collaborator so its edits are live and undoable. Click Share in the top bar first.'));
       return;
     }
-    if (available === false) {
-      root.append(h('div', { class: 'empty' }, 'The agent is not configured on the server. Set ANTHROPIC_API_KEY (or run `ant auth login`) where the server runs, then restart it (pnpm run server).'));
+    if (!status) {
+      root.append(h('div', { class: 'empty' }, 'The collaboration server is not reachable (pnpm run server).'));
       return;
     }
-    root.append(h('div', { style: 'display:flex;gap:6px;align-items:center;margin-bottom:6px' }, modeSel, h('button', { onclick: () => ((chat = null), (lines.length = 0), (tasks = []), (usage = { input: 0, output: 0, cacheRead: 0 }), draw()) }, 'New chat')), taskBox, log, suggest, input, h('div', { style: 'display:flex;gap:6px;margin-top:6px' }, sendBtn, stopBtn), footer);
+    const clis = status.clis ?? [];
+    const options: { id: typeof backend; label: string; ready: boolean; note: string }[] = [
+      ...clis.map((c) => ({ id: c.id, label: c.label, ready: c.installed && c.loggedIn, note: c.installed ? c.detail : 'not installed' })),
+      { id: 'api' as const, label: 'Claude API (credits)', ready: status.available, note: status.available ? 'API key set on the server' : 'no API key on the server' },
+    ];
+    if (!options.some((o) => o.id === backend)) backend = options[0]!.id;
+    const pick = h('select', { title: 'Which AI does the work' });
+    for (const o of options) pick.append(h('option', { value: o.id, ...(o.id === backend ? { selected: true } : {}) }, `${o.label}${o.ready ? '' : ' — not ready'}`));
+    pick.addEventListener('change', () => {
+      backend = pick.value as typeof backend;
+      chat = null;
+      try {
+        localStorage.setItem('hassassin:agent:backend', backend);
+      } catch {
+        /* ignore */
+      }
+      void render();
+    });
+    const cur = options.find((o) => o.id === backend)!;
+    const state = h('div', { class: 'agent-backend' }, h('span', { class: `live-dot ${cur.ready ? 'online' : 'offline'}` }), h('span', { class: 'dim' }, cur.note));
+    if (!cur.ready && backend !== 'api' && clis.find((c) => c.id === backend)?.installed) state.append(h('button', { class: 'btn primary', onclick: () => void signIn(backend as Cli['id']) }, 'Sign in'));
+    if (cur.ready && backend !== 'api') state.append(h('button', { title: 'Sign in with another account', onclick: () => void signIn(backend as Cli['id']) }, 'Switch account'));
+    root.append(
+      h('div', { style: 'display:flex;gap:6px;align-items:center;margin-bottom:4px' }, pick),
+      state,
+      loginBox,
+      h('div', { style: 'display:flex;gap:6px;align-items:center;margin:6px 0' }, modeSel, h('button', { onclick: () => ((chat = null), (lines.length = 0), (tasks = []), (usage = { input: 0, output: 0, cacheRead: 0 }), draw()) }, 'New chat')),
+      taskBox,
+      log,
+      suggest,
+      input,
+      h('div', { style: 'display:flex;gap:6px;margin-top:6px' }, sendBtn, stopBtn),
+      footer,
+    );
+    sendBtn.disabled = busy || !cur.ready;
     drawSuggest();
     draw();
+    sendBtn.disabled = busy || !cur.ready;
   };
 
   const send = async () => {
@@ -111,7 +192,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
       const r = await fetch(`/api/agent/${collab.session.id}?token=${encodeURIComponent(collab.session.token)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, chat, mode, user: { name: collab.user.name } }),
+        body: JSON.stringify({ prompt, chat, mode, backend, user: { name: collab.user.name } }),
       });
       if (!r.ok || !r.body) {
         const d = await r.json().catch(() => ({}));

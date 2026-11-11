@@ -99,3 +99,23 @@ Selain lewat Claude Code/Codex (MCP), Hassassin punya agent sendiri yang memakai
   `ANTHROPIC_API_KEY=... pnpm run server` (atau `ant auth login` di mesin server).
 - **Di CLI**: `hassassin agent board.hpcb "tambahkan LED indikator di 3V3" -o board.hpcb`, atau dengan link
   berbagi supaya editnya live. `--mode ask` untuk jawaban tanpa mengubah proyek.
+
+### Pakai langganan, bukan API (Claude Code / Codex)
+
+Tab *Agent* bisa memakai CLI yang login dengan akun langganan Anda, jadi tidak perlu kredit API:
+
+| Pilihan | Butuh |
+|---|---|
+| Claude Code | Langganan Claude (Pro/Max), login sekali lewat tombol **Sign in** |
+| Codex | Langganan ChatGPT, login sekali lewat tombol **Sign in** |
+| Claude API | `ANTHROPIC_API_KEY` di file `.env` (bayar per pemakaian) |
+
+Kedua CLI ikut terpasang dengan `pnpm install` (dependency `apps/server`). Saat Anda mengirim pesan, server
+menjalankan CLI tersebut di Mac Anda dengan MCP server Hassassin yang sudah terikat ke proyek yang terbuka:
+tool bawaan Claude Code dimatikan, Codex berjalan di sandbox read-only di folder kosong, dan mode *Ask*
+hanya mendapat tool baca. Editnya muncul live seperti kolaborator lain.
+
+Catatan:
+- Hanya untuk server di mesin Anda sendiri (permintaan dari luar mesin ditolak): langganan bersifat pribadi.
+- Claude Code adalah perangkat lunak Anthropic dengan lisensinya sendiri (bukan open source); Codex berlisensi
+  Apache-2.0. Keduanya dipasang dari npm, tidak disalin ke repo ini.
