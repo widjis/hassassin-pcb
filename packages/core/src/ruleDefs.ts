@@ -146,8 +146,32 @@ export function parseRuleValue(name: string, input: string | RuleValue): RuleVal
     case 'keepout':
       return parseKeepOut(s) ?? fail();
     case 'points':
-      return fail();
+      return parsePoints(s) ?? fail();
   }
+}
+
+/**
+ * A point list: JSON ([{"x":1,"y":2},…] or [[1,2],…]) or plain text such as
+ * "89 80.5, 161 80.5, 161 159.5" / "(89,80.5) (161,80.5) …" / "89mm 80.5mm; …".
+ * Coordinates take units (default mm). At least three points.
+ */
+export function parsePoints(s: string): Vec2[] | null {
+  let pts: Vec2[] | null = null;
+  if (/^\s*\[/.test(s)) {
+    try {
+      const j = JSON.parse(s) as unknown[];
+      pts = j.map((q) => (Array.isArray(q) ? { x: Number(q[0]), y: Number(q[1]) } : { x: Number((q as Vec2).x), y: Number((q as Vec2).y) }));
+    } catch {
+      pts = null;
+    }
+  } else {
+    const toks = [...s.matchAll(/-?\d+(?:\.\d+)?\s*(?:mm|mil|in|um|cm)?/gi)].map((m) => parseLength(m[0].replace(/\s+/g, '')));
+    if (toks.length % 2 === 0 && toks.every((t) => t !== null)) {
+      pts = [];
+      for (let i = 0; i < toks.length; i += 2) pts.push({ x: toks[i]!, y: toks[i + 1]! });
+    }
+  }
+  return pts && pts.length >= 3 && pts.every((q) => Number.isFinite(q.x) && Number.isFinite(q.y)) ? pts : null;
 }
 
 const isVec2 = (v: unknown): v is Vec2 => typeof v === 'object' && v !== null && 'x' in v && 'y' in v;

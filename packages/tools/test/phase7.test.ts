@@ -84,3 +84,18 @@ describe('stackup and impedance', () => {
     expect(pairs.map((x) => [x.p, x.n, x.skew])).toEqual([['USB_D+', 'USB_D-', 1.5], ['/LVDS_P', '/LVDS_N', 0]]);
   });
 });
+
+describe('board outline', () => {
+  it('resizes the board, with rounded corners, and parts can then be placed inside', async () => {
+    const { boardOutline } = await import('@hassassin/core');
+    const p = newProject('t');
+    const r = (await runTool(p, 'set_board_outline', { width: 72, height: 79, corner_radius: 2 })) as { outline: { width: number; height: number } };
+    expect(r.outline).toMatchObject({ width: 72, height: 79 });
+    const loops = boardOutline(p.doc, p.engine).loops;
+    expect(loops.length).toBe(1);
+    await runTool(p, 'set_board_outline', { points: '100 100, 172 100, 172 179, 100 179' });
+    expect(boardOutline(p.doc, p.engine).loops[0]!.length).toBe(4);
+    await runTool(p, 'set_rule', { target: 'polygon', rule: 'points', value: '(100,100) (150,100) (150,150) (100,150)', scope: 'object' });
+    expect(boardOutline(p.doc, p.engine).loops[0]).toEqual([{ x: 100, y: 100 }, { x: 150, y: 100 }, { x: 150, y: 150 }, { x: 100, y: 150 }]);
+  });
+});

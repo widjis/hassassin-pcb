@@ -4,6 +4,8 @@
  * project is live, shared with collaborators).
  */
 import {
+  boardOutline,
+  parsePoints,
   addPowerPortOp,
   isGroundNet,
   symbolFrame,
@@ -652,6 +654,75 @@ export const TOOLS: ToolDef[] = [
       apply(p, 'Route', ops);
       const st = computeRatsnest(p.doc, p.engine, p.copper).nets.find((n) => n.net === net);
       return { net, segments: ops.length, layer, netFullyConnected: st ? st.islands <= 1 : true };
+    },
+  },
+  {
+    name: 'set_board_outline',
+    description: 'Set the board shape (Edge.Cuts): a rectangle of width × height mm (top-left corner at x, y; defaults keep the current top-left), optionally with rounded corners (corner_radius), or any polygon via points ("x y, x y, …" in mm). Replaces the existing outline. Then move parts inside (auto_place) before routing.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: 'mm' },
+        height: { type: 'number', description: 'mm' },
+        x: { type: 'number', description: 'Left edge, mm' },
+        y: { type: 'number', description: 'Top edge, mm' },
+        corner_radius: { type: 'number', description: 'mm (rectangle only)' },
+        points: { type: 'string', description: 'Custom polygon, e.g. "100 100, 172 100, 172 179, 100 179"' },
+      },
+    },
+    run: (p, a) => {
+      const layout = [...p.doc.nodes.values()].find((n) => n.type === 'layout');
+      if (!layout) throw new ToolError('The project has no board yet.');
+      const board = layout.children.map((c) => p.doc.nodes.get(c)!).find((n) => n?.type === 'container' && n.name === 'Board') ?? layout;
+      const old = boardOutline(p.doc, p.engine).loops[0];
+      let x0 = 100;
+      let y0 = 100;
+      if (old) (x0 = Math.min(...old.map((q) => q.x))), (y0 = Math.min(...old.map((q) => q.y)));
+      let pts: Vec2[];
+      if (typeof a.points === 'string' && a.points.trim()) {
+        const parsed = parsePoints(a.points);
+        if (!parsed) throw new ToolError('points: give at least three "x y" pairs in mm, e.g. "100 100, 172 100, 172 179, 100 179".');
+        pts = parsed;
+      } else {
+        const w = num(a.width, 'width');
+        const hgt = num(a.height, 'height');
+        if (w < 5 || hgt < 5 || w > 1000 || hgt > 1000) throw new ToolError('width and height must be between 5 and 1000 mm');
+        const x = optNum(a.x, 'x') ?? x0;
+        const y = optNum(a.y, 'y') ?? y0;
+        const r = Math.min(optNum(a.corner_radius, 'corner_radius') ?? 0, w / 2, hgt / 2);
+        if (r > 0.01) {
+          pts = [];
+          const corner = (cx: number, cy: number, from: number) => {
+            for (let k = 0; k <= 8; k++) {
+              const t = ((from + (k / 8) * 90) * Math.PI) / 180;
+              pts.push({ x: +(cx + Math.cos(t) * r).toFixed(4), y: +(cy + Math.sin(t) * r).toFixed(4) });
+            }
+          };
+          corner(x + r, y + r, 180);
+          corner(x + w - r, y + r, 270);
+          corner(x + w - r, y + hgt - r, 0);
+          corner(x + r, y + hgt - r, 90);
+        } else pts = [{ x, y }, { x: x + w, y }, { x: x + w, y: y + hgt }, { x, y: y + hgt }];
+      }
+      // Remove every board-level Edge.Cuts graphic, then draw the new outline.
+      const ops: Op[] = [];
+      for (const n of p.doc.nodes.values()) {
+        if (!['line', 'arc', 'circle', 'polygon', 'rectangle'].includes(n.type)) continue;
+        if (p.engine.get(n.uid, 'layer')?.value !== 'Edge.Cuts') continue;
+        const parent = n.parent ? p.doc.nodes.get(n.parent) : undefined;
+        if (parent?.type === 'element') continue; // cut-outs belonging to parts stay
+        ops.push({ op: 'remove', uid: n.uid });
+      }
+      ops.push({ op: 'add', parent: board.uid, index: board.children.length, tree: { nodes: [{ uid: newUid('gr'), type: 'polygon', name: 'Board outline', props: {}, rules: [{ name: 'layer', value: 'Edge.Cuts' }, { name: 'points', value: pts }, { name: 'strokeWidth', value: 0.1 }], parent: board.uid, children: [] }] } });
+      apply(p, 'Set board outline', ops);
+      const xs = pts.map((q) => q.x);
+      const ys = pts.map((q) => q.y);
+      const outside = [...p.doc.nodes.values()].filter((n) => n.type === 'element').filter((el) => {
+        const q = vec(p.engine.get(el.uid, 'position')?.value);
+        return q && (q.x < Math.min(...xs) || q.x > Math.max(...xs) || q.y < Math.min(...ys) || q.y > Math.max(...ys));
+      }).length;
+      return { outline: { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys), width: +(Math.max(...xs) - Math.min(...xs)).toFixed(3), height: +(Math.max(...ys) - Math.min(...ys)).toFixed(3) }, points: pts.length, partsOutside: outside };
     },
   },
   {
