@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { querySelectorAll, StyleEngine } from '@hassassin/core';
+import { padGeom, querySelectorAll, StyleEngine } from '@hassassin/core';
 import { importKicadPcb, parseSExpr } from '@hassassin/kicad-import';
 
 const SMALL = `(kicad_pcb (version 20240108) (generator "test")
@@ -41,11 +41,14 @@ describe('importKicadPcb', () => {
     const r1 = querySelectorAll(doc, '#R1')[0]!;
     expect(r1.props.Value).toBe('10k');
     const e = new StyleEngine(doc);
-    // pad 1 local (-0.8,0) rotated 90° about (10,20) lands at (10, 20.8)
+    // pad 1 is stored footprint-local; rotated 90° about (10,20) it lands at (10, 20.8)
     const pad1 = querySelectorAll(doc, '#R1 > pad[number="1"]')[0]!;
-    const pos = e.get(pad1.uid, 'position')!.value as { x: number; y: number };
-    expect(pos.x).toBeCloseTo(10);
-    expect(pos.y).toBeCloseTo(20.8);
+    expect(e.get(pad1.uid, 'position')!.value).toEqual({ x: -0.8, y: 0 });
+    expect(e.get(pad1.uid, 'rotation')!.value).toBe(0);
+    const g = padGeom(doc, e, pad1, ['F.Cu', 'B.Cu'])!;
+    expect(g.center.x).toBeCloseTo(10);
+    expect(g.center.y).toBeCloseTo(20.8);
+    expect(g.rot).toBe(90);
     expect(e.get(pad1.uid, 'padShape')?.value).toBe('roundrect');
 
     const pad2 = querySelectorAll(doc, '#R1 > pad[number="2"]')[0]!;

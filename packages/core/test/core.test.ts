@@ -74,7 +74,7 @@ describe('cascade', () => {
   it('uses defaults, then rulesets by specificity and order, then object rules', () => {
     const { doc, ids } = sampleDoc();
     let e = new StyleEngine(doc);
-    expect(e.get(ids.t2, 'traceWidth')).toMatchObject({ value: 0.25, source: { kind: 'default' } });
+    expect(e.get(ids.t2, 'traceWidth')).toMatchObject({ value: 0.25, source: { kind: 'inherited', fromUid: ids.sig, rulesetName: 'Net' } });
 
     doc.rulesets.push(
       { id: 'a', name: 'All traces', selector: 'trace', rules: [{ name: 'traceWidth', value: 0.3 }], enabled: true, origin: 'project' },
@@ -94,11 +94,11 @@ describe('cascade', () => {
     expect(e.get(ids.t2, 'traceWidth')).toMatchObject({ value: 0.1, source: { important: true, rulesetId: 'd' } });
   });
 
-  it('inherits from a parent that has its own value, but not from a parent default', () => {
+  it('inherits net values (including net-class defaults) into traces', () => {
     const { doc, ids } = sampleDoc();
-    // Net default (0.25) must not override the trace default via inheritance; ground net default is 0.5
+    // The ground net's default width reaches its traces.
     let e = new StyleEngine(doc);
-    expect(e.get(ids.t1, 'traceWidth')?.source.kind).toBe('default');
+    expect(e.get(ids.t1, 'traceWidth')).toMatchObject({ value: 0.5, source: { kind: 'inherited', rulesetName: 'Ground net' } });
 
     doc.nodes.get(ids.gnd)!.rules.push({ name: 'traceWidth', value: 0.7 });
     e = new StyleEngine(doc);

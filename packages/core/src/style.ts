@@ -7,8 +7,8 @@
  *   2. !important project ruleset (higher specificity, then later order)
  *   3. object-specific rule
  *   4. project ruleset (higher specificity, then later order)
- *   5. inherited from the parent — only for inheritable rules, and only when the
- *      parent's value did not itself come from a default
+ *   5. inherited from the parent — only for inheritable rules (the parent's value may
+ *      itself be a default, so e.g. a ground net's default width reaches its traces)
  *   6. default ruleset for the node type
  */
 import type { Doc, DocNode, RuleDecl, RuleValue, Ruleset } from './model.ts';
@@ -126,26 +126,38 @@ export class StyleEngine {
     const parent = node.parent ? this.computed.get(node.parent) : undefined;
     if (parent) {
       for (const [name, pc] of parent) {
-        if (out.has(name) || pc.source.kind === 'default') continue;
+        if (out.has(name)) continue;
         if (!RULE_DEFS.get(name)?.inheritable) continue;
         out.set(name, {
           value: pc.value,
-          source: { kind: 'inherited', important: false, fromUid: pc.source.kind === 'inherited' ? pc.source.fromUid : node.parent! },
+          source: {
+            kind: 'inherited',
+            important: false,
+            fromUid: pc.source.kind === 'inherited' ? pc.source.fromUid : node.parent!,
+            ...(pc.source.kind === 'default' ? { rulesetId: pc.source.rulesetId, rulesetName: pc.source.rulesetName, selector: pc.source.selector } : {}),
+          },
         });
       }
     }
 
-    // Defaults (lowest).
-    for (const c of this.compiledDefaults) {
-      if (!c.list || !matchSpecificity(this.doc, node, c.list)) continue;
+    // Defaults (lowest); among themselves they cascade by specificity, then order.
+    const defBest = new Map<string, Candidate>();
+    this.compiledDefaults.forEach((c, order) => {
+      const spec = c.list ? matchSpecificity(this.doc, node, c.list) : null;
+      if (!spec) return;
       this.matchCounts.set(c.ruleset.id, (this.matchCounts.get(c.ruleset.id) ?? 0) + 1);
       for (const decl of c.ruleset.rules) {
         if (out.has(decl.name)) continue;
-        out.set(decl.name, {
-          value: decl.value,
-          source: { kind: 'default', important: false, rulesetId: c.ruleset.id, rulesetName: c.ruleset.name, selector: c.ruleset.selector },
-        });
+        const cand: Candidate = { decl, important: false, origin: 1, spec, order, ruleset: c.ruleset };
+        const cur = defBest.get(decl.name);
+        if (!cur || better(cand, cur)) defBest.set(decl.name, cand);
       }
+    });
+    for (const [name, c] of defBest) {
+      out.set(name, {
+        value: c.decl.value,
+        source: { kind: 'default', important: false, rulesetId: c.ruleset!.id, rulesetName: c.ruleset!.name, selector: c.ruleset!.selector },
+      });
     }
     return out;
   }

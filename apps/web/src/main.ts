@@ -1,5 +1,4 @@
-import { App } from './app.ts';
-import { screenToWorld } from './render/gl.ts';
+import { App, type Mode } from './app.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -29,20 +28,56 @@ app.on('inspect', () => {
   if (app.inspected.kind === 'ruleset') showTab('rules');
 });
 
-// ---- loading ----
+// ---- loading, saving, autosave ----
+const AUTOSAVE = 'hassassin:autosave:v1';
 const status = $('status');
+const msg = $('msg');
+let msgTimer = 0;
+app.on('status', () => {
+  msg.textContent = app.message;
+  clearTimeout(msgTimer);
+  if (app.message && app.mode !== 'route') msgTimer = window.setTimeout(() => (msg.textContent = ''), 4000);
+});
+
 const loadText = (text: string, name: string) => {
   try {
     app.load(text, name);
     $('dropHint').classList.add('hidden');
-    $('docTitle').textContent = name;
+    $('docTitle').textContent = app.fileName;
   } catch (e) {
     alert(`Could not open ${name}:\n${(e as Error).message}`);
   }
 };
+
+const save = () => {
+  if (!app.doc) return;
+  const blob = new Blob([app.serialize()], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${app.fileName || 'board'}.hpcb`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  app.dirty = false;
+  app.say(`Saved ${a.download}`);
+};
+
+let autosaveTimer = 0;
+app.on('change', () => {
+  clearTimeout(autosaveTimer);
+  autosaveTimer = window.setTimeout(() => {
+    try {
+      localStorage.setItem(AUTOSAVE, JSON.stringify({ name: app.fileName, at: Date.now(), data: app.serialize() }));
+    } catch {
+      /* storage full or blocked: autosave is best-effort */
+    }
+  }, 800);
+});
+
 $<HTMLInputElement>('fileInput').addEventListener('change', async (e) => {
-  const f = (e.target as HTMLInputElement).files?.[0];
+  const input = e.target as HTMLInputElement;
+  const f = input.files?.[0];
   if (f) loadText(await f.text(), f.name);
+  input.value = '';
 });
 const wrap = $('canvasWrap');
 wrap.addEventListener('dragover', (e) => {
@@ -56,72 +91,208 @@ wrap.addEventListener('drop', async (e) => {
   const f = e.dataTransfer?.files?.[0];
   if (f) loadText(await f.text(), f.name);
 });
+
 const boardParam = new URLSearchParams(location.search).get('board');
 if (boardParam) {
   fetch(boardParam)
     .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
     .then((t) => loadText(t, decodeURIComponent(boardParam.split('/').pop() ?? boardParam)))
     .catch((e) => (status.textContent = `Could not load ${boardParam}: ${(e as Error).message}`));
+} else {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AUTOSAVE) ?? 'null') as { name: string; at: number; data: string } | null;
+    if (saved?.data) {
+      const btn = $<HTMLButtonElement>('restoreBtn');
+      btn.textContent = `Restore “${saved.name}” (autosaved ${new Date(saved.at).toLocaleString()})`;
+      btn.classList.remove('hidden');
+      btn.addEventListener('click', () => loadText(saved.data, `${saved.name}.hpcb`));
+    }
+  } catch {
+    /* ignore unreadable autosave */
+  }
 }
+window.addEventListener('beforeunload', (e) => {
+  if (app.dirty) e.preventDefault();
+});
+
+// ---- toolbar ----
+const tools = $('tools');
+tools.addEventListener('click', (e) => {
+  const m = (e.target as HTMLElement).closest('button')?.dataset.mode as Mode | undefined;
+  if (m) app.setMode(m);
+});
+const layerBtn = $<HTMLButtonElement>('layerBtn');
+layerBtn.addEventListener('click', () => app.toggleActiveLayer());
+$('undoBtn').addEventListener('click', () => app.undo());
+$('redoBtn').addEventListener('click', () => app.redo());
+$('saveBtn').addEventListener('click', save);
+$('fitBtn').addEventListener('click', () => app.fit());
+$('flipBtn').addEventListener('click', () => app.flip());
+const syncToolbar = () => {
+  for (const b of tools.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.mode === app.mode);
+  wrap.classList.toggle('route', app.mode === 'route');
+  layerBtn.textContent = app.activeLayer;
+  layerBtn.style.borderColor = app.activeLayer === 'B.Cu' ? '#3d8bff' : '#ef6a4c';
+  const h = app.history;
+  $<HTMLButtonElement>('undoBtn').disabled = !h?.canUndo;
+  $<HTMLButtonElement>('redoBtn').disabled = !h?.canRedo;
+  $('undoBtn').title = h?.undoLabel ? `Undo ${h.undoLabel} (Cmd/Ctrl+Z)` : 'Undo';
+  $('redoBtn').title = h?.redoLabel ? `Redo ${h.redoLabel} (Shift+Cmd/Ctrl+Z)` : 'Redo';
+  $('docTitle').textContent = app.fileName ? `${app.fileName}${app.dirty ? ' •' : ''}` : 'No board';
+};
+for (const ev of ['mode', 'change', 'doc'] as const) app.on(ev, syncToolbar);
+app.on('view', () => ($('flipBtn').textContent = app.view.flipped ? 'Bottom' : 'Top'));
+syncToolbar();
 
 // ---- canvas interaction ----
 const canvas = app.glCanvas;
-let drag: { x: number; y: number; moved: boolean; id: number } | null = null;
-canvas.addEventListener('pointerdown', (e) => {
-  canvas.setPointerCapture(e.pointerId);
-  drag = { x: e.clientX, y: e.clientY, moved: false, id: e.pointerId };
-});
-canvas.addEventListener('pointermove', (e) => {
+type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' };
+let drag: Drag | null = null;
+const local = (e: PointerEvent | WheelEvent | MouseEvent) => {
   const r = canvas.getBoundingClientRect();
-  const sx = e.clientX - r.left;
-  const sy = e.clientY - r.top;
+  return { sx: e.clientX - r.left, sy: e.clientY - r.top };
+};
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button === 2) return;
+  canvas.setPointerCapture(e.pointerId);
+  const { sx, sy } = local(e);
+  const middle = e.button === 1;
+  let kind: Drag['kind'] = 'pan';
+  if (app.mode === 'select' && !middle) {
+    const uid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
+    if (uid && app.movable(uid)) {
+      if (!app.selection.has(uid)) app.select([uid], e.shiftKey);
+      kind = 'move';
+      app.beginMove(app.toWorld(sx, sy));
+    }
+  }
+  drag = { x: e.clientX, y: e.clientY, moved: false, kind };
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  const { sx, sy } = local(e);
+  const world = app.toWorld(sx, sy);
+  app.cursor = world;
   if (drag) {
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
-    if (drag.moved || Math.hypot(dx, dy) > 3) {
-      drag.moved = true;
-      app.panBy(dx, dy);
-      drag.x = e.clientX;
-      drag.y = e.clientY;
+    if (!drag.moved && Math.hypot(dx, dy) > 3) drag.moved = true;
+    if (drag.moved) {
+      if (drag.kind === 'pan') {
+        app.panBy(dx, dy);
+        drag.x = e.clientX;
+        drag.y = e.clientY;
+      } else app.dragMove(world, !e.altKey);
     }
   }
-  app.cursor = screenToWorld(app.view, r.width, r.height, sx, sy);
-  if (!drag?.moved) app.hoverUid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
+  if (app.mode === 'route') {
+    app.route.hover(world, e.shiftKey);
+    app.requestRender();
+  } else if (!drag?.moved) app.hoverUid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
   updateStatus();
 });
+
 canvas.addEventListener('pointerup', (e) => {
-  if (drag && !drag.moved) {
-    const r = canvas.getBoundingClientRect();
-    const uid = app.pickAt(e.clientX - r.left, e.clientY - r.top, e.metaKey || e.ctrlKey);
-    if (uid) app.select([uid], e.shiftKey);
-    else if (!e.shiftKey) app.select([]);
+  const { sx, sy } = local(e);
+  if (drag?.kind === 'move') app.endMove();
+  if (drag && !drag.moved && e.button === 0) {
+    if (app.mode === 'route') app.route.click(app.toWorld(sx, sy), e.shiftKey);
+    else {
+      const uid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
+      if (uid) {
+        if (!(app.selection.has(uid) && !e.shiftKey && app.selection.size === 1)) app.select([uid], e.shiftKey);
+      } else if (!e.shiftKey) app.select([]);
+    }
   }
   drag = null;
 });
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (app.mode === 'route' && app.route.active) app.route.cancel();
+});
+canvas.addEventListener('dblclick', () => {
+  if (app.mode === 'route' && app.route.active) app.route.cancel();
+});
+
 canvas.addEventListener(
   'wheel',
   (e) => {
     e.preventDefault();
-    const r = canvas.getBoundingClientRect();
-    // Normalise line/page deltas and clamp so one big wheel event cannot jump 30×.
+    const { sx, sy } = local(e);
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
     const dy = Math.max(-120, Math.min(120, e.deltaY * unit));
-    const factor = Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.002));
-    app.zoomAt(e.clientX - r.left, e.clientY - r.top, factor);
+    app.zoomAt(sx, sy, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.002)));
     updateStatus();
   },
   { passive: false },
 );
 
+// ---- keyboard ----
 window.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    return save();
+  }
   if ((e.target as HTMLElement).closest('input, select, textarea')) return;
-  if (e.key === 'f' || e.key === 'F') app.flip();
-  else if (e.key === 'Home' || e.key === '0') app.fit();
-  else if (e.key === 'Escape') app.select([]);
+  if (mod && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    return e.shiftKey ? app.redo() : app.undo();
+  }
+  if (mod && e.key.toLowerCase() === 'y') {
+    e.preventDefault();
+    return app.redo();
+  }
+  if (mod) return;
+  switch (e.key) {
+    case 'Escape':
+      if (app.mode === 'route' && app.route.active) app.route.cancel();
+      else if (app.mode === 'route') app.setMode('select');
+      else app.select([]);
+      break;
+    case 'x':
+    case 'X':
+      app.setMode('route');
+      break;
+    case 's':
+    case 'S':
+      app.setMode('select');
+      break;
+    case 'v':
+    case 'V':
+      if (app.mode === 'route') app.route.placeVia();
+      break;
+    case '/':
+      if (app.mode === 'route') app.route.togglePosture();
+      break;
+    case 'l':
+    case 'L':
+      app.toggleActiveLayer();
+      break;
+    case 'r':
+      app.rotateSelection(90);
+      break;
+    case 'R':
+      app.rotateSelection(-90);
+      break;
+    case 'Delete':
+    case 'Backspace':
+      if (app.mode === 'select') app.deleteSelection();
+      break;
+    case 'f':
+    case 'F':
+      app.flip();
+      break;
+    case 'Home':
+    case '0':
+      app.fit();
+      break;
+    default:
+      return;
+  }
+  e.preventDefault();
 });
-$('fitBtn').addEventListener('click', () => app.fit());
-$('flipBtn').addEventListener('click', () => app.flip());
-app.on('view', () => ($('flipBtn').textContent = app.view.flipped ? 'Bottom' : 'Top'));
 
 // ---- selector query ----
 const query = $<HTMLInputElement>('query');
@@ -146,7 +317,8 @@ app.on('query', () => {
 
 function updateStatus(): void {
   const hov = app.hoverUid ? app.node(app.hoverUid) : undefined;
-  const hovText = hov ? `  ·  ${hov.type} ${hov.name || hov.props.number || ''}` : '';
-  status.textContent = `x ${app.cursor.x.toFixed(3)}  y ${app.cursor.y.toFixed(3)} mm  ·  ${app.view.scale.toFixed(1)} px/mm${hovText}`;
+  const hovText = app.mode === 'select' && hov ? `  ·  ${hov.type} ${hov.name || hov.props.number || ''}` : '';
+  const rn = app.ratsnest.lines.length;
+  status.textContent = `x ${app.cursor.x.toFixed(3)}  y ${app.cursor.y.toFixed(3)} mm  ·  ${app.view.scale.toFixed(1)} px/mm  ·  ${rn} unrouted${hovText}`;
 }
-app.on('doc', updateStatus);
+for (const ev of ['doc', 'change'] as const) app.on(ev, updateStatus);

@@ -76,6 +76,15 @@ export function mountTree(app: App, root: HTMLElement, filter: HTMLInputElement)
     return el;
   };
 
+  let pending = 0;
+  app.on('change', () => {
+    if (pending) return;
+    pending = requestAnimationFrame(() => {
+      pending = 0;
+      render();
+    });
+  });
+
   filter.addEventListener('input', () => {
     filterText = filter.value.trim();
     render();

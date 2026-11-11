@@ -1,37 +1,73 @@
 /**
- * Application state: the document, its style engine, the scene and the view.
- * UI panels subscribe with `on()` and read state directly.
+ * Application state: the document, its style engine, history, scene and view.
+ * Every edit goes through `apply()` (→ History → ops), never by mutating the doc.
  */
-import { querySelectorAll, StyleEngine, type Doc, type DocNode } from '@hassassin/core';
+import {
+  computeRatsnest,
+  History,
+  newUid,
+  parseDoc,
+  querySelectorAll,
+  snapToGrid,
+  stringifyDoc,
+  StyleEngine,
+  type ApplyResult,
+  type Doc,
+  type DocNode,
+  type Op,
+  type Ratsnest,
+  type Ruleset,
+  type Vec2,
+} from '@hassassin/core';
 import { importKicadPcb, type LayerInfo } from '@hassassin/kicad-import';
 import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './render/colors.ts';
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
-import { buildScene, highlightTris, HOLES, type Scene } from './render/scene.ts';
+import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
+import { RouteTool } from './tools/route.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
-type Event = 'doc' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect';
+export type Mode = 'select' | 'route';
+type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status';
 
 const DEFAULT_HIDDEN = new Set(['paste', 'mask', 'adhesive', 'courtyard', 'fab', 'user']);
+const MOVABLE = new Set(['element', 'via', 'trace']);
+const DELETABLE = new Set(['element', 'via', 'trace', 'line', 'arc', 'circle', 'polygon', 'rectangle', 'text', 'fill', 'zone']);
+
+interface MoveState {
+  start: Vec2;
+  key: string;
+  last: Vec2;
+  items: { uid: string; rules: Record<string, Vec2> }[];
+}
 
 export class App {
   doc: Doc | null = null;
   engine: StyleEngine | null = null;
+  history: History | null = null;
   layers: LayerInfo[] = [];
   copper: string[] = [];
-  scene: Scene | null = null;
+  scene: SceneCache | null = null;
+  ratsnest: Ratsnest = { lines: [], nets: [], unroutedNets: 0 };
   visible = new Set<string>();
   selection = new Set<string>();
   queryMatches = new Set<string>();
+  netHighlight = new Set<string>();
   queryError: string | null = null;
   inspected: Inspected = { kind: 'none' };
   view: View = { cx: 0, cy: 0, scale: 10, flipped: false };
+  mode: Mode = 'select';
+  activeLayer = 'F.Cu';
   hoverUid: string | null = null;
-  cursor = { x: 0, y: 0 };
+  cursor: Vec2 = { x: 0, y: 0 };
+  message = '';
   stats: Record<string, number> = {};
   fileName = '';
+  dirty = false;
+  readonly route: RouteTool;
 
   private listeners = new Map<Event, Set<() => void>>();
   private frame = 0;
+  private move: MoveState | null = null;
   readonly renderer: GLRenderer;
 
   constructor(
@@ -39,6 +75,7 @@ export class App {
     readonly overlay: HTMLCanvasElement,
   ) {
     this.renderer = new GLRenderer(glCanvas);
+    this.route = new RouteTool(this);
     new ResizeObserver(() => this.requestRender()).observe(glCanvas);
   }
 
@@ -50,47 +87,230 @@ export class App {
   emit(ev: Event): void {
     this.listeners.get(ev)?.forEach((f) => f());
   }
+  say(msg: string): void {
+    this.message = msg;
+    this.emit('status');
+  }
 
   node(uid: string): DocNode | undefined {
     return this.doc?.nodes.get(uid);
   }
 
+  // ---------- loading & saving ----------
   load(text: string, fileName: string): void {
-    const res = importKicadPcb(text, fileName);
-    this.doc = res.doc;
-    this.layers = res.layers;
-    this.copper = res.layers.filter((l) => l.kind === 'copper').map((l) => l.name);
-    this.stats = res.stats;
-    this.fileName = fileName;
-    this.visible = new Set([...res.layers.filter((l) => !DEFAULT_HIDDEN.has(l.kind)).map((l) => l.name), HOLES]);
+    let doc: Doc;
+    let layers: LayerInfo[];
+    let stats: Record<string, number> = {};
+    if (/\.hpcb$/i.test(fileName) || text.trimStart().startsWith('{')) {
+      doc = parseDoc(text);
+      layers = (doc.meta.layers as LayerInfo[]) ?? [];
+    } else {
+      const res = importKicadPcb(text, fileName);
+      doc = res.doc;
+      layers = res.layers;
+      stats = res.stats;
+      for (const w of res.warnings) console.warn('[import]', w.message);
+    }
+    this.setDoc(doc, layers, fileName.replace(/\.(kicad_pcb|hpcb)$/i, ''), stats);
+  }
+
+  private setDoc(doc: Doc, layers: LayerInfo[], name: string, stats: Record<string, number>): void {
+    this.doc = doc;
+    this.layers = layers;
+    this.copper = layers.filter((l) => l.kind === 'copper').map((l) => l.name);
+    this.activeLayer = this.copper[0] ?? 'F.Cu';
+    this.fileName = name;
+    this.stats = stats;
+    this.visible = new Set([...layers.filter((l) => !DEFAULT_HIDDEN.has(l.kind)).map((l) => l.name), HOLES]);
     this.selection.clear();
     this.queryMatches.clear();
+    this.netHighlight.clear();
     this.inspected = { kind: 'none' };
-    this.engine = new StyleEngine(this.doc);
-    this.rebuild();
+    this.mode = 'select';
+    this.route.cancel();
+    this.engine = new StyleEngine(doc);
+    this.history = new History(doc);
+    this.history.onChange((res) => this.onChange(res));
+    this.scene = new SceneCache(doc, this.engine, this.copper);
+    this.uploadLayers(true);
+    this.updateRatsnest();
+    this.dirty = false;
     this.fit();
-    for (const w of res.warnings) console.warn('[import]', w.message);
     this.emit('doc');
+    this.emit('mode');
   }
 
-  /** Re-resolve rules and rebuild geometry (after any rule change). */
-  rebuild(): void {
-    if (!this.doc || !this.engine) return;
+  serialize(): string {
+    if (!this.doc) throw new Error('No document');
+    return stringifyDoc(this.doc);
+  }
+
+  // ---------- editing ----------
+  apply(label: string, ops: Op[], mergeKey?: string): boolean {
+    if (!this.history || !ops.length) return false;
+    try {
+      this.history.apply(label, ops, mergeKey);
+      return true;
+    } catch (e) {
+      this.say(`Could not ${label.toLowerCase()}: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  undo(): void {
+    const e = this.history?.undo();
+    this.say(e ? `Undid: ${e.label}` : 'Nothing to undo');
+  }
+  redo(): void {
+    const e = this.history?.redo();
+    this.say(e ? `Redid: ${e.label}` : 'Nothing to redo');
+  }
+
+  private onChange(res: ApplyResult): void {
+    if (!this.doc || !this.engine || !this.scene) return;
     this.engine.recompute();
-    this.scene = buildScene(this.doc, this.engine, this.copper);
-    this.renderer.clearLayers();
-    for (const [k, v] of this.scene.layers) this.renderer.setLayer(k, v);
-    this.refreshHighlights();
-  }
-
-  rulesChanged(): void {
-    this.rebuild();
+    if (res.global) this.scene.rebuildAll();
+    else this.scene.update(res.touched);
+    for (const u of [...this.selection]) if (!this.doc.nodes.has(u)) this.selection.delete(u);
+    if (this.inspected.kind === 'node' && !this.doc.nodes.has(this.inspected.uid)) this.inspected = { kind: 'none' };
+    this.uploadLayers(false);
+    this.updateRatsnest();
     if (this.queryText) this.runQuery(this.queryText);
-    this.emit('rules');
+    this.dirty = true;
+    this.emit('change');
+    if (res.global) this.emit('rules');
     this.emit('inspect');
   }
 
-  // ---- layers ----
+  private uploadLayers(force: boolean): void {
+    if (!this.scene) return;
+    const { layers, changed } = this.scene.layers();
+    if (!changed && !force) return;
+    this.renderer.clearLayers();
+    for (const [k, v] of layers) this.renderer.setLayer(k, v);
+    this.refreshHighlights();
+  }
+
+  private updateRatsnest(): void {
+    if (!this.doc || !this.engine) return;
+    this.ratsnest = computeRatsnest(this.doc, this.engine, this.copper);
+    this.requestRender();
+  }
+
+  /** Apply a change to the project rulesets as one undoable step. */
+  updateRulesets(label: string, mutate: (rulesets: Ruleset[]) => void): void {
+    if (!this.doc) return;
+    const next = structuredClone(this.doc.rulesets);
+    mutate(next);
+    this.apply(label, [{ op: 'setRulesets', rulesets: next }]);
+  }
+
+  gridStep(): number {
+    const v = this.doc ? this.engine?.get(this.doc.rootId, 'gridSpacing')?.value : undefined;
+    return typeof v === 'number' && v > 0 ? v : 0.5;
+  }
+
+  movable(uid: string): boolean {
+    const n = this.node(uid);
+    return !!n && MOVABLE.has(n.type);
+  }
+
+  beginMove(world: Vec2): void {
+    if (!this.doc) return;
+    const items: MoveState['items'] = [];
+    for (const uid of this.selection) {
+      const n = this.doc.nodes.get(uid);
+      if (!n || !MOVABLE.has(n.type)) continue;
+      const rules: Record<string, Vec2> = {};
+      const keys = n.type === 'trace' ? ['start', 'end', 'mid'] : ['position'];
+      for (const k of keys) {
+        const v = this.engine!.get(uid, k)?.value;
+        if (v && typeof v === 'object' && 'x' in v) rules[k] = { ...(v as Vec2) };
+      }
+      if (Object.keys(rules).length) items.push({ uid, rules });
+    }
+    if (!items.length) return;
+    this.move = { start: world, last: { x: 0, y: 0 }, key: newUid('mv'), items };
+  }
+
+  get moving(): boolean {
+    return !!this.move;
+  }
+
+  dragMove(world: Vec2, snap: boolean): void {
+    const m = this.move;
+    if (!m) return;
+    let d = { x: world.x - m.start.x, y: world.y - m.start.y };
+    if (snap) d = snapToGrid(d, this.gridStep());
+    if (d.x === m.last.x && d.y === m.last.y) return;
+    m.last = d;
+    const ops: Op[] = [];
+    for (const it of m.items) {
+      for (const [k, v] of Object.entries(it.rules)) {
+        ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: { x: v.x + d.x, y: v.y + d.y } } });
+      }
+    }
+    this.apply('Move', ops, m.key);
+    this.say(`Δ ${d.x.toFixed(3)}, ${d.y.toFixed(3)} mm`);
+  }
+
+  endMove(): void {
+    if (this.move) this.history?.seal();
+    this.move = null;
+  }
+
+  rotateSelection(deg: number): void {
+    if (!this.engine) return;
+    const ops: Op[] = [];
+    for (const uid of this.selection) {
+      if (this.node(uid)?.type !== 'element') continue;
+      const cur = Number(this.engine.get(uid, 'rotation')?.value ?? 0);
+      const next = (((cur + deg) % 360) + 360) % 360;
+      ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: next } });
+    }
+    if (!ops.length) return this.say('Select a component to rotate it.');
+    this.apply('Rotate', ops);
+  }
+
+  deleteSelection(): void {
+    const ops: Op[] = [];
+    const sel = [...this.selection];
+    const set = new Set(sel);
+    for (const uid of sel) {
+      const n = this.node(uid);
+      if (!n || !DELETABLE.has(n.type)) continue;
+      // Skip children of something that is also being deleted.
+      let p = n.parent;
+      let covered = false;
+      while (p) {
+        if (set.has(p)) covered = true;
+        p = this.node(p)?.parent ?? null;
+      }
+      if (!covered) ops.push({ op: 'remove', uid });
+    }
+    if (!ops.length) return this.say('Nothing deletable is selected (pads and nets cannot be deleted here).');
+    this.apply(`Delete ${ops.length} item${ops.length > 1 ? 's' : ''}`, ops);
+    this.select([]);
+  }
+
+  setMode(mode: Mode): void {
+    if (this.mode === mode) return;
+    if (mode !== 'route') this.route.cancel();
+    this.mode = mode;
+    this.say(mode === 'route' ? 'Route: click a pad, via or trace to start. V = via, / = corner style, Esc = stop.' : '');
+    this.emit('mode');
+    this.requestRender();
+  }
+
+  toggleActiveLayer(): void {
+    if (this.copper.length < 2) return;
+    const i = this.copper.indexOf(this.activeLayer);
+    this.activeLayer = this.copper[(i + 1) % this.copper.length]!;
+    this.route.layerChanged();
+    this.emit('mode');
+  }
+
+  // ---------- layers ----------
   drawOrder(): string[] {
     const names = this.layers.map((l) => l.name);
     const front = (n: string) => n.startsWith('F.');
@@ -104,7 +324,10 @@ export class App {
     const farOther = names.filter((n) => far(n) && n !== farCu);
     const nearOther = names.filter((n) => near(n) && n !== nearCu);
     const rest = names.filter((n) => !front(n) && !back(n) && !inner.includes(n));
-    return [...farOther, farCu, ...inner, nearCu, HOLES, ...nearOther, ...rest];
+    // The active routing layer is drawn on top of the other copper.
+    const cu = [farCu, ...inner, nearCu].filter((l) => l !== this.activeLayer || this.mode !== 'route');
+    if (this.mode === 'route') cu.push(this.activeLayer);
+    return [...farOther, ...cu, HOLES, ...nearOther, ...rest];
   }
 
   setLayerVisible(name: string, on: boolean): void {
@@ -114,11 +337,19 @@ export class App {
     this.emit('layers');
   }
 
-  // ---- view ----
+  // ---------- view ----------
+  size(): { w: number; h: number } {
+    return { w: this.glCanvas.clientWidth || 800, h: this.glCanvas.clientHeight || 600 };
+  }
+
+  toWorld(sx: number, sy: number): Vec2 {
+    const { w, h } = this.size();
+    return screenToWorld(this.view, w, h, sx, sy);
+  }
+
   fit(): void {
     const b = this.scene?.bbox;
-    const w = this.glCanvas.clientWidth || 800;
-    const h = this.glCanvas.clientHeight || 600;
+    const { w, h } = this.size();
     if (!b || !Number.isFinite(b.minX)) return;
     const bw = Math.max(1, b.maxX - b.minX);
     const bh = Math.max(1, b.maxY - b.minY);
@@ -136,11 +367,9 @@ export class App {
   }
 
   zoomAt(sx: number, sy: number, factor: number): void {
-    const w = this.glCanvas.clientWidth;
-    const h = this.glCanvas.clientHeight;
-    const before = screenToWorld(this.view, w, h, sx, sy);
+    const before = this.toWorld(sx, sy);
     this.view.scale = Math.max(0.5, Math.min(4000, this.view.scale * factor));
-    const after = screenToWorld(this.view, w, h, sx, sy);
+    const after = this.toWorld(sx, sy);
     this.view.cx += before.x - after.x;
     this.view.cy += before.y - after.y;
     this.requestRender();
@@ -153,33 +382,53 @@ export class App {
     this.requestRender();
   }
 
-  // ---- picking & selection ----
-  pickAt(sx: number, sy: number, deep: boolean): string | null {
-    if (!this.scene || !this.doc) return null;
-    const w = this.glCanvas.clientWidth;
-    const h = this.glCanvas.clientHeight;
-    const p = screenToWorld(this.view, w, h, sx, sy);
+  // ---------- picking & selection ----------
+  /** The raw shape under the cursor (pad, trace, via, graphic), or null. */
+  pickRaw(p: Vec2, filter?: (uid: string) => boolean): { uid: string; anchor?: Vec2 } | null {
+    if (!this.scene) return null;
     const tol = 3 / this.view.scale;
     const nearSide = this.view.flipped ? 'B.' : 'F.';
-    let best: { uid: string; score: number } | null = null;
+    let best: { uid: string; anchor?: Vec2; score: number } | null = null;
     for (const pk of this.scene.pick) {
       if (p.x < pk.box.minX - tol || p.x > pk.box.maxX + tol || p.y < pk.box.minY - tol || p.y > pk.box.maxY + tol) continue;
       if (!pk.layers.some((l) => this.visible.has(l))) continue;
+      if (filter && !filter(pk.uid)) continue;
       if (!pk.hit(p, tol)) continue;
       const area = (pk.box.maxX - pk.box.minX) * (pk.box.maxY - pk.box.minY);
-      const side = pk.layers.some((l) => l.startsWith(nearSide)) ? 1 : 0;
+      const side = pk.layers.some((l) => l === this.activeLayer) && this.mode === 'route' ? 2 : pk.layers.some((l) => l.startsWith(nearSide)) ? 1 : 0;
       const score = side * 1000 + pk.priority * 100 - Math.min(99, area);
-      if (!best || score > best.score) best = { uid: pk.uid, score };
+      if (!best || score > best.score) best = { uid: pk.uid, score, ...(pk.anchor ? { anchor: pk.anchor } : {}) };
     }
-    if (!best) return null;
-    if (deep) return best.uid;
-    // Clicking any part of a component selects the component.
-    let n = this.doc.nodes.get(best.uid);
+    return best;
+  }
+
+  pickAt(sx: number, sy: number, deep: boolean): string | null {
+    if (!this.doc) return null;
+    const hit = this.pickRaw(this.toWorld(sx, sy));
+    if (!hit) return null;
+    if (deep) return hit.uid;
+    let n = this.doc.nodes.get(hit.uid);
     while (n) {
       if (n.type === 'element') return n.uid;
       n = n.parent ? this.doc.nodes.get(n.parent) : undefined;
     }
-    return best.uid;
+    return hit.uid;
+  }
+
+  /** Net name a node belongs to (pads by property, tracks/vias/pours by parent net). */
+  netOf(uid: string): string | null {
+    const n = this.node(uid);
+    if (!n) return null;
+    if (n.type === 'pad') return typeof n.props.net === 'string' && n.props.net ? n.props.net : null;
+    if (n.type === 'net') return n.name;
+    const p = n.parent ? this.node(n.parent) : undefined;
+    return p?.type === 'net' && p.name !== '(no net)' ? p.name : null;
+  }
+
+  netNode(name: string): DocNode | undefined {
+    if (!this.doc) return undefined;
+    for (const n of this.doc.nodes.values()) if (n.type === 'net' && n.name === name) return n;
+    return undefined;
   }
 
   select(uids: string[], additive = false): void {
@@ -202,7 +451,17 @@ export class App {
     this.emit('inspect');
   }
 
-  // ---- selector query ----
+  highlightNet(net: string | null): void {
+    this.netHighlight.clear();
+    if (net && this.doc) {
+      const nn = this.netNode(net);
+      if (nn) this.netHighlight.add(nn.uid);
+      for (const n of this.doc.nodes.values()) if (n.type === 'pad' && n.props.net === net) this.netHighlight.add(n.uid);
+    }
+    this.refreshHighlights();
+  }
+
+  // ---------- selector query ----------
   queryText = '';
   runQuery(text: string, remember = true): void {
     if (remember) this.queryText = text;
@@ -219,15 +478,16 @@ export class App {
     this.emit('query');
   }
 
-  private refreshHighlights(): void {
+  refreshHighlights(): void {
     if (!this.doc || !this.engine) return;
     const vis = (l: string) => this.visible.has(l);
     this.renderer.setLayer('__sel', highlightTris(this.doc, this.engine, this.selection, this.copper, vis));
     this.renderer.setLayer('__query', highlightTris(this.doc, this.engine, this.queryMatches, this.copper, vis));
+    this.renderer.setLayer('__net', highlightTris(this.doc, this.engine, this.netHighlight, this.copper, vis));
     this.requestRender();
   }
 
-  // ---- drawing ----
+  // ---------- drawing ----------
   requestRender(): void {
     if (this.frame) return;
     this.frame = requestAnimationFrame(() => {
@@ -240,7 +500,12 @@ export class App {
     const order = this.drawOrder()
       .filter((n) => this.visible.has(n))
       .map((key) => ({ key, color: layerColor(key) as RGBA }));
-    order.push({ key: '__query', color: QUERY_HIGHLIGHT }, { key: '__sel', color: HIGHLIGHT });
+    order.push(
+      { key: '__net', color: [1, 1, 1, 0.22] },
+      { key: '__query', color: QUERY_HIGHLIGHT },
+      { key: '__sel', color: HIGHLIGHT },
+      { key: '__preview', color: this.route.previewColor() },
+    );
     this.renderer.draw(this.view, order, [0.031, 0.035, 0.047, 1]);
     this.drawOverlay();
   }
@@ -248,8 +513,7 @@ export class App {
   private drawOverlay(): void {
     const c = this.overlay;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = c.clientWidth;
-    const h = c.clientHeight;
+    const { w, h } = this.size();
     if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
@@ -258,22 +522,22 @@ export class App {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (!this.scene) return;
+    const S = (p: Vec2) => worldToScreen(this.view, w, h, p.x, p.y);
+
+    // Texts
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const s = this.view.scale;
     for (const t of this.scene.texts) {
-      if (t.kind === 'padNumber') {
-        if (s < 18 || !this.visible.has(t.layer)) continue;
-      } else if (!this.visible.has(t.layer)) continue;
+      if (t.kind === 'padNumber' ? s < 18 || !this.visible.has(t.layer) : !this.visible.has(t.layer)) continue;
       const px = t.size * s;
       if (px < 5) continue;
-      const p = worldToScreen(this.view, w, h, t.pos.x, t.pos.y);
+      const p = S(t.pos);
       if (p.x < -200 || p.y < -200 || p.x > w + 200 || p.y > h + 200) continue;
       ctx.save();
       ctx.translate(p.x, p.y);
       let rot = (-t.rot * Math.PI) / 180;
       if (this.view.flipped) rot = -rot;
-      // keep text upright-ish
       if (Math.cos(rot) < -0.01) rot += Math.PI;
       ctx.rotate(rot);
       ctx.font = `${t.kind === 'padNumber' ? 600 : 500} ${px.toFixed(1)}px ui-monospace, Menlo, monospace`;
@@ -281,5 +545,20 @@ export class App {
       ctx.fillText(t.text, 0, 0);
       ctx.restore();
     }
+
+    // Ratsnest
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(235, 240, 255, 0.7)';
+    ctx.beginPath();
+    for (const l of this.ratsnest.lines) {
+      const a = S(l.a);
+      const b = S(l.b);
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    }
+    ctx.stroke();
+
+    // Routing cursor
+    this.route.drawOverlay(ctx, S);
   }
 }

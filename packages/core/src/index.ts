@@ -4,3 +4,8 @@ export * from './ruleDefs.ts';
 export * from './selector.ts';
 export * from './style.ts';
 export * from './defaults.ts';
+export * from './geom.ts';
+export * from './frames.ts';
+export * from './commands.ts';
+export * from './serialize.ts';
+export * from './connectivity.ts';

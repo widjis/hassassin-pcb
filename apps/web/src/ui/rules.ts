@@ -34,8 +34,9 @@ export function mountRules(app: App, root: HTMLElement): void {
           {
             onclick: () => {
               const id = newUid('rs');
-              doc.rulesets.push({ id, name: `Ruleset ${doc.rulesets.length + 1}`, selector: 'trace', rules: [], enabled: true, origin: 'project' });
-              app.rulesChanged();
+              app.updateRulesets('New ruleset', (list) =>
+                list.push({ id, name: `Ruleset ${list.length + 1}`, selector: 'trace', rules: [], enabled: true, origin: 'project' }),
+              );
               app.inspectRuleset(id);
             },
           },
@@ -51,6 +52,7 @@ export function mountRules(app: App, root: HTMLElement): void {
   };
   app.on('doc', render);
   app.on('rules', render);
+  app.on('change', render);
   app.on('inspect', render);
   render();
 }

@@ -15,9 +15,17 @@
         <span id="queryInfo" class="query-info"></span>
       </div>
       <div class="actions">
+        <div class="seg tools" id="tools">
+          <button data-mode="select" class="on" title="Select and move (Esc)">Select</button>
+          <button data-mode="route" title="Route traces (X)">Route</button>
+        </div>
+        <button id="layerBtn" title="Active copper layer (L)">F.Cu</button>
+        <button id="undoBtn" title="Undo (Cmd/Ctrl+Z)">↶</button>
+        <button id="redoBtn" title="Redo (Shift+Cmd/Ctrl+Z)">↷</button>
         <button id="flipBtn" title="View from the other side (F)">Top</button>
         <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
-        <label class="btn primary">Open .kicad_pcb<input id="fileInput" type="file" accept=".kicad_pcb" hidden /></label>
+        <button id="saveBtn" title="Save as .hpcb (Cmd/Ctrl+S)">Save</button>
+        <label class="btn primary">Open<input id="fileInput" type="file" accept=".kicad_pcb,.hpcb" hidden /></label>
       </div>
     </header>
     <main class="workspace">
@@ -37,8 +45,12 @@
       <div class="canvas-wrap" id="canvasWrap">
         <canvas id="gl"></canvas>
         <canvas id="overlay"></canvas>
-        <div class="drop-hint" id="dropHint">Drop a <b>.kicad_pcb</b> file here, or use <b>Open</b>.</div>
+        <div class="drop-hint" id="dropHint">
+          <div>Drop a <b>.kicad_pcb</b> or <b>.hpcb</b> file here, or use <b>Open</b>.</div>
+          <button id="restoreBtn" class="hidden"></button>
+        </div>
         <div class="statusbar" id="status"></div>
+        <div class="msgbar" id="msg"></div>
       </div>
       <aside class="sidebar right" id="inspector"></aside>
     </main>

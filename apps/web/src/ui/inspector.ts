@@ -5,6 +5,7 @@ import {
   RULE_DEFS,
   type Computed,
   type DocNode,
+  type RuleDecl,
   type Ruleset,
 } from '@hassassin/core';
 import type { App } from '../app.ts';
@@ -16,6 +17,35 @@ const TYPE_NAME: Partial<Record<DocNode['type'], string>> = {
   element: 'Component', pad: 'Pad', trace: 'Trace', via: 'Via', net: 'Net', fill: 'Copper pour', zone: 'Keep-out zone',
   layout: 'Board', container: 'Folder', text: 'Text', line: 'Line', arc: 'Arc', circle: 'Circle', polygon: 'Polygon', rectangle: 'Rectangle', root: 'Project',
 };
+
+/** "Add a rule" row shared by rulesets and objects. */
+function ruleAdder(onAdd: (decl: RuleDecl) => void): HTMLElement {
+  const pick = h('select', {});
+  for (const d of RULE_DEFS.values()) if (d.kind !== 'points') pick.append(h('option', { value: d.name }, d.label));
+  pick.value = 'traceWidth';
+  const val = h('input', { placeholder: 'e.g. 0.4mm', spellcheck: 'false' });
+  const imp = h('input', { type: 'checkbox', title: '!important', style: 'width:auto' });
+  const err = h('div', { class: 'err-text' });
+  const help = h('div', { class: 'dim', style: 'font-size:11.5px' }, RULE_DEFS.get(pick.value)?.help ?? '');
+  pick.addEventListener('change', () => (help.textContent = RULE_DEFS.get(pick.value)?.help ?? ''));
+  const add = () => {
+    try {
+      const value = parseRuleValue(pick.value, val.value);
+      onAdd({ name: pick.value, value, ...(imp.checked ? { important: true } : {}) });
+    } catch (e) {
+      err.textContent = (e as Error).message;
+    }
+  };
+  val.addEventListener('keydown', (e) => e.key === 'Enter' && add());
+  return h(
+    'div',
+    { style: 'display:flex;flex-direction:column;gap:4px' },
+    h('div', { class: 'editable add-rule' }, pick, val, h('button', { onclick: add }, 'Set')),
+    h('label', { class: 'dim', style: 'display:flex;gap:6px;align-items:center;font-size:12px' }, imp, 'Mark as !important'),
+    help,
+    err,
+  );
+}
 
 export function mountInspector(app: App, root: HTMLElement): void {
   let mode: 'computed' | 'specified' = 'computed';
@@ -37,6 +67,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
     if (s.kind === 'inherited') {
       const from = s.fromUid ? app.node(s.fromUid) : undefined;
       tags.push(h('span', { class: 'tag inherited' }, 'inherited'), 'from ', h('a', { onclick: () => s.fromUid && app.select([s.fromUid]) }, from?.name || from?.type || '?'));
+      if (s.rulesetName) tags.push(` (${s.rulesetName} default)`);
     }
     return h('div', { class: 'src' }, ...tags);
   };
@@ -52,7 +83,12 @@ export function mountInspector(app: App, root: HTMLElement): void {
       let pads = 0;
       for (const x of app.doc.nodes.values()) if (x.type === 'pad' && x.props.net === n.name) pads++;
       const count = (t: string) => n.children.filter((c) => app.node(c)?.type === t).length;
-      props.push(['Pads', pads], ['Traces', count('trace')], ['Vias', count('via')], ['Pours', count('fill')]);
+      const st = app.ratsnest.nets.find((x) => x.net === n.name);
+      props.push(['Pads', pads], ['Traces', count('trace')], ['Vias', count('via')], ['Pours', count('fill')], ['Status', st && st.islands > 1 ? `${st.islands - 1} connection(s) missing` : 'fully connected']);
+    }
+    if (n.type !== 'net') {
+      const net = app.netOf(n.uid);
+      if (net && n.type !== 'pad') props.unshift(['Net', net]);
     }
     for (const [k, v] of props) kv.append(h('div', { class: 'k', title: k }, k), h('div', { class: 'v' }, String(v)));
     kv.append(h('div', { class: 'k' }, 'UID'), h('div', { class: 'v dim', style: 'font-size:11px' }, n.uid));
@@ -76,21 +112,38 @@ export function mountInspector(app: App, root: HTMLElement): void {
         list.append(h('div', { class: 'rule' }, h('span', { class: 'label' }, label(name)), h('span', { class: 'val' }, formatRuleValue(name, c.value, u)), sourceLine(c)));
       }
       if (!names.length) list.append(h('div', { class: 'dim' }, 'No rules apply.'));
+      box.append(list);
     } else {
       for (const r of n.rules) {
         list.append(
-          h('div', { class: 'rule' }, h('span', { class: 'label' }, label(r.name), r.important ? ' !important' : ''), h('span', { class: 'val' }, formatRuleValue(r.name, r.value, u))),
+          h(
+            'div',
+            { class: 'rule' },
+            h('span', { class: 'label' }, label(r.name), r.important ? ' !important' : ''),
+            h(
+              'span',
+              { class: 'val' },
+              formatRuleValue(r.name, r.value, u),
+              h('button', { style: 'margin-left:6px;padding:0 6px', title: 'Remove from this object', onclick: () => app.apply(`Remove ${label(r.name)}`, [{ op: 'setRule', uid: n.uid, name: r.name, decl: null }]) }, '×'),
+            ),
+          ),
         );
       }
       if (!n.rules.length) list.append(h('div', { class: 'dim' }, 'Nothing set directly on this object.'));
+      box.append(list, h('div', { class: 'dim', style: 'font-size:11.5px' }, 'Set a rule on this object only (beats rulesets unless they are !important):'));
+      box.append(ruleAdder((decl) => app.apply(`Set ${label(decl.name)}`, [{ op: 'setRule', uid: n.uid, name: decl.name, decl }])));
     }
-    box.append(list);
     return box;
   };
 
   const renderRuleset = (rs: Ruleset) => {
     const engine = app.engine!;
     const editable = rs.origin === 'project';
+    const edit = (lbl: string, fn: (r: Ruleset) => void) =>
+      app.updateRulesets(lbl, (list) => {
+        const r = list.find((x) => x.id === rs.id);
+        if (r) fn(r);
+      });
     const m = engine.rulesetMatches().find((x) => x.ruleset.id === rs.id);
     const box = h('div', { class: 'insp' });
     box.append(h('div', {}, h('div', { class: 'kind' }, editable ? 'Ruleset' : 'Default ruleset'), h('h2', {}, rs.name)));
@@ -99,10 +152,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
     const kv = h('div', { class: 'kv editable' });
     if (editable) {
       const name = h('input', { value: rs.name, spellcheck: 'false' });
-      name.addEventListener('change', () => {
-        rs.name = name.value.trim() || rs.name;
-        app.rulesChanged();
-      });
+      name.addEventListener('change', () => edit('Rename ruleset', (r) => (r.name = name.value.trim() || r.name)));
       kv.append(h('div', { class: 'k' }, 'Name'), name);
     }
     const sel = h('input', { value: rs.selector, spellcheck: 'false', disabled: !editable });
@@ -119,8 +169,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
       }
     });
     sel.addEventListener('change', () => {
-      rs.selector = sel.value.trim();
-      app.rulesChanged();
+      edit('Change selector', (r) => (r.selector = sel.value.trim()));
       app.inspectRuleset(rs.id);
     });
     kv.append(h('div', { class: 'k' }, 'Selector'), h('div', {}, sel, selErr));
@@ -128,10 +177,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
     if (editable) {
       const en = h('input', { type: 'checkbox', style: 'width:auto' });
       en.checked = rs.enabled;
-      en.addEventListener('change', () => {
-        rs.enabled = en.checked;
-        app.rulesChanged();
-      });
+      en.addEventListener('change', () => edit(en.checked ? 'Enable ruleset' : 'Disable ruleset', (r) => (r.enabled = en.checked)));
       kv.append(h('div', { class: 'k' }, 'Enabled'), h('div', {}, en));
     }
     box.append(kv);
@@ -149,9 +195,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
             'span',
             { class: 'val' },
             formatRuleValue(r.name, r.value, u),
-            editable
-              ? h('button', { style: 'margin-left:6px;padding:0 6px', title: 'Remove', onclick: () => (rs.rules.splice(i, 1), app.rulesChanged()) }, '×')
-              : null,
+            editable ? h('button', { style: 'margin-left:6px;padding:0 6px', title: 'Remove', onclick: () => edit('Remove rule', (x) => x.rules.splice(i, 1)) }, '×') : null,
           ),
         ),
       );
@@ -160,41 +204,25 @@ export function mountInspector(app: App, root: HTMLElement): void {
     box.append(list);
 
     if (editable) {
-      const pick = h('select', {});
-      for (const d of RULE_DEFS.values()) if (d.kind !== 'points') pick.append(h('option', { value: d.name }, d.label));
-      const val = h('input', { placeholder: 'e.g. 0.4mm', spellcheck: 'false' });
-      const imp = h('input', { type: 'checkbox', title: '!important', style: 'width:auto' });
-      const err = h('div', { class: 'err-text' });
-      const add = () => {
-        try {
-          const value = parseRuleValue(pick.value, val.value);
-          const decl = { name: pick.value, value, ...(imp.checked ? { important: true } : {}) };
-          const i = rs.rules.findIndex((r) => r.name === pick.value);
-          if (i >= 0) rs.rules[i] = decl;
-          else rs.rules.push(decl);
-          app.rulesChanged();
-        } catch (e) {
-          err.textContent = (e as Error).message;
-        }
-      };
-      val.addEventListener('keydown', (e) => e.key === 'Enter' && add());
-      const help = h('div', { class: 'dim', style: 'font-size:11.5px' }, RULE_DEFS.get(pick.value)?.help ?? '');
-      pick.addEventListener('change', () => (help.textContent = RULE_DEFS.get(pick.value)?.help ?? ''));
       box.append(
-        h('div', { class: 'editable add-rule' }, pick, val, h('button', { onclick: add }, 'Add')),
-        h('label', { class: 'dim', style: 'display:flex;gap:6px;align-items:center;font-size:12px' }, imp, 'Mark as !important'),
-        help,
-        err,
+        ruleAdder((decl) =>
+          edit(`Set ${label(decl.name)}`, (r) => {
+            const i = r.rules.findIndex((x) => x.name === decl.name);
+            if (i >= 0) r.rules[i] = decl;
+            else r.rules.push(decl);
+          }),
+        ),
         h(
           'button',
           {
             style: 'align-self:flex-start;color:var(--danger)',
             onclick: () => {
-              const doc = app.doc!;
-              doc.rulesets = doc.rulesets.filter((r) => r.id !== rs.id);
               app.inspected = { kind: 'none' };
               app.runQuery('', false);
-              app.rulesChanged();
+              app.updateRulesets('Delete ruleset', (list) => {
+                const i = list.findIndex((x) => x.id === rs.id);
+                if (i >= 0) list.splice(i, 1);
+              });
             },
           },
           'Delete ruleset',
@@ -212,17 +240,25 @@ export function mountInspector(app: App, root: HTMLElement): void {
     }
     box.append(h('div', {}, h('div', { class: 'kind' }, 'Board'), h('h2', {}, app.fileName)));
     const kv = h('div', { class: 'kv' });
-    const s = app.stats;
+    const count = (t: string) => {
+      let c = 0;
+      for (const n of app.doc!.nodes.values()) if (n.type === t) c++;
+      return c;
+    };
     for (const [k, v] of [
-      ['Components', s.footprints], ['Pads', s.pads], ['Nets', s.nets], ['Traces', (s.traces ?? 0) + (s.arcs ?? 0)],
-      ['Vias', s.vias], ['Pours & zones', s.zones], ['Copper layers', app.copper.length], ['Objects', app.doc.nodes.size],
-    ] as const) kv.append(h('div', { class: 'k' }, k), h('div', { class: 'v' }, String(v ?? 0)));
+      ['Components', count('element')], ['Pads', count('pad')], ['Nets', count('net')], ['Traces', count('trace')],
+      ['Vias', count('via')], ['Pours', count('fill')], ['Copper layers', app.copper.length], ['Unrouted nets', app.ratsnest.unroutedNets],
+      ['Missing connections', app.ratsnest.lines.length],
+    ] as const) kv.append(h('div', { class: 'k' }, k), h('div', { class: 'v' }, String(v)));
     box.append(kv);
     box.append(
       h(
         'div',
-        { class: 'dim', style: 'font-size:12px' },
-        'Click to select a component, Cmd/Ctrl+click to pick a single pad or shape. Drag to pan, scroll to zoom, F flips the board, Home fits it. Type a selector in the top bar to highlight matches.',
+        { class: 'dim', style: 'font-size:12px;line-height:1.6' },
+        h('b', {}, 'Select'), ' click · Cmd/Ctrl+click for a pad · drag to move · R rotate · Del delete', h('br', {}),
+        h('b', {}, 'Route'), ' X · click a pad to start · V via · / corner · Esc stop · L switch layer', h('br', {}),
+        h('b', {}, 'View'), ' drag empty space to pan · scroll to zoom · F flip · Home fit', h('br', {}),
+        h('b', {}, 'Edit'), ' Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
       ),
     );
     return box;

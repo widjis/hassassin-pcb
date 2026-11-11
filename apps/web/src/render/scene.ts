@@ -1,23 +1,25 @@
 /**
- * Build drawable geometry from the document, reading only *computed* rule values.
+ * Drawable geometry built from *computed* rule values, cached per node so that an edit
+ * only re-tessellates the nodes it touched.
  */
-import type { Doc, DocNode, StyleEngine, Vec2 } from '@hassassin/core';
 import {
   arcPoints,
-  circle,
   distToSegment,
   emptyBox,
-  fillPolygon,
+  frameOf,
   growBox,
+  padGeom,
   padOutline,
   place,
   pointInPolygon,
-  polyline,
-  ring,
-  segment,
+  toWorld,
   type BBox,
-  type Tris,
-} from './geometry.ts';
+  type Doc,
+  type DocNode,
+  type StyleEngine,
+  type Vec2,
+} from '@hassassin/core';
+import { circle, fillPolygon, polyline, ring, type Tris } from './geometry.ts';
 
 export const HOLES = 'Holes';
 
@@ -28,6 +30,8 @@ export interface Pickable {
   priority: number;
   box: BBox;
   hit: (p: Vec2, tol: number) => boolean;
+  /** Snap point offered to tools (pad/via centre). */
+  anchor?: Vec2;
 }
 
 export interface TextItem {
@@ -40,14 +44,13 @@ export interface TextItem {
   kind: 'text' | 'padNumber';
 }
 
-export interface Scene {
-  layers: Map<string, Float32Array>;
-  bbox: BBox;
+type Sink = (layer: string) => Tris | null;
+
+interface NodeGeom {
+  tris: Map<string, Tris>;
   pick: Pickable[];
   texts: TextItem[];
 }
-
-type Sink = (layer: string) => Tris | null;
 
 const v2 = (e: StyleEngine, uid: string, rule: string): Vec2 | undefined => {
   const v = e.get(uid, rule)?.value;
@@ -65,35 +68,22 @@ const listOf = (e: StyleEngine, uid: string, rule: string): string[] => {
   const v = e.get(uid, rule)?.value;
   return Array.isArray(v) ? (v as string[]) : [];
 };
+const expand = (layers: string[], copper: string[]) => layers.flatMap((l) => (l === '*' ? copper : [l]));
 
-/** Expand "*" (all copper) in a layer list. */
-function expand(layers: string[], copper: string[]): string[] {
-  return layers.flatMap((l) => (l === '*' ? copper : [l]));
+export function copperSpan(layers: string[], copper: string[]): string[] {
+  const idx = layers.map((l) => copper.indexOf(l)).filter((i) => i >= 0);
+  if (idx.length < 2) return layers.length ? layers : copper;
+  return copper.slice(Math.min(...idx), Math.max(...idx) + 1);
 }
 
-/**
- * Emit triangles for one node (not its children) into `sink`, and optionally register
- * pickables / texts. Shared by the full scene build and selection highlighting.
- */
-export function emitNode(
-  doc: Doc,
-  e: StyleEngine,
-  node: DocNode,
-  copper: string[],
-  sink: Sink,
-  extra?: { pick: Pickable[]; texts: TextItem[]; box: BBox },
-): void {
+/** Emit one node's own geometry (not its children). */
+export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string[], sink: Sink, geom?: NodeGeom): void {
   const uid = node.uid;
-  if (e.get(uid, 'visible')?.value === false && node.type !== 'text') return;
   if (e.get(uid, 'enabled')?.value === false) return;
+  if (node.type !== 'text' && e.get(uid, 'visible')?.value === false) return;
 
-  const reg = (layers: string[], priority: number, box: BBox, hit: Pickable['hit']) => {
-    if (!extra) return;
-    extra.pick.push({ uid, layers, priority, box, hit });
-    extra.box.minX = Math.min(extra.box.minX, box.minX);
-    extra.box.minY = Math.min(extra.box.minY, box.minY);
-    extra.box.maxX = Math.max(extra.box.maxX, box.maxX);
-    extra.box.maxY = Math.max(extra.box.maxY, box.maxY);
+  const reg = (layers: string[], priority: number, box: BBox, hit: Pickable['hit'], anchor?: Vec2) => {
+    geom?.pick.push({ uid, layers, priority, box, hit, ...(anchor ? { anchor } : {}) });
   };
 
   switch (node.type) {
@@ -120,8 +110,7 @@ export function emitNode(
       if (!c) return;
       const d = numOf(e, uid, 'viaDiameter', 0.6);
       const h = numOf(e, uid, 'viaHole', 0.3);
-      const layers = expand(listOf(e, uid, 'layers'), copper);
-      const span = layers.length >= 2 ? copperSpan(layers, copper) : copper;
+      const span = copperSpan(expand(listOf(e, uid, 'layers'), copper), copper);
       for (const l of span) {
         const out = sink(l);
         if (out) ring(out, c, d / 2, h / 2);
@@ -130,40 +119,31 @@ export function emitNode(
       if (hole) circle(hole, c, h / 2);
       const box = emptyBox();
       growBox(box, c.x, c.y, d / 2);
-      reg(span, 4, box, (p, tol) => Math.hypot(p.x - c.x, p.y - c.y) <= d / 2 + tol);
+      reg(span, 4, box, (p, tol) => Math.hypot(p.x - c.x, p.y - c.y) <= d / 2 + tol, c);
       return;
     }
     case 'pad': {
-      const c = v2(e, uid, 'position');
-      if (!c) return;
-      const sizeV = e.get(uid, 'size')?.value;
-      const size: Vec2 = typeof sizeV === 'number' ? { x: sizeV, y: sizeV } : ((sizeV as Vec2) ?? { x: 1, y: 1 });
-      const rot = numOf(e, uid, 'rotation', 0);
-      const shape = strOf(e, uid, 'padShape', 'rect');
-      const ratio = numOf(e, uid, 'cornerRatio', 0.25);
+      const g = padGeom(doc, e, node, copper);
+      if (!g) return;
       const custom = e.get(uid, 'points')?.value as Vec2[] | undefined;
-      const outline = padOutline(shape === 'custom' ? 'rect' : shape, size, ratio).map((p) => place(p, c, rot));
-      const layers = expand(listOf(e, uid, 'layers'), copper);
-      for (const l of layers) {
+      const customWorld = Array.isArray(custom) && custom.length >= 3 ? custom.map((p) => place(p, g.center, g.rot)) : null;
+      for (const l of g.layers) {
         const out = sink(l);
         if (!out) continue;
-        fillPolygon(out, outline);
-        if (shape === 'custom' && Array.isArray(custom) && custom.length >= 3) fillPolygon(out, custom);
+        fillPolygon(out, g.outline);
+        if (customWorld) fillPolygon(out, customWorld);
       }
-      const holeV = e.get(uid, 'holeSize')?.value;
-      if (holeV !== undefined) {
-        const hs: Vec2 = typeof holeV === 'number' ? { x: holeV, y: holeV } : (holeV as Vec2);
+      if (g.hole) {
         const hole = sink(HOLES);
-        if (hole) fillPolygon(hole, padOutline(hs.x === hs.y ? 'circle' : 'oval', hs, 0.5).map((p) => place(p, c, rot)));
+        if (hole) fillPolygon(hole, padOutline(g.hole.x === g.hole.y ? 'circle' : 'oval', g.hole, 0.5).map((p) => place(p, g.center, g.rot)));
       }
       const box = emptyBox();
-      for (const p of outline) growBox(box, p.x, p.y);
-      reg(layers, 5, box, (p, tol) => pointInPolygon(p, outline) || (tol > 0 && outline.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < tol)));
-      if (extra) {
-        const label = String(node.props.number ?? node.name);
-        const layer = layers.find((l) => l.endsWith('.Cu')) ?? layers[0] ?? 'F.Cu';
-        if (label) extra.texts.push({ uid, layer, pos: c, rot: 0, text: label, size: Math.min(size.x, size.y) * 0.55, kind: 'padNumber' });
-      }
+      for (const p of g.outline) growBox(box, p.x, p.y);
+      reg(g.layers, 5, box, (p, tol) => pointInPolygon(p, g.outline) || (tol > 0 && g.outline.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < tol)), g.center);
+      const label = String(node.props.number ?? node.name);
+      const sizeV = e.get(uid, 'size')?.value as Vec2 | number | undefined;
+      const minSide = typeof sizeV === 'number' ? sizeV : sizeV ? Math.min(sizeV.x, sizeV.y) : 1;
+      if (label && geom) geom.texts.push({ uid, layer: g.layers.find((l) => l.endsWith('.Cu')) ?? g.layers[0] ?? 'F.Cu', pos: g.center, rot: 0, text: label, size: minSide * 0.55, kind: 'padNumber' });
       return;
     }
     case 'fill': {
@@ -197,6 +177,8 @@ export function emitNode(
     case 'circle':
     case 'polygon':
     case 'rectangle': {
+      const f = frameOf(doc, e, node);
+      const W = (p: Vec2) => toWorld(f, p);
       const layer = strOf(e, uid, 'layer', 'F.SilkS');
       const w = numOf(e, uid, 'strokeWidth', 0.15);
       const filled = e.get(uid, 'filled')?.value === true;
@@ -205,21 +187,22 @@ export function emitNode(
       if (node.type === 'line') {
         const s = v2(e, uid, 'start');
         const t = v2(e, uid, 'end');
-        if (s && t) path = [s, t];
+        if (s && t) path = [W(s), W(t)];
       } else if (node.type === 'arc') {
         const s = v2(e, uid, 'start');
         const m = v2(e, uid, 'mid');
         const t = v2(e, uid, 'end');
-        if (s && m && t) path = arcPoints(s, m, t);
+        if (s && m && t) path = arcPoints(W(s), W(m), W(t));
       } else if (node.type === 'circle') {
         const c = v2(e, uid, 'center');
         if (!c) return;
+        const cw = W(c);
         const r = numOf(e, uid, 'radius', 0);
         const n = Math.max(24, Math.ceil(r * 16));
-        path = Array.from({ length: n }, (_, i) => ({ x: c.x + Math.cos((i / n) * 2 * Math.PI) * r, y: c.y + Math.sin((i / n) * 2 * Math.PI) * r }));
+        path = Array.from({ length: n }, (_, i) => ({ x: cw.x + Math.cos((i / n) * 2 * Math.PI) * r, y: cw.y + Math.sin((i / n) * 2 * Math.PI) * r }));
         closed = true;
       } else {
-        path = (e.get(uid, 'points')?.value as Vec2[]) ?? [];
+        path = ((e.get(uid, 'points')?.value as Vec2[]) ?? []).map(W);
         closed = true;
       }
       if (path.length < 2) return;
@@ -238,16 +221,16 @@ export function emitNode(
       return;
     }
     case 'text': {
-      if (!extra) return;
-      if (e.get(uid, 'visible')?.value === false) return;
-      const pos = v2(e, uid, 'position');
+      if (!geom || e.get(uid, 'visible')?.value === false) return;
+      const local = v2(e, uid, 'position');
       const text = strOf(e, uid, 'text', node.name);
-      if (!pos || !text) return;
-      extra.texts.push({
+      if (!local || !text) return;
+      const f = frameOf(doc, e, node);
+      geom.texts.push({
         uid,
         layer: strOf(e, uid, 'layer', 'F.SilkS'),
-        pos,
-        rot: numOf(e, uid, 'rotation', 0),
+        pos: toWorld(f, local),
+        rot: f.rot + numOf(e, uid, 'rotation', 0),
         text,
         size: numOf(e, uid, 'fontSize', 1),
         kind: 'text',
@@ -259,27 +242,106 @@ export function emitNode(
   }
 }
 
-function copperSpan(layers: string[], copper: string[]): string[] {
-  const idx = layers.map((l) => copper.indexOf(l)).filter((i) => i >= 0);
-  if (idx.length < 2) return layers;
-  const lo = Math.min(...idx);
-  const hi = Math.max(...idx);
-  return copper.slice(lo, hi + 1);
-}
+/** Per-node geometry cache with cheap partial updates. */
+export class SceneCache {
+  private nodes = new Map<string, NodeGeom>();
+  private dirtyLayers = true;
+  private layerCache = new Map<string, Float32Array>();
+  private pickCache: Pickable[] | null = null;
+  private textCache: TextItem[] | null = null;
 
-export function buildScene(doc: Doc, e: StyleEngine, copper: string[]): Scene {
-  const acc = new Map<string, Tris>();
-  const sink: Sink = (layer) => {
-    let a = acc.get(layer);
-    if (!a) acc.set(layer, (a = []));
-    return a;
-  };
-  const extra = { pick: [] as Pickable[], texts: [] as TextItem[], box: emptyBox() };
-  for (const node of doc.nodes.values()) emitNode(doc, e, node, copper, sink, extra);
-  const layers = new Map<string, Float32Array>();
-  for (const [k, v] of acc) layers.set(k, new Float32Array(v));
-  // Frame everything: unfinished boards often have parts parked outside the outline.
-  return { layers, bbox: extra.box, pick: extra.pick, texts: extra.texts };
+  constructor(
+    private doc: Doc,
+    private engine: StyleEngine,
+    private copper: string[],
+  ) {
+    this.rebuildAll();
+  }
+
+  private emit(n: DocNode): void {
+    const g: NodeGeom = { tris: new Map(), pick: [], texts: [] };
+    const sink: Sink = (layer) => {
+      let a = g.tris.get(layer);
+      if (!a) g.tris.set(layer, (a = []));
+      return a;
+    };
+    emitNode(this.doc, this.engine, n, this.copper, sink, g);
+    if (g.tris.size || g.pick.length || g.texts.length) this.nodes.set(n.uid, g);
+    else this.nodes.delete(n.uid);
+  }
+
+  private invalidate(): void {
+    this.dirtyLayers = true;
+    this.pickCache = null;
+    this.textCache = null;
+  }
+
+  rebuildAll(): void {
+    this.nodes.clear();
+    for (const n of this.doc.nodes.values()) this.emit(n);
+    this.invalidate();
+  }
+
+  /** Re-emit the given nodes and all their descendants; drop ones that no longer exist. */
+  update(uids: Iterable<string>): void {
+    const seen = new Set<string>();
+    const visit = (uid: string) => {
+      if (seen.has(uid)) return;
+      seen.add(uid);
+      const n = this.doc.nodes.get(uid);
+      if (!n) {
+        this.nodes.delete(uid);
+        return;
+      }
+      this.emit(n);
+      n.children.forEach(visit);
+    };
+    for (const u of uids) visit(u);
+    this.invalidate();
+  }
+
+  /** Returns per-layer triangle buffers; `changed` is true when they were rebuilt. */
+  layers(): { layers: Map<string, Float32Array>; changed: boolean } {
+    if (!this.dirtyLayers) return { layers: this.layerCache, changed: false };
+    const sizes = new Map<string, number>();
+    for (const g of this.nodes.values()) for (const [l, t] of g.tris) sizes.set(l, (sizes.get(l) ?? 0) + t.length);
+    const out = new Map<string, Float32Array>();
+    const offs = new Map<string, number>();
+    for (const [l, n] of sizes) {
+      out.set(l, new Float32Array(n));
+      offs.set(l, 0);
+    }
+    for (const g of this.nodes.values()) {
+      for (const [l, t] of g.tris) {
+        const arr = out.get(l)!;
+        const o = offs.get(l)!;
+        arr.set(t, o);
+        offs.set(l, o + t.length);
+      }
+    }
+    this.layerCache = out;
+    this.dirtyLayers = false;
+    return { layers: out, changed: true };
+  }
+
+  get pick(): Pickable[] {
+    if (!this.pickCache) this.pickCache = [...this.nodes.values()].flatMap((g) => g.pick);
+    return this.pickCache;
+  }
+
+  get texts(): TextItem[] {
+    if (!this.textCache) this.textCache = [...this.nodes.values()].flatMap((g) => g.texts);
+    return this.textCache;
+  }
+
+  get bbox(): BBox {
+    const b = emptyBox();
+    for (const p of this.pick) {
+      growBox(b, p.box.minX, p.box.minY);
+      growBox(b, p.box.maxX, p.box.maxY);
+    }
+    return b;
+  }
 }
 
 /** Triangles for a set of nodes and all their descendants, merged into one array. */
@@ -298,14 +360,3 @@ export function highlightTris(doc: Doc, e: StyleEngine, uids: Iterable<string>, 
   for (const u of uids) visit(u);
   return new Float32Array(out);
 }
-
-export function boxUnion(boxes: BBox[]): BBox {
-  const b = emptyBox();
-  for (const x of boxes) {
-    growBox(b, x.minX, x.minY);
-    growBox(b, x.maxX, x.maxY);
-  }
-  return b;
-}
-
-export { circle, segment };

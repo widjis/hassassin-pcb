@@ -38,8 +38,9 @@ export function systemDefaults(): Ruleset[] {
     }),
     def('Power net', 'net[netClass=power]', 'Nets marked as power', { traceWidth: '0.5mm', viaDiameter: '0.8mm', viaHole: '0.4mm' }),
     def('Ground net', 'net[netClass=ground]', 'Nets marked as ground', { traceWidth: '0.5mm', stitchSpacing: '0mm' }),
-    def('Trace', 'trace', 'Every trace segment', { traceWidth: '0.25mm', keepOut: '0.2mm' }),
-    def('Via', 'via', 'Every via', { viaDiameter: '0.6mm', viaHole: '0.3mm', viaKind: 'through', keepOut: '0.2mm' }),
+    // Trace width and via size are not set here: traces and vias inherit them from their net.
+    def('Trace', 'trace', 'Every trace segment', { keepOut: '0.2mm' }),
+    def('Via', 'via', 'Every via', { keepOut: '0.2mm' }),
     def('Fill', 'fill, zone', 'Copper pours and keep-out zones', { keepOut: '0.3mm', thermalRelief: 'spokes' }),
     def('Text', 'text', 'Every text', { fontSize: '1mm', strokeWidth: '0.15mm', rotation: '0deg' }),
     def('Graphics', 'line, circle, arc, polygon, rectangle', 'Lines and shapes', { strokeWidth: '0.15mm', filled: 'false' }),

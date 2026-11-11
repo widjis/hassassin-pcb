@@ -66,15 +66,6 @@ const xy = (l: SList | undefined): Vec2 | undefined => {
   return x === undefined || y === undefined ? undefined : { x, y };
 };
 
-/** Footprint-local point -> board coordinates (rotation in degrees, KiCad sense). */
-function toBoard(local: Vec2, origin: Vec2, rotDeg: number): Vec2 {
-  if (!rotDeg) return { x: origin.x + local.x, y: origin.y + local.y };
-  const r = (rotDeg * Math.PI) / 180;
-  const c = Math.cos(r);
-  const s = Math.sin(r);
-  return { x: origin.x + local.x * c + local.y * s, y: origin.y - local.x * s + local.y * c };
-}
-
 const rule = (name: string, value: RuleDecl['value']): RuleDecl => ({ name, value });
 
 function strokeWidth(l: SList): number | undefined {
@@ -304,7 +295,9 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
       props,
       rules: [rule('position', origin), rule('rotation', rot), rule('side', fpLayer.startsWith('B.') ? 'bottom' : 'top')],
     });
-    const tf = (p: Vec2) => toBoard(p, origin, rot);
+    // Footprint children keep the file's footprint-local coordinates; rotations are
+    // stored relative to the component so that moving/rotating it carries them along.
+    const tf = (p: Vec2) => p;
 
     for (const e of fp) {
       if (!isList(e)) continue;
@@ -319,8 +312,8 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
         const padType = typeRaw === 'thru_hole' ? 'through' : typeRaw === 'np_thru_hole' ? 'npth' : typeRaw === 'connect' ? 'edge' : 'smd';
         const shapeMap: Record<string, string> = { circle: 'circle', rect: 'rect', roundrect: 'roundrect', oval: 'oval', trapezoid: 'trapezoid', custom: 'custom' };
         const rules: RuleDecl[] = [
-          rule('position', tf(local)),
-          rule('rotation', num(padAt?.[3]) ?? rot),
+          rule('position', local),
+          rule('rotation', (num(padAt?.[3]) ?? rot) - rot),
           rule('size', size),
           rule('padShape', shapeMap[shape] ?? 'rect'),
           rule('padType', padType),
@@ -341,11 +334,8 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
         if (shape === 'custom') {
           const prims: Vec2[][] = [];
           for (const gp of children(child(e, 'primitives') ?? [], 'gr_poly')) {
-            const ring = pts(child(gp, 'pts')).map((p) => {
-              // primitives are relative to the pad, in the pad's own rotation
-              const pr = num(padAt?.[3]) ?? rot;
-              return toBoard(toBoard(p, { x: 0, y: 0 }, pr - rot), tf(local), 0);
-            });
+            // primitives are relative to the pad centre, in the pad's own frame
+            const ring = pts(child(gp, 'pts'));
             if (ring.length >= 3) prims.push(ring);
           }
           if (prims.length) rules.push(rule('points', prims[0]!));
@@ -358,11 +348,11 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
         }
         addNode(doc, el.uid, { ...(uidOf(e) ? { uid: uidOf(e)! } : {}), type: 'pad', name: str(e[1]) ?? '', props: padProps, rules });
       } else if (h === 'property' && str(e[1]) === 'Reference') {
-        addGraphic(el.uid, e, 'text', tf, 0);
+        addGraphic(el.uid, e, 'text', tf, -rot);
       } else if (graphicKind[h] && h !== 'fp_text') {
-        addGraphic(el.uid, e, graphicKind[h]!, tf, 0);
+        addGraphic(el.uid, e, graphicKind[h]!, tf, -rot);
       } else if (h === 'fp_text' && str(e[1]) !== 'value') {
-        addGraphic(el.uid, e, 'text', tf, 0);
+        addGraphic(el.uid, e, 'text', tf, -rot);
       }
     }
   }
