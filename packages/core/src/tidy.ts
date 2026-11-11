@@ -12,6 +12,7 @@ import type { Doc, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { symbolFrame, symToSheet } from './schematic.ts';
 import { moveSymbolsOps, netGroups, routeConnection, wirePathOps } from './schematicEdit.ts';
+import { runErc } from './erc.ts';
 
 const EPS = 1e-3;
 const same = (a: Vec2, b: Vec2) => Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS;
@@ -180,7 +181,10 @@ function tidyOnce(doc: Doc, engine: StyleEngine, sheetUid: string, opts: { moveP
   // Pass 1: re-route chains with bends between their ends; each kept change lowers the bends.
   const reroutePass = (near?: Vec2[]) => {
     const touches = (c: WireChain) => !near || c.points.some((q) => near.some((n) => same(n, q)));
-    for (const chain of wireChains(doc, engine, sheetUid).filter((c) => (c.bends > 0 || c.slanted) && touches(c))) {
+    // Wires drawn across a part body are re-routed too, even when they are straight.
+    const across = new Set(runErc(doc, engine).violations.filter((v) => v.kind === 'wireThroughPart' && v.sheet === sheetUid).map((v) => v.uids[0]!));
+    for (const chain of wireChains(doc, engine, sheetUid).filter((c) => (c.bends > 0 || c.slanted || c.wires.some((u) => across.has(u))) && touches(c))) {
+      const through = chain.wires.some((u) => across.has(u));
       if (!chain.wires.every((u) => doc.nodes.has(u))) continue;
       const a = chain.points[0]!, b = chain.points[chain.points.length - 1]!;
       // Route with the chain taken away, so it does not block its own replacement.
@@ -190,7 +194,7 @@ function tidyOnce(doc: Doc, engine: StyleEngine, sheetUid: string, opts: { moveP
       const path = routeConnection(doc, engine, sheetUid, a, b);
       applyOps(doc, r.inverse);
       engine.recompute();
-      if (!path || (!chain.slanted && path.length - 2 >= chain.bends)) continue;
+      if (!path || (!chain.slanted && !through && path.length - 2 >= chain.bends)) continue;
       const ops = [...rm, ...wirePathOps(doc, sheetUid, path)];
       // The router never touches other nets and the new path has fewer bends, so the
       // step-by-step check is only needed in the careful run.

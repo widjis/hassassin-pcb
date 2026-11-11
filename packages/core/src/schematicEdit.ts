@@ -157,7 +157,10 @@ export function moveSymbolsOps(
     // Stubs: a chain of wires from the pin that ends only at power symbols / labels.
     for (const first of wiresAt(from, handledWires)) {
       const chain: DocNode[] = [first];
-      let tip = ends(first).find((e) => !same(e, from))!;
+      const far = ends(first).find((e) => !same(e, from));
+      // A zero-length wire has no far end: nothing to carry along.
+      if (!far) continue;
+      let tip = far;
       let ok = true;
       for (let depth = 0; depth < 4; depth++) {
         if (pinAt(tip)) {
@@ -424,8 +427,10 @@ function segClear(a: Vec2, b: Vec2, o: Obstacles, ends: Vec2[]): boolean {
     // Crossing at a right angle is fine (no connection without a junction).
   }
   for (const bx of o.boxes) {
-    // A body that already holds one of the wire's ends cannot be avoided; only the rest of the path is checked.
-    if (ends.some((e) => e.x > bx.minX - EPS && e.x < bx.maxX + EPS && e.y > bx.minY - EPS && e.y < bx.maxY + EPS)) continue;
+    // A body that holds one of the wire's ends well inside it cannot be avoided (a pin inside a
+    // drawing). An end that only touches the outline does not excuse passing through the body.
+    const inside = (e: Vec2) => e.x > bx.minX + 0.3 && e.x < bx.maxX - 0.3 && e.y > bx.minY + 0.3 && e.y < bx.maxY - 0.3;
+    if (ends.some(inside)) continue;
     const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
     if (x1 > bx.minX + 0.05 && x0 < bx.maxX - 0.05 && y1 > bx.minY + 0.05 && y0 < bx.maxY - 0.05) return false;
   }
@@ -1110,7 +1115,11 @@ export function routeWirePath(doc: Doc, engine: StyleEngine, sheetUid: string, f
       if (n !== undefined) own.add(n);
     }
   });
-  const keepP = all.points.map((_, i) => !own.has(netOf.get(all.pointOwners?.[i] ?? '') ?? '\u0000'));
+  // Pins stay obstacles even on the own net: a wire should end on a pin, never run over one.
+  const keepP = all.points.map((_, i) => {
+    const owner = doc.nodes.get(all.pointOwners?.[i] ?? '');
+    return owner?.type === 'pin' || !own.has(netOf.get(all.pointOwners?.[i] ?? '') ?? '\u0000');
+  });
   const keepS = all.segs.map((_, i) => !own.has(netOf.get(all.segOwners?.[i] ?? '') ?? '\u0000'));
   const o: Obstacles = {
     points: all.points.filter((_, i) => keepP[i]),

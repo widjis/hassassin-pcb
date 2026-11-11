@@ -8,14 +8,14 @@
  *   - labels not attached to anything,
  *   - duplicate reference designators.
  */
-import type { Doc, Vec2 } from './model.ts';
+import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import type { Severity } from './drc.ts';
 import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
-import { allSheets, pinPoint, sheetItems } from './schematic.ts';
+import { allSheets, pinPoint, sheetItems, symbolFrame, symToSheet } from './schematic.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -27,6 +27,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   duplicateRef: 'Duplicate reference',
   wireOverPin: 'Wire runs over a pin',
   danglingPower: 'Power symbol not connected',
+  wireThroughPart: 'Wire runs through a part',
 };
 
 export interface ErcViolation {
@@ -125,6 +126,17 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
       const p = n.type === 'pin' ? pointOf.get(n.uid) : ['label', 'junction', 'sheetPin'].includes(n.type) ? vec(engine.get(n.uid, 'position')?.value) : undefined;
       if (p) anchors.push({ uid: n.uid, p });
     }
+    // A wire drawn across a part's body reads like a short, even when it is not one.
+    for (const n of its) {
+      if (n.type !== 'symbol' || n.props.power) continue;
+      const body = partBody(n, engine);
+      if (!body) continue;
+      for (const w of wires) {
+        const x0 = Math.min(w.a.x, w.b.x), x1 = Math.max(w.a.x, w.b.x), y0 = Math.min(w.a.y, w.b.y), y1 = Math.max(w.a.y, w.b.y);
+        if (x1 > body.minX + 0.1 && x0 < body.maxX - 0.1 && y1 > body.minY + 0.1 && y0 < body.maxY - 0.1)
+          out.push({ id: `wtp:${w.n.uid}:${n.uid}`, kind: 'wireThroughPart', severity: 'warning', message: `A wire runs through the body of ${n.props.ref ?? n.name}; route it around the part`, sheet: sheet.uid, at: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, uids: [w.n.uid, n.uid] });
+      }
+    }
     // A power symbol joins its net by name, so one that touches nothing still "works" — but
     // the pin it was meant for is no longer visibly connected to it.
     for (const n of its) {
@@ -157,4 +169,19 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
     } else seen.set(key, n.uid);
   }
   return { violations: out, netlist: nl };
+}
+
+/** A symbol's drawn body (no pins) in sheet coordinates, or null when it has no drawing. */
+function partBody(n: DocNode, engine: StyleEngine): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const f = symbolFrame(engine, n.uid);
+  const pts: Vec2[] = [];
+  for (const g of (n.data?.graphics ?? []) as { t: string; a?: Vec2; b?: Vec2; pts?: Vec2[]; c?: Vec2; r?: number }[]) {
+    if (g.t === 'rect' && g.a && g.b) pts.push(g.a, g.b);
+    else if (g.t === 'poly' && g.pts) pts.push(...g.pts);
+    else if (g.t === 'circle' && g.c && g.r) pts.push({ x: g.c.x - g.r, y: g.c.y - g.r }, { x: g.c.x + g.r, y: g.c.y + g.r });
+  }
+  if (!pts.length) return null;
+  const w = pts.map((p) => symToSheet(f, p));
+  const b = { minX: Math.min(...w.map((p) => p.x)), minY: Math.min(...w.map((p) => p.y)), maxX: Math.max(...w.map((p) => p.x)), maxY: Math.max(...w.map((p) => p.y)) };
+  return b.maxX - b.minX > 0.3 && b.maxY - b.minY > 0.3 ? b : null;
 }

@@ -195,4 +195,24 @@ describe('S8: pin grid and jog removal', () => {
     expect(core.sheetBlocks(p.doc, p.engine, s).length).toBe(blocks0);
     expect(core.runErc(p.doc, p.engine).violations.filter((v) => v.kind === 'danglingPower' || v.kind === 'danglingWire')).toEqual([]);
   });
+
+  it('a wire drawn across a part body is flagged by ERC and re-routed by tidy_wires (S8 re-run finding)', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    await runTool(p, 'add_part', { kind: 'resistor', x: 0, y: 0 });
+    await runTool(p, 'add_part', { kind: 'resistor', x: 15.24, y: 0 });
+    await runTool(p, 'move_symbol', { ref: 'R2', rotation: 90 });
+    // From R1.1 straight down through R1's body to a point just below its outline, then to R2.
+    const top = pin(p, 'R1.1');
+    const r2 = pin(p, 'R2.1');
+    const below = { x: top.x, y: pin(p, 'R1.2').y - 1.27 };
+    drawPath(p, [top, below, { x: r2.x, y: below.y }, r2]);
+    const across = () => core.runErc(p.doc, p.engine).violations.filter((v) => v.kind === 'wireThroughPart').length;
+    expect(across()).toBeGreaterThan(0);
+    const before = groups(p);
+    await runTool(p, 'tidy_wires', {});
+    expect(groups(p)).toEqual(before);
+    expect(across()).toBe(0);
+    expect(core.runErc(p.doc, p.engine).violations.filter((v) => v.kind === 'wireOverPin')).toEqual([]);
+  });
 });
