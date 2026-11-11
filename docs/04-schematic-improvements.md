@@ -91,7 +91,7 @@ only when all of its criteria pass.
   - A junction dot is added automatically wherever three or more wire ends / pins meet, and removed when
     it is no longer needed; crossing wires without a junction stay unconnected (and the netlist agrees).
   - Tools (`connect_pins`, `add_power`) create junctions the same way.
-- [x] **S5. Edit values and properties in place.** — done
+- [x] **S5. Edit values and properties in place.** — `3769076`
   - Delivered: double-clicking a reference or value on the sheet opens a text box over it (Enter or
     clicking away saves, Esc cancels). The inspector shows a Part form for schematic symbols: reference,
     value, MPN, manufacturer, datasheet, footprint and DNP. A new reference is checked (valid, not used)
