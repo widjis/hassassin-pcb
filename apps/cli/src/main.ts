@@ -13,6 +13,8 @@ import { newProject, ToolError, TOOL_MAP, TOOLS, runTool, saveProject, type Tool
 import { isHpcb, loadGeometry, readProject, toolContext, writeAny, writeProject } from './io.ts';
 import { serveMcp } from './mcp.ts';
 import { openLive, parseLiveLink, runLive } from './live.ts';
+import { AgentSession, type AgentEvent } from '@hassassin/tools';
+import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
 
 const VERSION = '0.5.0';
 
@@ -97,6 +99,7 @@ function usage(): string {
     '  new <out.hpcb>                          start an empty project',
     '  import <board.kicad_pcb> [sch…] -o <out.hpcb>   convert a KiCad project (sibling .kicad_sch files are picked up)',
     '  mcp                                     run as an MCP server (stdio)',
+    '  agent <project> "<request>" [--mode ask] [-o out.hpcb]   let the AI agent work on the project (needs Anthropic credentials)',
     '  <tool> <project> [positional…] [--arg value] [--json \'{…}\'] [-o out.hpcb] [--fail-on-error]',
     '',
     'Examples:',
@@ -150,6 +153,8 @@ export async function main(argv: string[]): Promise<void> {
     return print({ created: out, parts: nodes.filter((n) => n.type === 'element').length, symbols: nodes.filter((n) => n.type === 'symbol').length, sheets: nodes.filter((n) => n.type === 'sheet').length });
   }
 
+  if (cmd === 'agent') return agentCommand(positional, flags);
+
   const tool = TOOL_MAP.get(snake(cmd));
   if (!tool) fail(`Unknown command "${cmd}". Run "hassassin help".`);
   const projectPath = positional.shift();
@@ -188,6 +193,53 @@ export async function main(argv: string[]): Promise<void> {
     print({ ...(typeof result === 'object' && result ? result : { result }), saved: target });
   } else print(result);
   if (flags['fail-on-error'] && typeof result === 'object' && result && Number((result as { errors?: number }).errors) > 0) process.exit(2);
+}
+
+/** One agent request against a file or a live link. Progress goes to stderr, a JSON summary to stdout. */
+async function agentCommand(positional: string[], flags: Record<string, string | true>): Promise<void> {
+  const [projectPath, ...rest] = positional;
+  const prompt = rest.join(' ').trim();
+  if (!projectPath || !prompt) fail('Usage: hassassin agent <project.hpcb | share link> "<request>" [--mode ask] [-o out.hpcb]');
+  if (!hasAnthropicCredentials()) process.stderr.write('Note: no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN set; trying the SDK\'s other credential sources.\n');
+  const mode = flags.mode === 'ask' ? 'ask' : 'agent';
+  const ctx = toolContext();
+  const link = parseLiveLink(projectPath);
+  const live = link ? await openLive(link) : null;
+  const p = live ? live.project : await readProject([projectPath]);
+  await loadGeometry();
+  const session = new AgentSession({
+    model: anthropicModel(),
+    mode,
+    runTool: (name, args) => {
+      const def = TOOL_MAP.get(name);
+      const run = () => runTool(p, name, args, ctx);
+      return live ? runLive(live, run, def?.mutates ?? false) : run();
+    },
+  });
+  const ac = new AbortController();
+  process.on('SIGINT', () => ac.abort());
+  const out = { text: '', tools: 0, errors: [] as string[], tasks: [] as unknown[], usage: { input: 0, output: 0, cacheRead: 0 } };
+  await session.send(
+    prompt,
+    (e: AgentEvent) => {
+      if (e.type === 'text') (process.stderr.write(e.text), (out.text += e.text));
+      else if (e.type === 'tool') (process.stderr.write(`\n  → ${e.name} ${JSON.stringify(e.input).slice(0, 100)}\n`), out.tools++);
+      else if (e.type === 'tool_result' && !e.ok) process.stderr.write(`    ✗ ${e.summary}\n`);
+      else if (e.type === 'tasks') out.tasks = e.tasks;
+      else if (e.type === 'usage') (out.usage.input += e.input), (out.usage.output += e.output), (out.usage.cacheRead += e.cacheRead);
+      else if (e.type === 'error') (out.errors.push(e.message), process.stderr.write(`\n  ! ${e.message}\n`));
+    },
+    ac.signal,
+  );
+  process.stderr.write('\n');
+  if (live) live.client.close();
+  else if (p.dirty) {
+    const target = typeof flags.out === 'string' ? flags.out : projectPath;
+    if (!isHpcb(target)) fail('The agent changed the project; save it as .hpcb with -o project.hpcb.');
+    await writeProject(p, target);
+    (out as Record<string, unknown>).saved = target;
+  }
+  print(out);
 }
 
 main(process.argv.slice(2)).catch((e) => fail(e instanceof ToolError ? e.message : (e as Error).message ?? String(e)));

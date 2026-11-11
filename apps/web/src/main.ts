@@ -7,6 +7,7 @@ import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './
 import type { DocNode, Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
+import { mountAgent } from './ui/agent.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -269,6 +270,7 @@ const focusComment = (c: DocNode) => {
 };
 mountComments(app, collab, $('commentsPanel'), focusComment);
 mountHistory(app, collab, $('historyPanel'));
+mountAgent(app, collab, $('agentPanel'));
 mountParts(app, $('partsPanel'), {
   place: (part, extra) => {
     if (!app.doc) return app.say('Open or create a project first.');

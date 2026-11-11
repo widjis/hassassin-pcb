@@ -13,7 +13,7 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **3.5** ✅ | Akses untuk agent | CLI `hassassin` + MCP server (stdio) di atas file `.hpcb`/KiCad: query, inspect, ubah rule, tambah part, kabel, update PCB, DRC/ERC, refill pour, ekspor fab — dipakai Claude Code, Codex, atau klien MCP lain |
 | **4** ✅ | Kolaborasi | Edit multi-user real-time, kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View; **MCP live** (agent mengedit proyek yang sedang terbuka) |
 | **5** ✅ | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
-| **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, memakai definisi tool yang sama dengan CLI/MCP (Fase 3.5), DRC/ERC-fix, placement & routing berbantuan AI |
+| **6** ✅ | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, memakai definisi tool yang sama dengan CLI/MCP (Fase 3.5), DRC/ERC-fix, placement & routing berbantuan AI |
 | **7** | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
 
 ## Lapisan alur proyek (lintas fase)
@@ -203,6 +203,29 @@ Batasan yang diketahui:
 - Dimensi land pattern generik adalah nilai nominal kami sendiri; untuk produksi, pilih footprint dari
   datasheet/library pabrikan.
 - Belum ada model 3D, dan belum ada pemetaan pin ↔ pad selain nomor yang sama.
+
+## Fase 6 — yang sudah dibangun
+
+- **Loop agent** (`tools/agent.ts`): Claude (`claude-opus-5-5`, adaptive thinking, streaming, prompt caching
+  otomatis, *fallback* sisi server bila model menolak) memakai **definisi tool yang sama** dengan CLI/MCP.
+  Riwayat percakapan hanya ditambah (append-only), hasil semua tool satu giliran dikirim dalam satu pesan,
+  error tool dikembalikan sebagai `is_error` agar model memperbaiki sendiri, batas langkah per permintaan.
+- **Task list yang terlihat** (tool `update_tasks`) dan **pemandu tahap**: setiap pesan membawa status proyek
+  terbaru (gerbang tahap, hasil ERC/DRC, spesifikasi); prompt sistem menjabarkan cara kerja per tahap dan
+  melarang mengarang MPN/harga/stok.
+- **Mode Agent / Ask**: Ask hanya diberi tool baca; link view/comment otomatis Ask.
+- **Server** (`/api/agent/:id`, SSE): agent bergabung ke proyek bersama sebagai kolaborator "AI agent (for …)",
+  jadi editnya live, bisa di-undo, dan tercatat di riwayat. Kunci API hanya di server. Tombol Stop.
+- **Web**: tab *Agent* (chat streaming, langkah tool beserta hasilnya, task list, saran prompt untuk tahap
+  berikutnya, pemakaian token).
+- **CLI**: `hassassin agent <proyek | link> "permintaan" [--mode ask]`.
+- Diuji dengan model tiruan berskrip (loop, error tool, mode Ask, server + SSE + edit masuk ke proyek bersama)
+  dan di browser. **Belum diuji dengan API asli** karena mesin ini tidak punya kredensial Anthropic.
+
+Batasan yang diketahui:
+- Perlu kredensial Anthropic di mesin server (`ANTHROPIC_API_KEY` atau `ant auth login`); biaya API per pemakaian.
+- Riwayat chat disimpan di memori server (hilang saat restart); belum ada kompaksi untuk chat sangat panjang.
+- Placement/routing "berbantuan AI" saat ini lewat tool yang ada (move_part, route); autoplacer/autorouter di Fase 7.
 
 ## Di luar cakupan (untuk sekarang)
 Simulasi SPICE, mekanik/enclosure, firmware, wire harness, pemesanan pabrikasi.

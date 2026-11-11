@@ -6,8 +6,9 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@hassassin/core": "workspace:*",
-    "@hassassin/kicad-import": "workspace:*",
-    "@hassassin/fab": "workspace:*"
+    "@hassassin/fab": "workspace:*",
+    "@hassassin/kicad-import": "workspace:*"
   }
 }

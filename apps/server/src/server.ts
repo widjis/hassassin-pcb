@@ -26,6 +26,9 @@ import { Store, type LiveProject } from './store.ts';
 import { Library, type LibrarySource } from '@hassassin/tools';
 import { kicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
 import { TeamLibrary } from './teamLib.ts';
+import { AgentSession, runTool, TOOLS, type AgentEvent, type AgentMode, type ModelCall } from '@hassassin/tools';
+import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
+import { openLive, runLive, type LiveSession } from '../../cli/src/live.ts';
 
 interface Client {
   id: string;
@@ -44,6 +47,17 @@ export interface ServerOptions {
   log?: (msg: string) => void;
   /** Serve the KiCad libraries installed on this machine (default true). */
   kicad?: boolean;
+  /** Model for the in-app agent (default: Claude through the Anthropic SDK, if credentials exist). */
+  agentModel?: ModelCall | null;
+}
+
+interface Chat {
+  id: string;
+  project: string;
+  session: AgentSession;
+  live: LiveSession;
+  abort: AbortController | null;
+  lastUsed: number;
 }
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.wasm': 'application/wasm', '.png': 'image/png', '.ico': 'image/x-icon' };
@@ -56,6 +70,68 @@ export async function startServer(opts: ServerOptions) {
   const team = new TeamLibrary(opts.dataDir);
   const kicad = opts.kicad === false ? null : kicadSystemLibrary();
   const library = new Library([team, ...(kicad ? [kicad] : [])] as LibrarySource[]);
+
+  const agentModel: ModelCall | null = opts.agentModel !== undefined ? opts.agentModel : hasAnthropicCredentials() ? anthropicModel() : null;
+  const chats = new Map<string, Chat>();
+  let boundPort = opts.port;
+  const sweep = setInterval(() => {
+    for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (c.live.client.close(), chats.delete(k));
+  }, 60 * 1000);
+  sweep.unref?.();
+
+  /**
+   * POST /api/agent/:id?token=  {prompt, chat?, mode?, user?}  → text/event-stream of AgentEvent
+   * POST /api/agent/:id/stop?token= {chat}
+   * GET  /api/agent/status
+   * The agent joins the shared project as a collaborator, so its edits reach everyone live.
+   */
+  const agentApi = async (req: IncomingMessage, res: ServerResponse, url: URL) => {
+    const parts = url.pathname.split('/').filter(Boolean); // api agent :id [stop]
+    if (req.method === 'GET' && parts[2] === 'status') return json(res, 200, { available: !!agentModel, model: agentModel ? 'claude-opus-5-5' : null });
+    const id = parts[2];
+    if (!id || !store.exists(id)) return json(res, 404, { error: 'No such project' });
+    const tok = url.searchParams.get('token') ?? '';
+    const role = store.roleFor(await store.get(id), tok);
+    if (!role) return json(res, 403, { error: 'This link does not give access to the project.' });
+    const b = await body(req);
+    if (parts[3] === 'stop') {
+      chats.get(String(b.chat ?? ''))?.abort?.abort();
+      return json(res, 200, { ok: true });
+    }
+    if (!agentModel) return json(res, 503, { error: 'The AI agent is not configured on this server: set ANTHROPIC_API_KEY (or sign in with `ant auth login`) and restart it.' });
+    const prompt = String(b.prompt ?? '').trim();
+    if (!prompt) return json(res, 400, { error: 'Empty message' });
+    const mode: AgentMode = b.mode === 'ask' || role !== 'edit' ? 'ask' : 'agent';
+    const chatId = typeof b.chat === 'string' && chats.has(b.chat) && chats.get(b.chat)!.project === id ? b.chat : `chat-${Math.random().toString(36).slice(2, 10)}`;
+    let chat = chats.get(chatId);
+    if (!chat) {
+      const who = String((b.user as { name?: string } | undefined)?.name ?? '').slice(0, 30);
+      const live = await openLive({ ws: `ws://127.0.0.1:${boundPort}/ws`, id, token: tok }, { id: `agent-${chatId}`, name: who ? `AI agent (for ${who})` : 'AI agent', color: '#b48cff' });
+      const session = new AgentSession({
+        model: agentModel,
+        runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
+      });
+      chat = { id: chatId, project: id, session, live, abort: null, lastUsed: Date.now() };
+      chats.set(chatId, chat);
+    }
+    if (chat.session.running) return json(res, 409, { error: 'The agent is still working on the previous message.' });
+    chat.session.mode = mode;
+    chat.lastUsed = Date.now();
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode }) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+    send({ type: 'chat', chat: chatId, mode });
+    const abort = new AbortController();
+    chat.abort = abort;
+    req.on('close', () => !res.writableEnded && abort.abort());
+    log(`agent (${mode}) on ${id}: ${prompt.slice(0, 80)}`);
+    try {
+      await chat.session.send(prompt, send, abort.signal);
+    } finally {
+      chat.abort = null;
+      chat.lastUsed = Date.now();
+      res.end();
+    }
+  };
 
   const libraryApi = async (req: IncomingMessage, res: ServerResponse, url: URL) => {
     const what = url.pathname.split('/')[3];
@@ -199,6 +275,7 @@ export async function startServer(opts: ServerOptions) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
       if (url.pathname.startsWith('/api/library/')) return await libraryApi(req, res, url);
+      if (url.pathname.startsWith('/api/agent/')) return await agentApi(req, res, url);
       if (url.pathname.startsWith('/api/')) return await api(req, res, url);
       if (url.pathname === '/health') return json(res, 200, { ok: true });
       return await serveStatic(res, url.pathname);
@@ -271,11 +348,14 @@ export async function startServer(opts: ServerOptions) {
   await new Promise<void>((r) => http.listen(opts.port, opts.host ?? '127.0.0.1', r));
   const addr = http.address();
   const port = typeof addr === 'object' && addr ? addr.port : opts.port;
+  boundPort = port;
   return {
     port,
     store,
     close: () =>
       new Promise<void>((r) => {
+        clearInterval(sweep);
+        for (const c of chats.values()) c.live.client.close();
         for (const c of wss.clients) c.terminate();
         wss.close();
         http.close(() => r());
