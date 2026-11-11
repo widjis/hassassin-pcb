@@ -160,6 +160,15 @@ only when all of its criteria pass.
     toolbar and a `set_schematic_grid` tool change them; placing, dragging, rotating, pasting,
     `add_part`, `move_symbol`, `duplicate` and `tidy_wires` all follow them; `project_status` reports
     them.
+  - Progress (not yet complete): delivered in `56d41a7`, `a2d1e4c`, `3e16644`, `2463e76`, `c968dd1`.
+    Agent re-run (same prompt as v0.0.1, Claude Code, stopped after the schematic stage):
+    | | v0.0.1 | S8 re-run | Target |
+    |---|---|---|---|
+    | Sheet bounding-box area | 50 896 mm² (284 × 179) | 31 213 mm² (208 × 150), **−38.7 %** | ≥ 40 % less — **not met** |
+    | Short jogs | 30 | 1 (−96.7 %) | ≥ 80 % less — met |
+    | Overlapping texts | — | 0 | 0 — met |
+    | Wires through part bodies / ERC errors | 5 / 0 | 0 / 0 | — |
+    The agent used `tidy_wires` but not `place_relative` / `align`.
 - [ ] **S9. Sheet frame, title block, notes and group boxes.**
   - Each sheet can have a frame with a title block (title, revision, date, author, sheet number), filled
     from project data where possible.
