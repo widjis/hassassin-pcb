@@ -13,6 +13,10 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  copyItems,
+  pasteOps,
+  isClip,
+  type Clip,
   itemsInRect,
   symbolBounds,
   placePartOps,
@@ -107,6 +111,11 @@ export class SchematicView {
   private frame = 0;
   /** Space held: dragging pans. */
   private spaceDown = false;
+  /** Copied items (also kept in localStorage so another tab can paste them). */
+  private clip: Clip | null = null;
+  /** A paste in progress: follows the mouse until a click places it. */
+  private swallowClick = false;
+  private pasting: { key: string; positions: { uid: string; name: string; value: Vec2 }[]; base: Vec2 } | null = null;
   /** Called with the sheet-space cursor (for presence). */
   onCursor: ((p: Vec2) => void) | null = null;
   /** Called when the user clicks with comment mode on. */
@@ -344,6 +353,86 @@ export class SchematicView {
     else this.app.say('Select something to mirror.');
   }
 
+  // ---------- copy / paste ----------
+  copySelection(): void {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!doc || !e) return;
+    const clip = copyItems(doc, e, this.app.selection, SCH_GRID);
+    if (!clip) return this.app.say('Select symbols, wires or labels to copy.');
+    this.clip = clip;
+    try {
+      localStorage.setItem('hassassin.schematicClip', JSON.stringify(clip));
+    } catch {
+      // Storage may be unavailable (private mode); the copy still works in this tab.
+    }
+    this.app.say(`Copied ${clip.trees.length} item${clip.trees.length > 1 ? 's' : ''}.`);
+  }
+
+  paste(): void {
+    let clip = this.clip;
+    try {
+      const stored = JSON.parse(localStorage.getItem('hassassin.schematicClip') ?? 'null');
+      if (isClip(stored)) clip = stored;
+    } catch {
+      // Ignore unreadable storage; fall back to this tab's copy.
+    }
+    if (!clip) return this.app.say('Nothing copied yet: select items and press Cmd/Ctrl+C.');
+    this.startPaste(clip, 'Paste');
+  }
+
+  /** Copy and paste in one go, without touching the clipboard. */
+  duplicateSelection(): void {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!doc || !e) return;
+    const clip = copyItems(doc, e, this.app.selection, SCH_GRID);
+    if (!clip) return this.app.say('Select symbols, wires or labels to duplicate.');
+    this.startPaste(clip, 'Duplicate');
+  }
+
+  private startPaste(clip: Clip, label: string): void {
+    const doc = this.app.doc;
+    const s = this.sheet();
+    if (!doc || !s) return;
+    this.finishPaste();
+    const at = this.cursor;
+    const offset = this.snap({ x: at.x - clip.anchor.x, y: at.y - clip.anchor.y });
+    const res = pasteOps(doc, s.uid, clip, offset);
+    const key = newUid('paste');
+    if (!this.app.apply(label, res.ops, key)) return;
+    this.pasting = { key, positions: res.positions, base: { ...at } };
+    this.app.select(res.uids);
+    this.app.say(`${label}: move the mouse to place it, click to drop, Esc to cancel.`);
+  }
+
+  private followPaste(p: Vec2): void {
+    const ps = this.pasting;
+    if (!ps) return;
+    const d = this.snap({ x: p.x - ps.base.x, y: p.y - ps.base.y });
+    const ops: Op[] = ps.positions.map((r) => ({ op: 'setRule', uid: r.uid, name: r.name, decl: { name: r.name, value: { x: r.value.x + d.x, y: r.value.y + d.y } } }));
+    if (ops.length) this.app.apply('Paste', ops, ps.key);
+  }
+
+  /** Drop a paste in progress where it is (one undo step). */
+  finishPaste(): boolean {
+    if (!this.pasting) return false;
+    this.pasting = null;
+    this.app.history?.seal();
+    this.app.say('');
+    return true;
+  }
+
+  /** Esc while pasting: take the paste back. */
+  cancelPaste(): boolean {
+    if (!this.pasting) return false;
+    this.pasting = null;
+    this.app.history?.seal();
+    this.app.undo();
+    this.app.say('Paste cancelled.');
+    return true;
+  }
+
   deleteSelection(): void {
     const ops: Op[] = [];
     for (const uid of this.app.selection) {
@@ -396,6 +485,11 @@ export class SchematicView {
     c.addEventListener('pointerdown', (e) => {
       if (e.button === 2) return;
       if (e.button === 1) e.preventDefault(); // no auto-scroll on middle click
+      if (this.pasting && e.button === 0) {
+        this.finishPaste();
+        this.swallowClick = true;
+        return;
+      }
       c.setPointerCapture(e.pointerId);
       const { sx, sy } = local(e);
       const p = this.toWorld(sx, sy);
@@ -438,6 +532,7 @@ export class SchematicView {
       const p = this.toWorld(sx, sy);
       this.cursor = this.snap(p);
       this.onCursor?.(p);
+      if (this.pasting) this.followPaste(p);
       const d = this.drag;
       if (d) {
         const dx = e.clientX - d.x;
@@ -478,6 +573,10 @@ export class SchematicView {
       const d = this.drag;
       this.drag = null;
       c.style.cursor = this.spaceDown ? 'grab' : '';
+      if (this.swallowClick) {
+        this.swallowClick = false;
+        return;
+      }
       if (d?.kind === 'box' && d.moved && d.box) {
         this.finishBox(d.box, e.shiftKey);
         return this.requestRender();

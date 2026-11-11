@@ -65,7 +65,14 @@ only when all of its criteria pass.
   - Panning, which uses that drag today, moves to the middle mouse button, Space + drag, and trackpad
     two-finger scroll; the keyboard hints on screen are updated.
   - Shift adds to the selection; the selection can then be moved, rotated, mirrored or deleted as one step.
-- [ ] **S3. Copy, paste and duplicate.**
+- [x] **S3. Copy, paste and duplicate.** — done
+  - Delivered: Cmd/Ctrl+C / V / D on symbols (with power symbols), wires, labels, junctions and
+    no-connects. Pasted parts get the next free references (units of one part share the new one); the
+    paste follows the mouse, a click drops it as one undo step, Esc cancels. The copy is also kept in
+    browser storage, so another tab of the app can paste it. Agents: the `duplicate` tool copies parts
+    with their wires, power symbols and labels and refuses an offset where the copy would touch anything.
+  - Tests: `packages/tools/test/schematic-s3.test.ts`. Browser check: duplicate following the mouse,
+    drop, undo / redo, copy + paste + Esc.
   - Cmd/Ctrl+C, Cmd/Ctrl+V and Cmd/Ctrl+D work on symbols, wires, labels, power symbols and junctions.
   - Pasted parts get the next free references (R7 → R8 …); connections inside the copied group are kept;
     labels keep their names, so pasted global labels join the same nets.

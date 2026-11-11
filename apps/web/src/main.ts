@@ -492,6 +492,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return app.redo();
   }
+  if (mod && app.space === 'schematic') {
+    const k = e.key.toLowerCase();
+    if (k === 'c') return void (e.preventDefault(), sch.copySelection());
+    if (k === 'v') return void (e.preventDefault(), sch.paste());
+    if (k === 'd') return void (e.preventDefault(), sch.duplicateSelection());
+  }
   if (mod) return;
   if (e.key === 'c' || e.key === 'C') {
     app.commentMode = !app.commentMode;
@@ -504,6 +510,7 @@ window.addEventListener('keydown', (e) => {
   if (app.space === 'schematic') {
     switch (e.key) {
       case 'Escape':
+        if (sch.cancelPaste()) break;
         if (sch.tool === 'wire') sch.setTool('select');
         else app.select([]);
         break;

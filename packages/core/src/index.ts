@@ -25,3 +25,4 @@ export * from './autoplace.ts';
 export * from './stackup.ts';
 export * from './lengths.ts';
 export * from './schematicEdit.ts';
+export * from './clipboard.ts';

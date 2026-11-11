@@ -62,6 +62,8 @@ import {
   type PartKind,
   type RuleDecl,
   type Vec2,
+  copyItems,
+  pasteOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -158,6 +160,39 @@ export function summarize(p: Project, n: DocNode) {
 }
 
 /** "R1" (part), "R1.2" (pin/pad), a uid, or a selector like "net[netClass=power] > trace". */
+/** True when a pasted item (uids in `fresh`) lands on a pin, wire end or wire of the rest of the sheet. */
+function copyTouches(p: Project, sheetUid: string, fresh: Set<string>): boolean {
+  const pts = { old: [] as Vec2[], new: [] as Vec2[] };
+  const segs = { old: [] as [Vec2, Vec2][], new: [] as [Vec2, Vec2][] };
+  for (const c of p.doc.nodes.get(sheetUid)?.children ?? []) {
+    const n = p.doc.nodes.get(c);
+    if (!n) continue;
+    const side = fresh.has(n.uid) ? 'new' : 'old';
+    if (n.type === 'wire') {
+      const a = vec(p.engine.get(n.uid, 'start')?.value), b = vec(p.engine.get(n.uid, 'end')?.value);
+      if (a && b) (segs[side].push([a, b]), pts[side].push(a, b));
+    } else if (n.type === 'symbol') {
+      for (const k of n.children) {
+        const pn = p.doc.nodes.get(k);
+        const local = pn?.type === 'pin' ? vec(p.engine.get(pn.uid, 'position')?.value) : undefined;
+        if (local) pts[side].push(symToSheet(symbolFrame(p.engine, n.uid), local));
+      }
+    } else if (n.type === 'label' || n.type === 'junction') {
+      const at = vec(p.engine.get(n.uid, 'position')?.value);
+      if (at) pts[side].push(at);
+    }
+  }
+  const onSeg = (q: Vec2, [a, b]: [Vec2, Vec2]) =>
+    Math.min(a.x, b.x) - 1e-3 <= q.x && q.x <= Math.max(a.x, b.x) + 1e-3 && Math.min(a.y, b.y) - 1e-3 <= q.y && q.y <= Math.max(a.y, b.y) + 1e-3 &&
+    Math.abs((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)) < 1e-3;
+  return pts.new.some((q) => segs.old.some((sg) => onSeg(q, sg)) || pts.old.some((r) => Math.abs(r.x - q.x) < 1e-3 && Math.abs(r.y - q.y) < 1e-3)) || pts.old.some((q) => segs.new.some((sg) => onSeg(q, sg)));
+}
+
+/** Connectivity as sorted pin groups ("R1.1 C1.1"), nets with one pin left out. */
+function groupsOf(p: Project): string[] {
+  return extractNetlist(p.doc, p.engine).nets.map((n) => n.pins.map((x) => `${x.ref}.${x.pin}`).sort().join(' ')).filter((g0) => g0.includes(' ')).sort();
+}
+
 export function resolveTargets(p: Project, target: string): DocNode[] {
   const t = target.trim();
   const byUid = p.doc.nodes.get(t) ?? (t.startsWith('#') ? p.doc.nodes.get(t.slice(1)) : undefined);
@@ -658,6 +693,68 @@ export const TOOLS: ToolDef[] = [
     mutates: true,
     input: { type: 'object', properties: {} },
     run: (p, _a, ctx) => syncPcb(p, ctx),
+  },
+  {
+    name: 'duplicate',
+    description: 'Copy schematic parts (by reference, e.g. "R1 C3 U2") with the wires between them and the power symbols / labels on those wires, and place the copy dx, dy mm away. The copy gets the next free references; its internal connections are kept, it does not connect to anything else. Refused if the copy would land on existing pins or wires.',
+    mutates: true,
+    input: { type: 'object', properties: { refs: { type: 'string', description: 'References or uids, space / comma separated' }, dx: { type: 'number' }, dy: { type: 'number' } }, required: ['refs'] },
+    run: (p, a) => {
+      const wanted = str(a.refs, 'refs').split(/[,\s]+/).filter(Boolean);
+      const syms = [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && (wanted.includes(String(n.props.ref ?? n.name)) || wanted.includes(n.uid)));
+      if (!syms.length) throw new ToolError(`No schematic symbols ${wanted.join(', ')}`);
+      const sheet = sheetOf(p.doc, syms[0]!);
+      if (!sheet) throw new ToolError('Symbol is not on a sheet');
+      const items = new Set(syms.map((n) => n.uid));
+      // Wires reachable from the parts' pins, and power symbols / labels at their ends.
+      const pts: Vec2[] = [];
+      for (const s0 of syms) for (const c of s0.children) {
+        const pn = p.doc.nodes.get(c);
+        const local = pn?.type === 'pin' ? vec(p.engine.get(pn.uid, 'position')?.value) : undefined;
+        if (local) pts.push(symToSheet(symbolFrame(p.engine, s0.uid), local));
+      }
+      const near = (q: Vec2) => pts.some((r) => Math.abs(r.x - q.x) < 1e-3 && Math.abs(r.y - q.y) < 1e-3);
+      const sheetKids = sheet.children.map((c) => p.doc.nodes.get(c)!).filter(Boolean);
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const w of sheetKids) {
+          if (w.type !== 'wire' || items.has(w.uid)) continue;
+          const s1 = vec(p.engine.get(w.uid, 'start')?.value), e1 = vec(p.engine.get(w.uid, 'end')?.value);
+          if (s1 && e1 && (near(s1) || near(e1))) (items.add(w.uid), pts.push(s1, e1), (grew = true));
+        }
+      }
+      for (const n of sheetKids) {
+        if (items.has(n.uid)) continue;
+        if (n.type === 'label' || n.type === 'junction' || n.type === 'noconnect') {
+          const at = vec(p.engine.get(n.uid, 'position')?.value);
+          if (at && near(at)) items.add(n.uid);
+        } else if (n.type === 'symbol' && n.props.power) {
+          const lbl = n.children.map((c) => p.doc.nodes.get(c)).find((k) => k?.type === 'label');
+          const at = lbl ? vec(p.engine.get(lbl.uid, 'position')?.value) : undefined;
+          if (at && near(at)) items.add(n.uid);
+        }
+      }
+      const clip = copyItems(p.doc, p.engine, items);
+      if (!clip) throw new ToolError('Nothing to copy');
+      const g = 1.27;
+      const dx = Math.round((optNum(a.dx, 'dx') ?? 25.4) / g) * g;
+      const dy = Math.round((optNum(a.dy, 'dy') ?? 0) / g) * g;
+      const before = groupsOf(p);
+      const res = pasteOps(p.doc, sheet.uid, clip, { x: dx, y: dy });
+      apply(p, `Duplicate ${wanted.join(' ')}`, res.ops);
+      // The originals keep exactly their connections, and the copy only meets them through
+      // named nets (power symbols, labels), never by touching pins or wires.
+      const fresh = new Set(res.refs.values());
+      const isNew = (pin: string) => fresh.has(pin.split('.')[0]!);
+      const nets = extractNetlist(p.doc, p.engine).nets.map((n) => ({ named: n.named, pins: n.pins.map((x) => `${x.ref}.${x.pin}`).sort() }));
+      const touches = nets.some((n) => n.named === 'auto' && n.pins.some(isNew) && !n.pins.every(isNew)) || copyTouches(p, sheet.uid, new Set(res.ops.flatMap((o) => (o.op === 'add' ? o.tree.nodes.map((x) => x.uid) : []))));
+      const oldOnly = nets.map((n) => n.pins.filter((x) => !isNew(x)).join(' ')).filter((g0) => g0.includes(' ')).sort();
+      if (touches || JSON.stringify(oldOnly) !== JSON.stringify(before)) {
+        p.history.undo();
+        throw new ToolError(`The copy would land on existing pins or wires at dx ${dx.toFixed(2)}, dy ${dy.toFixed(2)} mm. Choose an offset with free space.`);
+      }
+      return { refs: Object.fromEntries(res.refs), items: res.uids.length, offset: { dx: +dx.toFixed(3), dy: +dy.toFixed(3) } };
+    },
   },
   {
     name: 'move_part',
