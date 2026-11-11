@@ -9,11 +9,33 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **0** ✅ | Fondasi & viewer | Buka `.kicad_pcb` di browser; pan/zoom WebGL2; layer on/off; object tree; inspector *Computed vs Specified* dari mesin rules |
 | **1** ✅ | Editor PCB dasar | Pilih/geser/putar komponen, routing manual, via, ratsnest, undo/redo, simpan/buka format kita sendiri |
 | **2** ✅ | Benar secara elektrik | DRC inkremental (clearance, unrouted, overlap), copper pour, panel Review, ekspor Gerber/drill/BOM/pick-and-place |
-| **3** | Schematic | Editor schematic, netlist, ERC, sinkron schematic ↔ PCB (satu sumber data) |
+| **3** | Schematic + alur proyek | Editor schematic, netlist, ERC, sinkron schematic → PCB (satu sumber data), dokumen spesifikasi proyek, tahap & gerbang pemeriksaan |
 | **4** | Kolaborasi | Edit multi-user real-time (CRDT), kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View |
 | **5** | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
-| **6** | AI agent | Chat + mode agent dengan task list, semua aksi lewat command layer, DRC-fix, placement & routing berbantuan AI |
+| **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, semua aksi lewat command layer, DRC/ERC-fix, placement & routing berbantuan AI; MCP server + CLI untuk Claude Code / Codex |
 | **7** | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
+
+## Lapisan alur proyek (lintas fase)
+
+Mesin dibangun dari bawah (Fase 0–2), tetapi pengguna bekerja dari atas: kebutuhan →
+schematic → komponen → layout → review → fabrikasi. Lapisan ini menyatukan keduanya.
+Tampilan dirancang sendiri (bukan meniru kartu onboarding produk lain).
+
+| Tahap | Isi | Gerbang sebelum lanjut | Fase |
+|---|---|---|---|
+| 1. Kebutuhan | Dokumen spesifikasi: tujuan, suplai, arus, antarmuka, ukuran, lingkungan, jumlah produksi | Kolom wajib terisi | 3 (dokumen), 6 (AI bertanya & mengisi) |
+| 2. Schematic | Blok rangkaian, netlist | ERC bersih | 3 |
+| 3. Komponen | Part dengan MPN, footprint, stok/harga | Semua part punya footprint & MPN | 5 |
+| 4. Layout | Placement, routing, pour | DRC bersih, ratsnest 0 | 1–2 |
+| 5. Review | Komentar kolaborator + review AI (EMC, DFM) | Tidak ada komentar terbuka berstatus blocker | 4, 6 |
+| 6. Fabrikasi | Gerber, drill, BOM, pick-and-place | Semua gerbang di atas hijau (atau di-*override* dengan alasan) | 2 |
+
+Prinsip:
+- **Spesifikasi adalah data**, bukan sekadar teks: nilai seperti arus per net bisa menjadi
+  rule (mis. lebar trace minimum) dan konteks untuk AI.
+- **Ketertelusuran**: komponen dan rule bisa mencatat kebutuhan yang mereka penuhi.
+- **Gerbang tidak mengunci paksa**: pengguna boleh lanjut dengan alasan yang dicatat.
+- AI (Fase 6) bekerja per tahap dengan task list yang terlihat, lewat command layer yang sama.
 
 ## Fase 0 — rincian
 
