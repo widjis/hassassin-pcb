@@ -91,7 +91,15 @@ only when all of its criteria pass.
   - A junction dot is added automatically wherever three or more wire ends / pins meet, and removed when
     it is no longer needed; crossing wires without a junction stay unconnected (and the netlist agrees).
   - Tools (`connect_pins`, `add_power`) create junctions the same way.
-- [ ] **S5. Edit values and properties in place.**
+- [x] **S5. Edit values and properties in place.** — done
+  - Delivered: double-clicking a reference or value on the sheet opens a text box over it (Enter or
+    clicking away saves, Esc cancels). The inspector shows a Part form for schematic symbols: reference,
+    value, MPN, manufacturer, datasheet, footprint and DNP. A new reference is checked (valid, not used)
+    and renames every unit and the board component, so Update PCB keeps matching; value / MPN /
+    manufacturer / datasheet / DNP go to the symbols and the board component; a footprint goes to the
+    symbols and reaches the board on Update PCB. Agents: `set_part_info` gained `rename`.
+  - Tests: `packages/tools/test/schematic-s5.test.ts`. Browser check: in-place value edit, inspector
+    rename, duplicate reference refused, undo.
   - Double-clicking a reference or value on the sheet edits it in place; Enter saves, Esc cancels.
   - The inspector shows and edits the part's properties (value, MPN, manufacturer, footprint, datasheet,
     DNP) for schematic symbols; changes reach the board on Update PCB as today.

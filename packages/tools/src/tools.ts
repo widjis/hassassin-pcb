@@ -65,6 +65,7 @@ import {
   copyItems,
   pasteOps,
   withJunctionsOps,
+  renameRefOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -1199,9 +1200,9 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'set_part_info',
-    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet, lcsc, value, dnp (do not populate).',
+    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet, lcsc, value, dnp (do not populate). rename gives the part a new reference (schematic units and board component together).',
     mutates: true,
-    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, lcsc: { type: 'string' }, value: { type: 'string' }, dnp: { type: 'boolean' } }, required: ['ref'] },
+    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, lcsc: { type: 'string' }, value: { type: 'string' }, dnp: { type: 'boolean' }, rename: { type: 'string', description: 'New reference, e.g. R12' } }, required: ['ref'] },
     run: (p, a) => {
       const ref = str(a.ref, 'ref');
       const map: Record<string, string> = { mpn: 'MPN', manufacturer: 'Manufacturer', datasheet: 'Datasheet', lcsc: 'LCSC', value: 'Value' };
@@ -1210,8 +1211,15 @@ export const TOOLS: ToolDef[] = [
       const ops = setPartPropsOps(p.doc, ref, props);
       if (typeof a.dnp === 'boolean') for (const n of p.doc.nodes.values()) if ((n.type === 'symbol' && String(n.props.ref ?? n.name) === ref) || (n.type === 'element' && n.name === ref)) ops.push({ op: 'setProp', uid: n.uid, key: 'dnp', value: a.dnp || null });
       if (!resolveTargets(p, ref).length) throw new ToolError(`No part ${ref}`);
+      if (typeof a.rename === 'string' && a.rename.trim() && a.rename.trim() !== ref) {
+        try {
+          ops.push(...renameRefOps(p.doc, ref, a.rename));
+        } catch (e) {
+          throw new ToolError((e as Error).message);
+        }
+      }
       apply(p, `Part info ${ref}`, ops);
-      return { ref, set: props, ...(typeof a.dnp === 'boolean' ? { dnp: a.dnp } : {}) };
+      return { ref: typeof a.rename === 'string' && a.rename.trim() ? a.rename.trim() : ref, set: props, ...(typeof a.dnp === 'boolean' ? { dnp: a.dnp } : {}) };
     },
   },
   {

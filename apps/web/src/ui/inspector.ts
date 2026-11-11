@@ -9,6 +9,7 @@ import {
   type Ruleset,
 } from '@hassassin/core';
 import type { App } from '../app.ts';
+import { renameRefOps, setPartPropsOps, type Op } from '@hassassin/core';
 import { clear, h } from './dom.ts';
 
 const ORDER = [...RULE_DEFS.keys()];
@@ -72,12 +73,63 @@ export function mountInspector(app: App, root: HTMLElement): void {
     return h('div', { class: 'src' }, ...tags);
   };
 
+  /** Editable part properties of a schematic symbol (all units and the board component follow). */
+  const partForm = (n: DocNode) => {
+    const ref = String(n.props.ref ?? n.name);
+    const form = h('div', { class: 'part-form' });
+    const commit = (label: string, make: () => Op[]) => {
+      try {
+        const ops = make();
+        if (ops.length) app.apply(label, ops);
+        render();
+      } catch (e) {
+        app.say((e as Error).message);
+        render();
+      }
+    };
+    const field = (title: string, key: string, onSave: (v: string) => void) => {
+      const input = h('input', { type: 'text', value: String(n.props[key] ?? ''), 'aria-label': title }) as HTMLInputElement;
+      const save = () => {
+        const v = input.value.trim();
+        if (v !== String(n.props[key] ?? '')) onSave(v);
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') input.blur();
+        else if (e.key === 'Escape') ((input.value = String(n.props[key] ?? '')), input.blur());
+      });
+      input.addEventListener('change', save);
+      form.append(h('label', { class: 'k' }, title), input);
+    };
+    const doc = app.doc!;
+    field('Reference', 'ref', (v) => commit(`Rename ${ref} to ${v}`, () => renameRefOps(doc, ref, v)));
+    for (const [title, key] of [['Value', 'Value'], ['MPN', 'MPN'], ['Manufacturer', 'Manufacturer'], ['Datasheet', 'Datasheet']] as const)
+      field(title, key, (v) => commit(`${title} of ${ref}`, () => setPartPropsOps(doc, ref, { [key]: v || null })));
+    // The footprint lives on the symbols; Update PCB swaps it on the board.
+    field('Footprint', 'Footprint', (v) =>
+      commit(`Footprint of ${ref}`, () => [...doc.nodes.values()].filter((x) => x.type === 'symbol' && String(x.props.ref ?? x.name) === ref).map((x): Op => ({ op: 'setProp', uid: x.uid, key: 'Footprint', value: v || null }))),
+    );
+    const dnp = h('input', { type: 'checkbox', 'aria-label': 'Do not populate' }) as HTMLInputElement;
+    dnp.checked = !!n.props.dnp;
+    dnp.addEventListener('change', () =>
+      commit(`DNP ${ref}`, () =>
+        [...doc.nodes.values()]
+          .filter((x) => (x.type === 'symbol' && String(x.props.ref ?? x.name) === ref) || (x.type === 'element' && x.name === ref))
+          .map((x): Op => ({ op: 'setProp', uid: x.uid, key: 'dnp', value: dnp.checked || null })),
+      ),
+    );
+    form.append(h('label', { class: 'k' }, 'DNP'), h('label', {}, dnp, ' do not populate'));
+    return h('div', {}, h('strong', {}, 'Part'), form, h('div', { class: 'dim', style: 'font-size:11.5px;margin:-4px 0 8px' }, 'Changes apply to every unit and to the board component; a new footprint reaches the board on Update PCB.'));
+  };
+
   const renderNode = (n: DocNode) => {
     const engine = app.engine!;
     const box = h('div', { class: 'insp' });
     box.append(h('div', {}, h('div', { class: 'kind' }, TYPE_NAME[n.type] ?? n.type), h('h2', {}, n.name || TYPE_NAME[n.type] || n.type)));
 
-    const props = Object.entries(n.props).filter(([, v]) => v !== '');
+    const isPart = n.type === 'symbol' && !n.props.power;
+    if (isPart) box.append(partForm(n));
+    const EDITED = new Set(['ref', 'Value', 'MPN', 'Manufacturer', 'Footprint', 'Datasheet', 'dnp']);
+    const props = Object.entries(n.props).filter(([k, v]) => v !== '' && !(isPart && EDITED.has(k)));
     const kv = h('div', { class: 'kv' });
     if (n.type === 'net' && app.doc) {
       let pads = 0;

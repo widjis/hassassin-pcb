@@ -481,3 +481,29 @@ export function applyOffersOps(doc: Doc, offers: Map<string, Offer[]>): { ops: O
   }
   return { ops, matched, unmatched: [...offers.keys()].filter((m) => !matched.includes(m)) };
 }
+
+/**
+ * Ops that rename a part: every symbol unit with reference `from` and the PCB component of
+ * the same name get `to`, so Update PCB still matches them. Throws when `to` is invalid or
+ * already used by another part.
+ */
+export function renameRefOps(doc: Doc, from: string, to: string): Op[] {
+  const next = to.trim();
+  if (!/^#?[A-Za-z_][A-Za-z0-9_]*$/.test(next)) throw new Error(`"${to}" is not a valid reference (letters, then letters / digits, e.g. R12).`);
+  if (next === from) return [];
+  for (const n of doc.nodes.values()) {
+    const r = n.type === 'symbol' ? String(n.props.ref ?? n.name) : n.type === 'element' ? n.name : null;
+    if (r === next) throw new Error(`${next} is already used by another part.`);
+  }
+  const ops: Op[] = [];
+  for (const n of doc.nodes.values()) {
+    if (n.type === 'symbol' && String(n.props.ref ?? n.name) === from) {
+      ops.push({ op: 'setProp', uid: n.uid, key: 'ref', value: next });
+      if (n.name === from) ops.push({ op: 'setName', uid: n.uid, name: next });
+    } else if (n.type === 'element' && n.name === from) {
+      ops.push({ op: 'setName', uid: n.uid, name: next });
+      if (n.props.ref !== undefined) ops.push({ op: 'setProp', uid: n.uid, key: 'ref', value: next });
+    }
+  }
+  return ops;
+}

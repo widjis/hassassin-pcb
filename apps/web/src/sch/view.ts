@@ -13,6 +13,8 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  renameRefOps,
+  setPartPropsOps,
   withJunctionsOps,
   junctionOps,
   dragWireOps,
@@ -375,6 +377,75 @@ export class SchematicView {
     return doc && e ? withJunctionsOps(doc, e, ops) : ops;
   }
 
+  // ---------- in-place editing (S5) ----------
+  /** Screen rectangles of a symbol's reference and value texts (as drawn). */
+  private fieldRects(n: DocNode): { field: 'ref' | 'value'; text: string; at: Vec2; size: number; minX: number; minY: number; maxX: number; maxY: number }[] {
+    if (n.type !== 'symbol' || n.props.power) return [];
+    const b = this.symbolBox(n);
+    const out = [];
+    const ref = String(n.props.ref ?? n.name);
+    const val = String(n.props.Value ?? '');
+    for (const [field, text, at, size] of [
+      ['ref', ref, { x: b.maxX + 0.8, y: b.minY + 0.8 }, 1.3],
+      ['value', val || ' ', { x: b.maxX + 0.8, y: b.minY + 2.6 }, 1.1],
+    ] as const) {
+      const w = Math.max(2, text.length * size * 0.6);
+      out.push({ field, text, at, size, minX: at.x - 0.3, minY: at.y - size * 0.6, maxX: at.x + w + 0.3, maxY: at.y + size * 0.6 });
+    }
+    return out;
+  }
+
+  /** The reference / value text under a sheet point, if any. */
+  private fieldAt(p: Vec2): { sym: DocNode; field: 'ref' | 'value' } | null {
+    for (const n of this.items()) {
+      for (const r of this.fieldRects(n)) if (p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY) return { sym: n, field: r.field };
+    }
+    return null;
+  }
+
+  /** Edit a symbol's reference or value in a text box over the sheet: Enter saves, Esc cancels. */
+  editField(sym: DocNode, field: 'ref' | 'value'): void {
+    const r = this.fieldRects(sym).find((x) => x.field === field);
+    if (!r) return;
+    const ref = String(sym.props.ref ?? sym.name);
+    const box = this.canvas.getBoundingClientRect();
+    const q = this.toScreen({ x: r.minX, y: r.minY });
+    const px = Math.max(12, Math.min(28, r.size * this.view.scale));
+    const input = document.createElement('input');
+    input.className = 'sch-field-edit';
+    input.value = field === 'ref' ? ref : String(sym.props.Value ?? '');
+    input.setAttribute('aria-label', field === 'ref' ? 'Reference' : 'Value');
+    Object.assign(input.style, { position: 'fixed', left: `${box.left + q.x - 4}px`, top: `${box.top + q.y - 4}px`, font: `${px}px ui-monospace, Menlo, monospace`, minWidth: '80px', width: `${Math.max(80, (input.value.length + 4) * px * 0.62)}px`, zIndex: '50' });
+    document.body.append(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const close = (save: boolean) => {
+      if (done) return;
+      done = true;
+      input.remove();
+      if (!save) return this.requestRender();
+      const doc = this.app.doc;
+      const v = input.value.trim();
+      if (!doc) return;
+      try {
+        if (field === 'ref') {
+          const ops = renameRefOps(doc, ref, v);
+          if (ops.length) this.app.apply(`Rename ${ref} to ${v}`, ops);
+        } else if (v !== String(sym.props.Value ?? '')) this.app.apply(`Value of ${ref}`, setPartPropsOps(doc, ref, { Value: v || null }));
+      } catch (e) {
+        this.app.say((e as Error).message);
+      }
+      this.requestRender();
+    };
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') close(true);
+      else if (e.key === 'Escape') close(false);
+    });
+    input.addEventListener('blur', () => close(true));
+  }
+
   // ---------- copy / paste ----------
   copySelection(): void {
     const doc = this.app.doc;
@@ -650,6 +721,8 @@ export class SchematicView {
     c.addEventListener('dblclick', (e) => {
       if (this.tool === 'wire') return this.cancelWire();
       const { sx, sy } = local(e);
+      const field = this.fieldAt(this.toWorld(sx, sy));
+      if (field) return this.editField(field.sym, field.field);
       const hit = this.pick(this.toWorld(sx, sy));
       if (hit?.type === 'block') {
         const child = hit.children.map((u) => this.app.node(u)).find((n) => n?.type === 'sheet');
