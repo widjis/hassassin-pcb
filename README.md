@@ -8,6 +8,10 @@ Part of the [Hassassin Mechatronics](https://github.com/widjis/hassassin-mechatr
 
 *An RGB sleep lamp designed end to end by the built-in agent from a requirements-only prompt: 52 parts, ERC 0, DRC 0, everything routed inside a curved outline. The agent replies in the language of the prompt (Indonesian here).*
 
+**Demo video (65 s):** the agent drawing the schematic block by block, as a collaborator watching it live sees it.
+
+[![The agent building the schematic: task list, folded tool steps, and the sheet filling in](docs/media/agent-schematic-demo.jpg)](docs/media/agent-schematic-demo.mp4)
+
 | Schematic made by the agent | 3D view and the Board panel |
 |---|---|
 | ![Schematic: 20 V → 5 V buck, 3.3 V LDO and the ESP-12F module, with power symbols and wires](docs/media/schematic.png) | ![3D view of the routed board next to the stackup and impedance panel](docs/media/3d.png) |
