@@ -173,4 +173,26 @@ describe('S8: pin grid and jog removal', () => {
     const mid = (cs[0]!.minX + cs[2]!.maxX) / 2;
     expect(Math.abs(mid - (u.minX + u.maxX) / 2)).toBeLessThan(2.6);
   });
+
+  it('compact_blocks packs scattered blocks closer; connections and blocks stay intact', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    // Four little blocks spread far apart, each a resistor + LED wired together, joined by GND / +5V.
+    for (const [i, [x, y]] of ([[0, 0], [150, 0], [0, 120], [150, 120]] as const).entries()) {
+      await runTool(p, 'add_part', { kind: 'resistor', x, y });
+      await runTool(p, 'add_part', { kind: 'led', x: x + 12.7, y: y + 5.08 });
+      await runTool(p, 'connect_pins', { from: `R${i + 1}.2`, to: `D${i + 1}.2` });
+      await runTool(p, 'add_power', { pin: `R${i + 1}.1`, net: '+5V' });
+      await runTool(p, 'add_power', { pin: `D${i + 1}.1`, net: 'GND' });
+    }
+    const s = sheet(p).uid;
+    const before = groups(p);
+    const blocks0 = core.sheetBlocks(p.doc, p.engine, s).length;
+    const out = (await runTool(p, 'compact_blocks', {})) as { sheets: { areaBefore: number; areaAfter: number; moved: number }[] };
+    expect(out.sheets[0]!.moved).toBeGreaterThan(0);
+    expect(out.sheets[0]!.areaAfter).toBeLessThan(out.sheets[0]!.areaBefore * 0.5);
+    expect(groups(p)).toEqual(before);
+    expect(core.sheetBlocks(p.doc, p.engine, s).length).toBe(blocks0);
+    expect(core.runErc(p.doc, p.engine).violations.filter((v) => v.kind === 'danglingPower' || v.kind === 'danglingWire')).toEqual([]);
+  });
 });

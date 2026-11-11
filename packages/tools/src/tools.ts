@@ -81,6 +81,7 @@ import {
   placeRelativeOps,
   type AlignMode,
   type Side,
+  compactBlocksOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -758,6 +759,24 @@ export const TOOLS: ToolDef[] = [
       const ops = placeRelativeOps(p.doc, p.engine, anchor, uids, str(a.side, 'side') as Side, { ...(gap !== undefined ? { gap } : {}), ...(spacing !== undefined ? { spacing } : {}) });
       applyKeepingConnections(p, `Place next to ${a.anchor}`, ops);
       return { placed: uids.length, anchor: a.anchor, side: a.side, connections: 'unchanged' };
+    },
+  },
+  {
+    name: 'compact_blocks',
+    description: 'Make the schematic compact: groups of parts joined by wires (with their power symbols and labels, and anything placed right next to them) are moved as a whole and packed into rows in reading order, gap mm apart (default 7.62). Connections never change. Run it when every block is wired and ERC is clean, then run tidy_wires.',
+    mutates: true,
+    input: { type: 'object', properties: { sheet: { type: 'string', description: 'Sheet name or path (default: every sheet)' }, gap: { type: 'number' } } },
+    run: (p, a) => {
+      const sheets = [...p.doc.nodes.values()].filter((n) => n.type === 'sheet' && (typeof a.sheet !== 'string' || !a.sheet.trim() || n.name === a.sheet.trim() || sheetPath(p.doc, n) === a.sheet.trim()));
+      if (!sheets.length) throw new ToolError(`No sheet ${String(a.sheet)}`);
+      const gap = optNum(a.gap, 'gap');
+      const report: { sheet: string; groups: number; moved: number; areaBefore: number; areaAfter: number }[] = [];
+      for (const sh of sheets) {
+        const r = compactBlocksOps(p.doc, p.engine, sh.uid, { ...(gap !== undefined ? { gap } : {}) });
+        apply(p, 'Compact blocks', r.ops);
+        report.push({ sheet: sheetPath(p.doc, sh), groups: r.blocks, moved: r.moved, areaBefore: Math.round(r.areaBefore), areaAfter: Math.round(r.areaAfter) });
+      }
+      return { sheets: report, connections: 'unchanged' };
     },
   },
   {

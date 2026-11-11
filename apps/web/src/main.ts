@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, compactBlocksOps, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -312,6 +312,19 @@ gridSelect.addEventListener('change', () => {
 });
 for (const ev of ['doc', 'change'] as const) app.on(ev, showGrid);
 showGrid();
+
+// Compact (S8): pack the blocks of this sheet into rows, as one undo step.
+$('compactBtn').addEventListener('click', () => {
+  const doc = app.doc;
+  const engine = app.engine;
+  const sheet = sch.sheet();
+  if (!doc || !engine || !sheet) return;
+  const r = compactBlocksOps(doc, engine, sheet.uid);
+  if (!r.ops.length) return app.say('This sheet is already compact.');
+  app.apply('Compact blocks', withJunctionsOps(doc, engine, r.ops));
+  sch.fit();
+  app.say(`Moved ${r.moved} of ${r.blocks} blocks: area ${Math.round(r.areaBefore)} → ${Math.round(r.areaAfter)} mm². Connections are unchanged.`);
+});
 
 // Tidy wires (S8): straighten bends on this sheet, as one undo step.
 $('tidyBtn').addEventListener('click', () => {

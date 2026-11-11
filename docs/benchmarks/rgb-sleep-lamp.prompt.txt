@@ -1,0 +1,32 @@
+Saya mau mendesain PCB untuk lampu tidur RGB pintar. Tolong kerjakan dari awal sampai siap fabrikasi.
+
+Fungsi:
+- Lampu meja dengan LED RGB addressable (strip/ring WS2812B, sekitar 40 LED, arus maksimum sekitar 2 A di 5 V), dikendalikan ESP8266 dalam bentuk modul ESP-12F lewat WiFi.
+- Mode AUTO: menyala saat ruangan gelap dan ada orang, mati beberapa menit setelah tidak ada orang.
+
+Daya:
+- Masuk dari modul USB-C PD trigger yang dipasang terpisah dan memberi 20 V, disambung ke PCB lewat dua pad kabel.
+- Perlu sekring di input, step-down 20 V ke 5 V minimal 3 A untuk LED dan radar, lalu regulator 3,3 V untuk ESP dan sensor.
+
+LED:
+- Data LED dari ESP (3,3 V) harus dinaikkan ke level 5 V dan diberi resistor seri.
+- Sediakan pad kabel 3 pin untuk LED: 5V, DIN, GND.
+
+Sensor (semuanya modul siap pakai, bukan IC langsung di PCB):
+- Suhu dan kelembapan SHT31 (I2C).
+- Cahaya BH1750 (I2C).
+- Radar kehadiran LD2410C: catu 5 V, output digitalnya ke satu GPIO ESP, TX/RX radar cukup ke test point.
+- Pull-up I2C ada di PCB utama.
+
+ESP dan antarmuka:
+- Tombol RESET dan FLASH, resistor boot strapping yang benar.
+- Header UART 3,3 V untuk programming.
+- LED indikator power.
+- Header GPIO cadangan.
+- Satu tombol di casing ke GPIO (aktif low, dengan pull-up).
+
+Mekanik dan aturan:
+- PCB 2 layer, sekitar 72 × 79 mm, 3 lubang M3.
+- Lebar track dan clearance minimal 0,3 mm.
+
+Kerjakan bertahap: isi requirements, buat schematic per blok, pilih part dan footprint nyata dari library, update PCB, tata letak, routing, pour GND, lalu jalankan ERC dan DRC sampai bersih. Jangan mengarang nomor part (MPN). Kalau ada yang tidak yakin, tandai saja dan lanjutkan.
