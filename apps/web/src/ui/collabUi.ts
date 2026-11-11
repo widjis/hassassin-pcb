@@ -70,7 +70,7 @@ export function openShareDialog(app: App, collab: Collab): void {
                 await collab.share();
                 render();
               } catch (e) {
-                box.append(h('div', { class: 'err-text' }, `Could not share: ${(e as Error).message}. Is the collaboration server running (pnpm server)?`));
+                box.append(h('div', { class: 'err-text' }, `Could not share: ${(e as Error).message}. Is the collaboration server running (pnpm run server)?`));
               }
             },
           },

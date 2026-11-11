@@ -96,6 +96,6 @@ CLI juga menerima link yang sama: `pnpm hassassin run-drc "http://…?p=…&t=�
 Selain lewat Claude Code/Codex (MCP), Hassassin punya agent sendiri yang memakai tool yang sama:
 
 - **Di web**: tab *Agent* pada proyek yang sudah di-*Share*. Server harus punya kredensial Anthropic:
-  `ANTHROPIC_API_KEY=... pnpm server` (atau `ant auth login` di mesin server).
+  `ANTHROPIC_API_KEY=... pnpm run server` (atau `ant auth login` di mesin server).
 - **Di CLI**: `hassassin agent board.hpcb "tambahkan LED indikator di 3V3" -o board.hpcb`, atau dengan link
   berbagi supaya editnya live. `--mode ask` untuk jawaban tanpa mengubah proyek.

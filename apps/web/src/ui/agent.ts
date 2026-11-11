@@ -91,7 +91,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
       return;
     }
     if (available === false) {
-      root.append(h('div', { class: 'empty' }, 'The agent is not configured on the server. Set ANTHROPIC_API_KEY (or run `ant auth login`) where the server runs, then restart it (pnpm server).'));
+      root.append(h('div', { class: 'empty' }, 'The agent is not configured on the server. Set ANTHROPIC_API_KEY (or run `ant auth login`) where the server runs, then restart it (pnpm run server).'));
       return;
     }
     root.append(h('div', { style: 'display:flex;gap:6px;align-items:center;margin-bottom:6px' }, modeSel, h('button', { onclick: () => ((chat = null), (lines.length = 0), (tasks = []), (usage = { input: 0, output: 0, cacheRead: 0 }), draw()) }, 'New chat')), taskBox, log, suggest, input, h('div', { style: 'display:flex;gap:6px;margin-top:6px' }, sendBtn, stopBtn), footer);
