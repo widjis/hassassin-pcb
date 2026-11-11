@@ -51,7 +51,7 @@ only when all of its criteria pass.
     where possible.
   - The netlist before and after the move is identical (checked by an automated test).
   - One undo step restores the symbol and the wires together; collaborators see the same result live.
-- [x] **S2. Box selection.** — done
+- [x] **S2. Box selection.** — `b319db7`
   - Delivered: left→right box selects items fully inside, right→left also items it touches (dashed green
     box); Shift adds. Pan: middle drag, Space + drag, two-finger trackpad scroll; mouse wheel / pinch zoom.
     A selection moves, rotates (R, around its centre), mirrors (X / Y) and deletes as one undo step;
