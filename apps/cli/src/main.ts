@@ -27,6 +27,7 @@ const POSITIONAL: Record<string, string[]> = {
   add_part: ['kind', 'x', 'y'],
   connect_pins: ['from', 'to'],
   add_label: ['pin', 'name'],
+  add_power: ['pin', 'net'],
   move_part: ['ref', 'x', 'y', 'rotation'],
   route: ['from', 'to'],
   export_fab: ['out'],

@@ -539,18 +539,31 @@ export const TOOLS: ToolDef[] = [
       // A flag points the same way as the rail it marks (down on ground nets, up on supplies).
       const down = isGroundNet(flag ? (extractNetlist(p.doc, p.engine).byPin.get(String(a.pin)) ?? '') : net);
       const g = 2.54;
-      const path: Vec2[] = [P.at];
-      let port: Vec2;
-      if (out.y !== 0) {
-        // Vertical pin: straight stub.
-        port = { x: P.at.x, y: P.at.y + out.y * g };
-      } else {
-        // Horizontal pin: step out, then down (ground) or up (supply).
-        const p1 = { x: P.at.x + out.x * g, y: P.at.y };
-        path.push(p1);
-        port = { x: p1.x, y: p1.y + (down ? g : -g) };
+      // Spots already taken by power symbols on this sheet: step further out instead of stacking.
+      const taken: Vec2[] = [];
+      for (const c of P.sheet.children) {
+        const n = p.doc.nodes.get(c);
+        if (n?.type === 'symbol' && n.props.power) {
+          const q = vec(p.engine.get(n.uid, 'position')?.value);
+          if (q) taken.push(q);
+        }
       }
-      path.push(port);
+      const free = (q: Vec2) => !taken.some((t) => Math.hypot(t.x - q.x, t.y - q.y) < 1);
+      let path: Vec2[] = [];
+      let port: Vec2 = P.at;
+      for (let k = 1; k <= 8; k++) {
+        if (out.y !== 0) {
+          // Vertical pin: straight stub; if taken, jog sideways.
+          const p1 = { x: P.at.x, y: P.at.y + out.y * g };
+          path = k === 1 ? [P.at, p1] : [P.at, p1, { x: p1.x + (k - 1) * g, y: p1.y }];
+        } else {
+          // Horizontal pin: step out, then down (ground) or up (supply).
+          const p1 = { x: P.at.x + out.x * g * k, y: P.at.y };
+          path = [P.at, p1, { x: p1.x, y: p1.y + (down ? g : -g) }];
+        }
+        port = path[path.length - 1]!;
+        if (free(port)) break;
+      }
       const ops: Op[] = [];
       for (let i = 0; i + 1 < path.length; i++) {
         ops.push({ op: 'add', parent: P.sheet.uid, index: P.sheet.children.length + i, tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: path[i]! }, { name: 'end', value: path[i + 1]! }], parent: P.sheet.uid, children: [] }] } });
