@@ -1151,33 +1151,40 @@ export function wirePathOps(doc: Doc, sheetUid: string, path: Vec2[]): Op[] {
 export function routeConnection(doc: Doc, engine: StyleEngine, sheetUid: string, from: Vec2, to: Vec2, opts: { horizontalFirst?: boolean } = {}): Vec2[] | null {
   const direct = routeWirePath(doc, engine, sheetUid, from, to, opts);
   if (direct && direct.length <= 2) return direct;
-  const netOf = itemNets(doc, engine);
   const all = obstacles(doc, engine, sheetUid, '');
-  const netAt = (p: Vec2): string | undefined => {
-    for (let i = 0; i < all.points.length; i++) if (same(all.points[i]!, p)) {
-      const n = netOf.get(all.pointOwners?.[i] ?? '');
-      if (n !== undefined) return n;
+  // Wires physically joined to a point (through other wires) — not merely on a net of the
+  // same name: a power symbol or global label elsewhere does not count.
+  const wiredTo = (p: Vec2): [Vec2, Vec2][] => {
+    const got: number[] = [];
+    const touches = (i: number) => {
+      const [a, b] = all.segs[i]!;
+      if (onSeg(p, a, b)) return true;
+      return got.some((j) => {
+        const [c, d] = all.segs[j]!;
+        return onSeg(a, c, d) || onSeg(b, c, d) || onSeg(c, a, b) || onSeg(d, a, b);
+      });
+    };
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (let i = 0; i < all.segs.length; i++) if (!got.includes(i) && touches(i)) (got.push(i), (grew = true));
     }
-    return undefined;
+    return got.map((i) => all.segs[i]!);
   };
   let best: Vec2[] | null = null;
-  // Drop from one end onto a wire of the other end's net (both directions).
+  // Drop from one end straight onto a wire already joined to the other end (both directions);
+  // the other end keeps its own wire, so nothing is left unconnected.
   for (const [start, other] of [[from, to], [to, from]] as const) {
-    const net = netAt(other);
-    if (net === undefined) continue;
-    all.segs.forEach(([a, b], i) => {
-      if (netOf.get(all.segOwners?.[i] ?? '') !== net) return;
-      // Perpendicular foot of `start` on this wire, if it lies on it.
+    for (const [a, b] of wiredTo(other)) {
       const horiz = Math.abs(a.y - b.y) < EPS;
       const vert = Math.abs(a.x - b.x) < EPS;
       const foot = horiz ? { x: start.x, y: a.y } : vert ? { x: a.x, y: start.y } : null;
-      if (!foot || same(foot, start) || !onSeg(foot, a, b)) return;
+      if (!foot || same(foot, start) || !onSeg(foot, a, b)) continue;
       const path = routeWirePath(doc, engine, sheetUid, start, foot, opts);
-      if (!path || path.length !== 2) return;
+      if (!path || path.length !== 2) continue;
       const len = Math.abs(foot.x - start.x) + Math.abs(foot.y - start.y);
       const bestLen = best ? Math.abs(best[1]!.x - best[0]!.x) + Math.abs(best[1]!.y - best[0]!.y) : Infinity;
       if (len < bestLen) best = start === from ? path : path.slice().reverse();
-    });
+    }
   }
   return best ?? direct;
 }

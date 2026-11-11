@@ -155,6 +155,7 @@ function tidyOnce(doc: Doc, engine: StyleEngine, sheetUid: string, opts: { moveP
   const start = sheetBends(doc, engine, sheetUid);
   const applied: Op[] = [];
   const undo: Op[][] = [];
+  const loose0 = looseCount(doc, engine, sheetUid);
   const keep = (ops: Op[], ok: () => boolean): boolean => {
     if (!ops.length) return false;
     let r;
@@ -164,7 +165,8 @@ function tidyOnce(doc: Doc, engine: StyleEngine, sheetUid: string, opts: { moveP
       return false;
     }
     engine.recompute();
-    if (ok()) {
+    // Never leave a power symbol, label or pin hanging that was attached before.
+    if (ok() && looseCount(doc, engine, sheetUid) <= loose0) {
       applied.push(...ops);
       undo.push(r.inverse);
       return true;
@@ -294,4 +296,36 @@ function connectionPoints(doc: Doc, engine: StyleEngine, symUid: string): Vec2[]
     }
   }
   return out;
+}
+
+/**
+ * How many power symbols, net labels and pins on a sheet touch no wire and no other item
+ * (unconnected pins with nothing on them included). Tidying must never raise it.
+ */
+export function looseCount(doc: Doc, engine: StyleEngine, sheetUid: string): number {
+  const sheet = doc.nodes.get(sheetUid);
+  if (!sheet) return 0;
+  const segs: [Vec2, Vec2][] = [];
+  const pts: { p: Vec2; owner: string }[] = [];
+  for (const c of sheet.children) {
+    const n = doc.nodes.get(c);
+    if (!n) continue;
+    if (n.type === 'wire') {
+      const a = vec(engine.get(n.uid, 'start')?.value);
+      const b = vec(engine.get(n.uid, 'end')?.value);
+      if (a && b) segs.push([a, b]);
+    } else if (n.type === 'label') {
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      if (p) pts.push({ p, owner: n.uid });
+    } else if (n.type === 'symbol') {
+      for (const q of connectionPoints(doc, engine, n.uid)) pts.push({ p: q, owner: n.uid });
+    }
+  }
+  let loose = 0;
+  for (const { p, owner } of pts) {
+    const onWire = segs.some(([a, b]) => onSeg(p, a, b));
+    const onOther = pts.some((o) => o.owner !== owner && same(o.p, p));
+    if (!onWire && !onOther) loose++;
+  }
+  return loose;
 }

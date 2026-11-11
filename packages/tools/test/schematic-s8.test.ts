@@ -73,4 +73,28 @@ describe('S8: pin grid and jog removal', () => {
     expect(out.sheets[0]!.bendsAfter).toBe(0);
     expect(shortJogs(p.doc, p.engine, sheet(p).uid).length).toBe(0);
   });
+
+  it('tidy_wires never leaves a power symbol hanging (owner report: GND symbols not attached)', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    // R1 with a GND stub that jogs sideways (as an older add_power or a move left it).
+    await runTool(p, 'add_part', { kind: 'resistor', x: 0, y: 0 });
+    const a = pin(p, 'R1.2');
+    const gndAt = { x: a.x + 2.54, y: a.y + 5.08 };
+    drawPath(p, [a, { x: a.x, y: a.y + 2.54 }, { x: gndAt.x, y: a.y + 2.54 }, gndAt]);
+    const s = sheet(p);
+    p.history.apply('gnd', [core.addPowerPortOp(p.doc, s.uid, 'GND', gndAt, { down: true }).op]);
+    // Another GND wire further down, joined to the GND net only by its own GND symbol.
+    await runTool(p, 'add_part', { kind: 'resistor', x: 25.4, y: 0 });
+    const b = pin(p, 'R2.2');
+    const low = a.y + 12.7;
+    drawPath(p, [b, { x: b.x, y: low }, { x: a.x - 10.16, y: low }]);
+    p.history.apply('gnd2', [core.addPowerPortOp(p.doc, s.uid, 'GND', { x: b.x, y: low }, { down: true }).op]);
+    const dangling = () => core.runErc(p.doc, p.engine).violations.filter((v) => v.kind === 'danglingPower').length;
+    expect(dangling()).toBe(0);
+    const loose = core.looseCount(p.doc, p.engine, s.uid);
+    await runTool(p, 'tidy_wires', {});
+    expect(dangling()).toBe(0);
+    expect(core.looseCount(p.doc, p.engine, s.uid)).toBeLessThanOrEqual(loose);
+  });
 });

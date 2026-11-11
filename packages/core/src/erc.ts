@@ -15,7 +15,7 @@ import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
 import { allSheets, pinPoint, sheetItems } from './schematic.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -26,6 +26,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   danglingLabel: 'Label not connected',
   duplicateRef: 'Duplicate reference',
   wireOverPin: 'Wire runs over a pin',
+  danglingPower: 'Power symbol not connected',
 };
 
 export interface ErcViolation {
@@ -123,6 +124,16 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
     for (const n of its) {
       const p = n.type === 'pin' ? pointOf.get(n.uid) : ['label', 'junction', 'sheetPin'].includes(n.type) ? vec(engine.get(n.uid, 'position')?.value) : undefined;
       if (p) anchors.push({ uid: n.uid, p });
+    }
+    // A power symbol joins its net by name, so one that touches nothing still "works" — but
+    // the pin it was meant for is no longer visibly connected to it.
+    for (const n of its) {
+      if (n.type !== 'symbol' || !n.props.power) continue;
+      const lbl = n.children.map((c) => doc.nodes.get(c)).find((k) => k?.type === 'label');
+      const p = lbl ? vec(engine.get(lbl.uid, 'position')?.value) : undefined;
+      if (!p) continue;
+      const touches = wires.some((w) => distToSegment(p, w.a, w.b) < EPS) || anchors.some((a) => a.uid !== lbl!.uid && dist(p, a.p) < EPS);
+      if (!touches) out.push({ id: `dp:${n.uid}`, kind: 'danglingPower', severity: 'warning', message: `Power symbol ${n.props.Value ?? n.name} is not attached to a wire or pin`, sheet: sheet.uid, at: p, uids: [n.uid] });
     }
     for (const n of its) {
       if (n.type !== 'label' || n.props.kind === 'power' || n.props.kind === 'flag') continue;
