@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/04-schematic-improvements.md` |
-| Version | 0.1 (draft) |
-| Status | **Draft — awaiting the owner's approval** |
+| Version | 0.1 |
+| Status | **Approved on 2026-11-11 — in progress** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.1 (tag `v0.0.1`) |
@@ -181,6 +181,7 @@ one issue per item, if the owner asks for it.
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 0.1 | 2026-11-11 | First draft | — |
+| 0.1 | 2026-11-11 | Approved as written | Owner (widjis), in chat: "Setuju, tanda tangani" |
 
 ## Approval
 
@@ -188,4 +189,7 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 
 | Role | Name | Date | Version approved |
 |---|---|---|---|
-| Owner | | | |
+| Owner | widjis | 2026-11-11 | 0.1 |
+
+Approval was given by the owner in the working chat ("Setuju, tanda tangani" — "Agreed, sign it") and
+recorded here by the implementer.
