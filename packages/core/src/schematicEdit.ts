@@ -48,8 +48,14 @@ export function toggleMirror(rotation: number, mirror: Mirror, axis: 'h' | 'v'):
  * `orthogonal: false` only moves wire ends (use while dragging, then straightenWiresOps on drop).
  * `skip`: wires, labels and other items the caller moves itself (part of the same selection).
  */
-export function moveSymbolsOps(doc: Doc, engine: StyleEngine, moves: SymbolMove[], opts: { orthogonal?: boolean; skip?: Set<string> } = {}): Op[] {
-  const ops: Op[] = [];
+export function moveSymbolsOps(
+  doc: Doc,
+  engine: StyleEngine,
+  moves: SymbolMove[],
+  opts: { orthogonal?: boolean; skip?: Set<string>; points?: { from: Vec2; to: Vec2 }[]; sheet?: string; pre?: Op[] } = {},
+): Op[] {
+  // `pre`: the caller's own edits (selected wires, labels …), applied together with these.
+  const ops: Op[] = [...(opts.pre ?? [])];
   const orthogonal = opts.orthogonal !== false;
   const skip = opts.skip ?? new Set<string>();
   const movedSymbols = new Set(moves.map((m) => m.uid));
@@ -86,6 +92,10 @@ export function moveSymbolsOps(doc: Doc, engine: StyleEngine, moves: SymbolMove[
       }
     }
   }
+  // Extra connection points the caller moves itself (ends of selected wires, selected labels …):
+  // whatever else sits on them follows too.
+  for (const pt of opts.points ?? []) if (!same(pt.from, pt.to) && !moved.has(key(pt.from))) moved.set(key(pt.from), { from: pt.from, to: round(pt.to) });
+  if (opts.sheet) sheets.add(opts.sheet);
   if (!moved.size) return ops;
 
   // Items on the affected sheets.
@@ -776,4 +786,151 @@ function pathOps(doc: Doc, uid: string, path: Vec2[], netOf?: Map<string, string
     ops.push({ op: 'add', parent: sheet.uid, index: sheet.children.length + i, tree: { nodes: [{ uid: nu, type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: seq[i]! }, { name: 'end', value: seq[i + 1]! }], parent: sheet.uid, children: [] }] } });
   }
   return ops;
+}
+
+// ---------- selections (S2) ----------
+
+export interface Rect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Sheet-space bounds of a symbol: its drawing plus its pin ends. */
+export function symbolBounds(doc: Doc, engine: StyleEngine, uid: string): Rect {
+  const sym = doc.nodes.get(uid);
+  const f = symbolFrame(engine, uid);
+  const pts: Vec2[] = [];
+  for (const g of (sym?.data?.graphics ?? []) as { t: string; a?: Vec2; b?: Vec2; pts?: Vec2[]; c?: Vec2; r?: number; s?: Vec2; m?: Vec2; e?: Vec2 }[]) {
+    if (g.t === 'poly' && g.pts) pts.push(...g.pts);
+    else if (g.t === 'rect' && g.a && g.b) pts.push(g.a, g.b);
+    else if (g.t === 'circle' && g.c && g.r) pts.push({ x: g.c.x - g.r, y: g.c.y - g.r }, { x: g.c.x + g.r, y: g.c.y + g.r });
+    else if (g.t === 'arc' && g.s && g.m && g.e) pts.push(g.s, g.m, g.e);
+  }
+  for (const c of sym?.children ?? []) {
+    const p = doc.nodes.get(c);
+    const at = p?.type === 'pin' ? vec(engine.get(p.uid, 'position')?.value) : undefined;
+    if (at) pts.push(at);
+  }
+  if (!pts.length) pts.push({ x: -1, y: -1 }, { x: 1, y: 1 });
+  const w = pts.map((p) => symToSheet(f, p));
+  return { minX: Math.min(...w.map((p) => p.x)), minY: Math.min(...w.map((p) => p.y)), maxX: Math.max(...w.map((p) => p.x)), maxY: Math.max(...w.map((p) => p.y)) };
+}
+
+/** Items a selection box picks: symbols, wires, labels (not a symbol's own), junctions, no-connects, sheet blocks. */
+const SELECTABLE = new Set(['symbol', 'wire', 'label', 'junction', 'noconnect', 'block']);
+
+function segTouchesRect(a: Vec2, b: Vec2, r: Rect): boolean {
+  const inside = (p: Vec2) => p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY;
+  if (inside(a) || inside(b)) return true;
+  // Liang–Barsky clip.
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  for (const [p, q] of [[-dx, a.x - r.minX], [dx, r.maxX - a.x], [-dy, a.y - r.minY], [dy, r.maxY - a.y]] as const) {
+    if (Math.abs(p) < 1e-12) {
+      if (q < 0) return false;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) t0 = Math.max(t0, t);
+    else t1 = Math.min(t1, t);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+/**
+ * Items on a sheet picked by a selection box. `mode` 'inside' takes items fully inside the box
+ * (dragged left → right); 'touch' takes items the box touches (dragged right → left).
+ */
+export function itemsInRect(doc: Doc, engine: StyleEngine, sheetUid: string, r: Rect, mode: 'inside' | 'touch'): string[] {
+  const out: string[] = [];
+  const sheet = doc.nodes.get(sheetUid);
+  const inR = (p: Vec2) => p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY;
+  const boxIn = (b: Rect) => (mode === 'inside' ? b.minX >= r.minX && b.maxX <= r.maxX && b.minY >= r.minY && b.maxY <= r.maxY : b.maxX >= r.minX && b.minX <= r.maxX && b.maxY >= r.minY && b.minY <= r.maxY);
+  for (const c of sheet?.children ?? []) {
+    const n = doc.nodes.get(c);
+    if (!n || !SELECTABLE.has(n.type)) continue;
+    if (n.type === 'symbol') {
+      if (boxIn(symbolBounds(doc, engine, n.uid))) out.push(n.uid);
+    } else if (n.type === 'wire') {
+      const a = vec(engine.get(n.uid, 'start')?.value);
+      const b = vec(engine.get(n.uid, 'end')?.value);
+      if (a && b && (mode === 'inside' ? inR(a) && inR(b) : segTouchesRect(a, b, r))) out.push(n.uid);
+    } else if (n.type === 'block') {
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      const s = vec(engine.get(n.uid, 'size')?.value);
+      if (p && s && boxIn({ minX: p.x, minY: p.y, maxX: p.x + s.x, maxY: p.y + s.y })) out.push(n.uid);
+    } else {
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      if (p && inR(p)) out.push(n.uid);
+    }
+  }
+  return out;
+}
+
+/**
+ * Rotate (90° counter-clockwise on screen) or mirror a selection as one piece around its centre
+ * (snapped to `grid`). Selected wires, labels, junctions and no-connects turn with it; wires
+ * outside the selection that end on its pins follow as in moveSymbolsOps. A single symbol on
+ * its own turns around its own origin.
+ */
+export function transformSelectionOps(doc: Doc, engine: StyleEngine, uids: string[], how: 'rotate' | 'mirror-h' | 'mirror-v', grid = 1.27): Op[] {
+  const nodes = uids.map((u) => doc.nodes.get(u)).filter((n): n is DocNode => !!n && SELECTABLE.has(n.type) && n.type !== 'block' && !(n.type === 'label' && doc.nodes.get(n.parent ?? '')?.type === 'symbol'));
+  if (!nodes.length) return [];
+  const rot = (n: DocNode) => Number(engine.get(n.uid, 'rotation')?.value ?? 0);
+  const mir = (n: DocNode) => ((engine.get(n.uid, 'mirror')?.value as Mirror | undefined) ?? 'none');
+  const turn = (r: number, m: Mirror) =>
+    // A mirrored frame turns the other way on screen for the same change of rotation.
+    how === 'rotate' ? { rotation: (r + (m === 'none' ? 90 : 270)) % 360, mirror: m } : toggleMirror(r, m, how === 'mirror-h' ? 'h' : 'v');
+  if (nodes.length === 1 && nodes[0]!.type === 'symbol') {
+    const n = nodes[0]!;
+    return moveSymbolsOps(doc, engine, [{ uid: n.uid, ...turn(rot(n), mir(n)) }], { skip: new Set(uids) });
+  }
+  // Centre of everything selected, on the grid so turned items stay on it.
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const grow = (p: Vec2) => ((x0 = Math.min(x0, p.x)), (y0 = Math.min(y0, p.y)), (x1 = Math.max(x1, p.x)), (y1 = Math.max(y1, p.y)));
+  for (const n of nodes) {
+    if (n.type === 'symbol') {
+      const b = symbolBounds(doc, engine, n.uid);
+      grow({ x: b.minX, y: b.minY });
+      grow({ x: b.maxX, y: b.maxY });
+    } else if (n.type === 'wire') {
+      for (const k of ['start', 'end']) {
+        const p = vec(engine.get(n.uid, k)?.value);
+        if (p) grow(p);
+      }
+    } else {
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      if (p) grow(p);
+    }
+  }
+  const c = { x: Math.round((x0 + x1) / 2 / grid) * grid, y: Math.round((y0 + y1) / 2 / grid) * grid };
+  const T = (p: Vec2): Vec2 =>
+    round(how === 'rotate' ? { x: c.x + (p.y - c.y), y: c.y - (p.x - c.x) } : how === 'mirror-h' ? { x: 2 * c.x - p.x, y: p.y } : { x: p.x, y: 2 * c.y - p.y });
+  const ops: Op[] = [];
+  const moves: SymbolMove[] = [];
+  const points: { from: Vec2; to: Vec2 }[] = [];
+  for (const n of nodes) {
+    if (n.type === 'symbol') {
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      if (p) moves.push({ uid: n.uid, position: T(p), ...turn(rot(n), mir(n)) });
+    } else if (n.type === 'wire') {
+      for (const k of ['start', 'end']) {
+        const p = vec(engine.get(n.uid, k)?.value);
+        if (p) ops.push({ op: 'setRule', uid: n.uid, name: k, decl: { name: k, value: T(p) } }), points.push({ from: p, to: T(p) });
+      }
+    } else {
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      if (p) ops.push({ op: 'setRule', uid: n.uid, name: 'position', decl: { name: 'position', value: T(p) } }), points.push({ from: p, to: T(p) });
+      if (n.type === 'label') {
+        const r = rot(n);
+        const nr = how === 'rotate' ? (r + 90) % 360 : (how === 'mirror-h') === (r % 180 === 0) ? (r + 180) % 360 : r;
+        if (nr !== r) ops.push({ op: 'setRule', uid: n.uid, name: 'rotation', decl: { name: 'rotation', value: nr } });
+      }
+    }
+  }
+  const sheet = sheetOf(doc, nodes[0]!);
+  return moveSymbolsOps(doc, engine, moves, { skip: new Set(uids), points, pre: ops, ...(sheet ? { sheet: sheet.uid } : {}) });
 }

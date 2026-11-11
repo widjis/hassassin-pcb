@@ -252,14 +252,23 @@ export function mountInspector(app: App, root: HTMLElement): void {
     ] as const) kv.append(h('div', { class: 'k' }, k), h('div', { class: 'v' }, String(v)));
     box.append(kv);
     box.append(
-      h(
-        'div',
-        { class: 'dim', style: 'font-size:12px;line-height:1.6' },
-        h('b', {}, 'Select'), ' click · Cmd/Ctrl+click for a pad · drag to move · R rotate · Del delete', h('br', {}),
-        h('b', {}, 'Route'), ' X · click a pad to start · V via · / corner · Esc stop · L switch layer', h('br', {}),
-        h('b', {}, 'View'), ' drag empty space to pan · scroll to zoom · F flip · Home fit', h('br', {}),
-        h('b', {}, 'Edit'), ' Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
-      ),
+      app.space === 'schematic'
+        ? h(
+            'div',
+            { class: 'dim', style: 'font-size:12px;line-height:1.6' },
+            h('b', {}, 'Select'), ' click · Shift+click add · drag on empty sheet for a box (left→right: inside, right→left: touching)', h('br', {}),
+            h('b', {}, 'Edit'), ' drag to move · R rotate · X / Y mirror · Del delete · W wire · L label · A part', h('br', {}),
+            h('b', {}, 'View'), ' middle drag or Space+drag to pan · two-finger scroll pans · wheel or pinch zooms · Home fit', h('br', {}),
+            h('b', {}, 'History'), ' Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
+          )
+        : h(
+            'div',
+            { class: 'dim', style: 'font-size:12px;line-height:1.6' },
+            h('b', {}, 'Select'), ' click · Cmd/Ctrl+click for a pad · drag to move · R rotate · Del delete', h('br', {}),
+            h('b', {}, 'Route'), ' X · click a pad to start · V via · / corner · Esc stop · L switch layer', h('br', {}),
+            h('b', {}, 'View'), ' drag empty space to pan · scroll to zoom · F flip · Home fit', h('br', {}),
+            h('b', {}, 'Edit'), ' Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
+          ),
     );
     return box;
   };
@@ -277,5 +286,6 @@ export function mountInspector(app: App, root: HTMLElement): void {
   };
   app.on('doc', render);
   app.on('inspect', render);
+  app.on('space', render);
   render();
 }

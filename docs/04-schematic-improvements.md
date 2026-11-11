@@ -51,7 +51,15 @@ only when all of its criteria pass.
     where possible.
   - The netlist before and after the move is identical (checked by an automated test).
   - One undo step restores the symbol and the wires together; collaborators see the same result live.
-- [ ] **S2. Box selection.**
+- [x] **S2. Box selection.** — done
+  - Delivered: left→right box selects items fully inside, right→left also items it touches (dashed green
+    box); Shift adds. Pan: middle drag, Space + drag, two-finger trackpad scroll; mouse wheel / pinch zoom.
+    A selection moves, rotates (R, around its centre), mirrors (X / Y) and deletes as one undo step;
+    wires outside it that end on its pins or wires follow. Schematic hints in the side panel updated.
+  - Limit: telling a trackpad scroll from a mouse wheel is a heuristic (browsers do not say which device
+    sent the event); Ctrl / pinch always zooms.
+  - Tests: `packages/tools/test/schematic-s2.test.ts`. Browser check: box select, group rotate, group
+    drag, Space + drag, trackpad pan.
   - Dragging on an empty part of the sheet draws a selection box; objects inside it are selected
     (left-to-right = fully inside, right-to-left = touching, a common convention, or one documented rule).
   - Panning, which uses that drag today, moves to the middle mouse button, Space + drag, and trackpad

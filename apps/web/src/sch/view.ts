@@ -12,9 +12,9 @@ import {
   netGroups,
   applyOps,
   type WiresBefore,
-  toggleMirror,
-  type Mirror,
-  type SymbolMove,
+  transformSelectionOps,
+  itemsInRect,
+  symbolBounds,
   placePartOps,
   type PartDef,
   arcPoints,
@@ -64,6 +64,18 @@ interface View {
   scale: number;
 }
 
+/**
+ * Best guess whether a wheel event comes from a trackpad (two-finger scroll) rather than a mouse
+ * wheel: trackpads send pixel deltas, often sideways, in steps that are not multiples of a notch.
+ */
+function isTrackpadScroll(e: WheelEvent): boolean {
+  if (e.deltaMode !== 0) return false;
+  if (Math.abs(e.deltaX) > 0) return true;
+  const legacy = (e as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY;
+  if (typeof legacy === 'number' && legacy !== 0) return legacy % 120 !== 0;
+  return !Number.isInteger(e.deltaY) || Math.abs(e.deltaY) < 40;
+}
+
 const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x' in v ? (v as Vec2) : undefined);
 
 export class SchematicView {
@@ -77,7 +89,11 @@ export class SchematicView {
     x: number;
     y: number;
     moved: boolean;
-    kind: 'pan' | 'move';
+    kind: 'pan' | 'move' | 'box' | 'none';
+    /** Grid offset applied by the last drag frame. */
+    last?: Vec2;
+    /** Selection box corners in screen pixels (kind 'box'). */
+    box?: { a: Vec2; b: Vec2 };
     start: Vec2;
     key: string;
     items: { uid: string; rules: Record<string, Vec2> }[];
@@ -89,6 +105,8 @@ export class SchematicView {
     nets: string | null;
   } | null = null;
   private frame = 0;
+  /** Space held: dragging pans. */
+  private spaceDown = false;
   /** Called with the sheet-space cursor (for presence). */
   onCursor: ((p: Vec2) => void) | null = null;
   /** Called when the user clicks with comment mode on. */
@@ -151,22 +169,7 @@ export class SchematicView {
 
   /** Bounding box of a symbol in sheet coordinates. */
   private symbolBox(sym: DocNode): { minX: number; minY: number; maxX: number; maxY: number } {
-    const e = this.app.engine!;
-    const f = symbolFrame(e, sym.uid);
-    const pts: Vec2[] = [];
-    for (const g of (sym.data?.graphics ?? []) as SymGraphicSpec[]) {
-      if (g.t === 'poly') pts.push(...g.pts);
-      else if (g.t === 'rect') pts.push(g.a, g.b);
-      else if (g.t === 'circle') pts.push({ x: g.c.x - g.r, y: g.c.y - g.r }, { x: g.c.x + g.r, y: g.c.y + g.r });
-    }
-    for (const c of sym.children) {
-      const p = this.app.doc!.nodes.get(c);
-      const at = p?.type === 'pin' ? vec(e.get(p.uid, 'position')?.value) : undefined;
-      if (at) pts.push(at);
-    }
-    if (!pts.length) pts.push({ x: -1, y: -1 }, { x: 1, y: 1 });
-    const w = pts.map((p) => symToSheet(f, p));
-    return { minX: Math.min(...w.map((p) => p.x)), minY: Math.min(...w.map((p) => p.y)), maxX: Math.max(...w.map((p) => p.x)), maxY: Math.max(...w.map((p) => p.y)) };
+    return symbolBounds(this.app.doc!, this.app.engine!, sym.uid);
   }
 
   fit(): void {
@@ -305,19 +308,12 @@ export class SchematicView {
     return netGroups(doc, e);
   }
 
+  /** Turn the selection 90° (key R): one symbol around its origin, several items around their centre. */
   rotateSelection(): void {
-    const e = this.app.engine!;
     const doc = this.app.doc;
-    if (!doc) return;
-    const ops: Op[] = [];
-    const moves: SymbolMove[] = [];
-    for (const uid of this.app.selection) {
-      const n = this.app.node(uid);
-      const cur = Number(e.get(uid, 'rotation')?.value ?? 0);
-      if (n?.type === 'symbol') moves.push({ uid, rotation: (cur + 90) % 360 });
-      else if (n?.type === 'label') ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: (cur + 90) % 360 } });
-    }
-    ops.push(...moveSymbolsOps(doc, e, moves, { skip: new Set(this.app.selection) }));
+    const e = this.app.engine;
+    if (!doc || !e) return;
+    const ops = transformSelectionOps(doc, e, [...this.app.selection], 'rotate', SCH_GRID);
     if (ops.length) this.applyKeepingNets('Rotate', ops, 'Rotating');
   }
 
@@ -338,20 +334,14 @@ export class SchematicView {
     this.app.apply(label, ops);
   }
 
-  /** Flip selected symbols left↔right ('h', key X) or top↔bottom ('v', key Y); wires follow. */
+  /** Flip the selection left↔right ('h', key X) or top↔bottom ('v', key Y); wires follow. */
   mirrorSelection(axis: 'h' | 'v'): void {
-    const e = this.app.engine!;
     const doc = this.app.doc;
-    if (!doc) return;
-    const moves: SymbolMove[] = [];
-    for (const uid of this.app.selection) {
-      if (this.app.node(uid)?.type !== 'symbol') continue;
-      const m = toggleMirror(Number(e.get(uid, 'rotation')?.value ?? 0), (e.get(uid, 'mirror')?.value as Mirror) ?? 'none', axis);
-      moves.push({ uid, rotation: m.rotation, mirror: m.mirror });
-    }
-    const ops = moveSymbolsOps(doc, e, moves, { skip: new Set(this.app.selection) });
+    const e = this.app.engine;
+    if (!doc || !e) return;
+    const ops = transformSelectionOps(doc, e, [...this.app.selection], axis === 'h' ? 'mirror-h' : 'mirror-v', SCH_GRID);
     if (ops.length) this.applyKeepingNets(axis === 'h' ? 'Mirror left–right' : 'Mirror top–bottom', ops, 'Mirroring');
-    else this.app.say('Select a symbol to mirror it.');
+    else this.app.say('Select something to mirror.');
   }
 
   deleteSelection(): void {
@@ -367,21 +357,53 @@ export class SchematicView {
   }
 
   // ---------- input ----------
+  /** Select what a box drawn on screen picks (left→right: inside; right→left: touching). */
+  private finishBox(box: { a: Vec2; b: Vec2 }, additive: boolean): void {
+    const sheet = this.sheet();
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!sheet || !doc || !e) return;
+    const p = this.toWorld(box.a.x, box.a.y);
+    const q = this.toWorld(box.b.x, box.b.y);
+    const r = { minX: Math.min(p.x, q.x), minY: Math.min(p.y, q.y), maxX: Math.max(p.x, q.x), maxY: Math.max(p.y, q.y) };
+    const picked = itemsInRect(doc, e, sheet.uid, r, box.b.x >= box.a.x ? 'inside' : 'touch');
+    if (additive) this.app.select(picked.filter((u) => !this.app.selection.has(u)), true);
+    else this.app.select(picked);
+    if (picked.length) this.app.say(`${picked.length} item${picked.length > 1 ? 's' : ''} selected. Drag to move · R rotate · X / Y mirror · Del delete.`);
+  }
+
   private bind(): void {
     const c = this.canvas;
+    const typing = (t: EventTarget | null) => !!(t as HTMLElement | null)?.closest?.('input, select, textarea, [contenteditable]');
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'Space' || this.app.space !== 'schematic' || typing(e.target)) return;
+      e.preventDefault();
+      if (!this.spaceDown) {
+        this.spaceDown = true;
+        if (!this.drag) c.style.cursor = 'grab';
+      }
+    });
+    window.addEventListener('keyup', (e) => {
+      if (e.code !== 'Space') return;
+      this.spaceDown = false;
+      if (!this.drag) c.style.cursor = '';
+    });
+    window.addEventListener('blur', () => (this.spaceDown = false));
     const local = (e: MouseEvent) => {
       const r = c.getBoundingClientRect();
       return { sx: e.clientX - r.left, sy: e.clientY - r.top };
     };
     c.addEventListener('pointerdown', (e) => {
       if (e.button === 2) return;
+      if (e.button === 1) e.preventDefault(); // no auto-scroll on middle click
       c.setPointerCapture(e.pointerId);
       const { sx, sy } = local(e);
       const p = this.toWorld(sx, sy);
-      let kind: 'pan' | 'move' = 'pan';
+      // Pan: middle button, or Space + drag. Left drag on empty sheet draws a selection box.
+      let kind: 'pan' | 'move' | 'box' | 'none' = e.button === 1 || this.spaceDown ? 'pan' : 'none';
       const items: { uid: string; rules: Record<string, Vec2> }[] = [];
       const symbols: { uid: string; at: Vec2 }[] = [];
-      if (this.tool === 'select' && e.button === 0) {
+      if (kind === 'none' && this.tool === 'select' && e.button === 0) {
         const hit = this.pick(p);
         if (hit && ['symbol', 'label', 'wire', 'junction', 'noconnect', 'block'].includes(hit.type) && !(hit.type === 'label' && this.app.node(hit.parent ?? '')?.type === 'symbol')) {
           if (!this.app.selection.has(hit.uid)) this.app.select([hit.uid], e.shiftKey);
@@ -403,12 +425,13 @@ export class SchematicView {
             }
             if (Object.keys(rules).length) items.push({ uid, rules });
           }
-        }
+        } else if (!hit) kind = 'box';
       }
       const sheetUid = this.sheet()?.uid;
-      const wires = symbols.length && sheetUid && this.app.doc && this.app.engine ? snapshotWires(this.app.doc, this.app.engine, sheetUid) : null;
+      const wires = kind === 'move' && sheetUid && this.app.doc && this.app.engine ? snapshotWires(this.app.doc, this.app.engine, sheetUid) : null;
       const nets = kind === 'move' ? this.netPartition() : null;
-      this.drag = { x: e.clientX, y: e.clientY, moved: false, kind, start: p, key: newUid('smv'), items, symbols, wires, nets };
+      this.drag = { x: e.clientX, y: e.clientY, moved: false, kind, start: p, key: newUid('smv'), items, symbols, wires, nets, ...(kind === 'box' ? { box: { a: { x: sx, y: sy }, b: { x: sx, y: sy } } } : {}) };
+      if (kind === 'pan') c.style.cursor = 'grabbing';
     });
     c.addEventListener('pointermove', (e) => {
       const { sx, sy } = local(e);
@@ -420,6 +443,7 @@ export class SchematicView {
         const dx = e.clientX - d.x;
         const dy = e.clientY - d.y;
         if (!d.moved && Math.hypot(dx, dy) > 3) d.moved = true;
+        if (d.kind === 'box' && d.box) d.box.b = { x: sx, y: sy };
         if (d.moved && d.kind === 'pan') {
           this.view.cx -= dx / this.view.scale;
           this.view.cy -= dy / this.view.scale;
@@ -429,10 +453,22 @@ export class SchematicView {
           const delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, SCH_GRID);
           const ops: Op[] = [];
           for (const it of d.items) for (const [k, v] of Object.entries(it.rules)) ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: { x: v.x + delta.x, y: v.y + delta.y } } });
-          if (d.symbols.length && this.app.doc && this.app.engine) {
-            // Symbols go through moveSymbolsOps so attached wires, stubs and power symbols follow.
-            ops.push(...moveSymbolsOps(this.app.doc, this.app.engine, d.symbols.map((s0) => ({ uid: s0.uid, position: { x: s0.at.x + delta.x, y: s0.at.y + delta.y } })), { orthogonal: false, skip: new Set(d.items.map((i) => i.uid)) }));
+          if (this.app.doc && this.app.engine) {
+            // Symbols go through moveSymbolsOps so attached wires, stubs and power symbols follow;
+            // so do wires of other items that end on a selected wire or label.
+            const last = d.last ?? { x: 0, y: 0 };
+            const points = d.items.flatMap((it) => Object.values(it.rules).map((v) => ({ from: { x: v.x + last.x, y: v.y + last.y }, to: { x: v.x + delta.x, y: v.y + delta.y } })));
+            const sid = this.sheet()?.uid;
+            ops.push(
+              ...moveSymbolsOps(this.app.doc, this.app.engine, d.symbols.map((s0) => ({ uid: s0.uid, position: { x: s0.at.x + delta.x, y: s0.at.y + delta.y } })), {
+                orthogonal: false,
+                skip: new Set([...d.items.map((i) => i.uid), ...d.symbols.map((x) => x.uid)]),
+                points,
+                ...(sid ? { sheet: sid } : {}),
+              }),
+            );
           }
+          d.last = delta;
           if (ops.length) this.app.apply('Move', ops, d.key);
         }
       }
@@ -441,6 +477,12 @@ export class SchematicView {
     c.addEventListener('pointerup', (e) => {
       const d = this.drag;
       this.drag = null;
+      c.style.cursor = this.spaceDown ? 'grab' : '';
+      if (d?.kind === 'box' && d.moved && d.box) {
+        this.finishBox(d.box, e.shiftKey);
+        return this.requestRender();
+      }
+      if (d?.kind === 'pan' && (d.moved || this.spaceDown || e.button === 1)) return;
       if (d?.kind === 'move' && d.moved) {
         // Bend wires that the move left slanted back into right angles, in the same undo step.
         if (d.wires && this.app.doc && this.app.engine) {
@@ -488,6 +530,12 @@ export class SchematicView {
       (e) => {
         e.preventDefault();
         const { sx, sy } = local(e);
+        // Two-finger trackpad scroll pans; a mouse wheel or a pinch (ctrlKey) zooms.
+        if (!e.ctrlKey && isTrackpadScroll(e)) {
+          this.view.cx += e.deltaX / this.view.scale;
+          this.view.cy += e.deltaY / this.view.scale;
+          return this.requestRender();
+        }
         const before = this.toWorld(sx, sy);
         const dy = Math.max(-120, Math.min(120, e.deltaY * (e.deltaMode === 1 ? 16 : 1)));
         this.view.scale = Math.max(0.5, Math.min(200, this.view.scale * Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.002))));
@@ -781,6 +829,20 @@ export class SchematicView {
         ctx.strokeRect(a.x - 3, a.y - 3, (b.maxX - b.minX) * s + 6, (b.maxY - b.minY) * s + 6);
       }
       if (p.cursor?.space === 'schematic' && p.cursor.sheet === sheet.uid) drawPeerCursor(ctx, S(p.cursor), p.user.name, p.user.color, p.user.kind === 'agent');
+    }
+
+    // Selection box
+    if (this.drag?.kind === 'box' && this.drag.moved && this.drag.box) {
+      const { a, b } = this.drag.box;
+      const touch = b.x < a.x;
+      ctx.save();
+      ctx.fillStyle = touch ? 'rgba(120,200,140,0.10)' : 'rgba(110,160,255,0.10)';
+      ctx.strokeStyle = touch ? 'rgba(120,200,140,0.9)' : 'rgba(110,160,255,0.9)';
+      ctx.lineWidth = 1;
+      if (touch) ctx.setLineDash([5, 4]);
+      ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.strokeRect(Math.min(a.x, b.x) + 0.5, Math.min(a.y, b.y) + 0.5, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.restore();
     }
 
     // Wire tool preview
