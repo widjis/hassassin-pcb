@@ -17,7 +17,9 @@ export type Op =
   | { op: 'remove'; uid: string }
   | { op: 'setRulesets'; rulesets: Ruleset[] }
   /** Derived data that is not a rule (e.g. computed pour polygons). */
-  | { op: 'setData'; uid: string; key: string; value: unknown };
+  | { op: 'setData'; uid: string; key: string; value: unknown }
+  /** Project-level metadata (specification, stage gates…). */
+  | { op: 'setMeta'; key: string; value: unknown };
 
 export interface ApplyResult {
   inverse: Op[];
@@ -111,6 +113,14 @@ function applyOne(doc: Doc, op: Op, res: ApplyResult): void {
       }
       res.inverse.push({ op: 'setData', uid: op.uid, key: op.key, value: prev === null ? null : clone(prev) });
       res.touched.add(op.uid);
+      return;
+    }
+    case 'setMeta': {
+      const prev = op.key in doc.meta ? clone(doc.meta[op.key]) : null;
+      if (op.value === null || op.value === undefined) delete doc.meta[op.key];
+      else doc.meta[op.key] = clone(op.value);
+      res.inverse.push({ op: 'setMeta', key: op.key, value: prev });
+      res.touched.add(doc.rootId);
       return;
     }
     case 'setRulesets': {

@@ -9,7 +9,7 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **0** ✅ | Fondasi & viewer | Buka `.kicad_pcb` di browser; pan/zoom WebGL2; layer on/off; object tree; inspector *Computed vs Specified* dari mesin rules |
 | **1** ✅ | Editor PCB dasar | Pilih/geser/putar komponen, routing manual, via, ratsnest, undo/redo, simpan/buka format kita sendiri |
 | **2** ✅ | Benar secara elektrik | DRC inkremental (clearance, unrouted, overlap), copper pour, panel Review, ekspor Gerber/drill/BOM/pick-and-place |
-| **3** | Schematic + alur proyek | Editor schematic, netlist, ERC, sinkron schematic → PCB (satu sumber data), dokumen spesifikasi proyek, tahap & gerbang pemeriksaan |
+| **3** ✅ | Schematic + alur proyek | Editor schematic, netlist, ERC, sinkron schematic → PCB (satu sumber data), dokumen spesifikasi proyek, tahap & gerbang pemeriksaan |
 | **4** | Kolaborasi | Edit multi-user real-time (CRDT), kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View |
 | **5** | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
 | **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, semua aksi lewat command layer, DRC/ERC-fix, placement & routing berbantuan AI; MCP server + CLI untuk Claude Code / Codex |
@@ -108,6 +108,36 @@ Catatan & batasan yang diketahui:
 - Belum: cegah tabrakan saat routing, push-and-shove, rubber-band, flip komponen ke sisi bawah.
 - Library `clipper2-js` sempat dicoba lalu ditinggalkan: union-nya membuat lubang palsu
   (short di hasil pour) dan offset-nya sangat lambat.
+
+## Fase 3 — yang sudah dibangun
+
+- **Model schematic** di pohon dokumen yang sama dengan PCB: `schematic`, `sheet`, `block`
+  (simbol sub-sheet), `sheetPin`, `symbol`, `pin`, `wire`, `label` (lokal/global/hierarkis/power/flag),
+  `junction`, `noconnect`. Simbol ditempatkan dengan posisi/rotasi/mirror sebagai rules.
+- **Netlist** (`core/netlist.ts`): koneksi geometris per sheet + label lokal/hierarkis per sheet,
+  label global & power lintas desain, label hierarkis ↔ pin sheet. Penamaan net otomatis milik kita sendiri.
+- **Impor `.kicad_sch`** (hierarkis, simbol library tertanam, `extends`, simbol power, PWR_FLAG).
+  Diverifikasi pada dua proyek nyata: solar MPPT (3 sheet, 154 pin) cocok 100 % dengan `netlist.xml`
+  KiCad dan dengan net pad di PCB; GPS Tracker (130 pin, simbol power + sub-sheet) cocok dengan PCB.
+- **ERC** (`core/erc.ts`): pin tak tersambung, no-connect pada pin tersambung, dua output bertabrakan,
+  input power tanpa sumber, ujung kabel menggantung, label menggantung, referensi ganda.
+  Solar MPPT: 0 temuan — sama dengan laporan ERC KiCad.
+- **Sinkron schematic → PCB** (`core/sync.ts`): net pad diperbarui, net PCB di-*rename* agar trace ikut,
+  net baru dibuat, net kosong dihapus, part baru mendapat footprint sementara di samping board,
+  part yang hanya ada di PCB dilaporkan (tidak dihapus). Ratsnest board nyata tetap sama setelah sinkron.
+- **Simbol bawaan** (R, C, L, D, LED, konektor, IC generik N-pin) dan proyek baru kosong.
+- **Editor schematic** (Canvas 2D): pindah antar sheet, pilih/geser/putar/hapus, kabel (W, sudut L),
+  label (L, `*` = global), tambah part, masuk sub-sheet (dobel-klik) / naik (U), penanda ERC,
+  cross-probe ke komponen PCB, Tab untuk pindah Schematic ↔ Layout, tombol **Update PCB**.
+- **Alur proyek**: tab Project berisi dokumen kebutuhan (disimpan sebagai meta proyek, bisa di-undo)
+  dan 6 tahap dengan gerbang otomatis (kebutuhan, ERC, komponen, DRC + routing, review, fabrikasi)
+  serta *override* beralasan. ERC tampil di tab Review.
+
+Batasan yang diketahui:
+- Simbol multi-unit diimpor per unit; editor belum bisa mengganti unit. Bus belum didukung.
+- Penamaan net otomatis tidak selalu sama dengan KiCad (konektivitas sama).
+- Footprint untuk part baru masih sementara (generik) sampai Fase 5 (library).
+- Belum ada sinkron balik PCB → schematic (mis. *swap* pin/gate).
 
 ## Di luar cakupan (untuk sekarang)
 Simulasi SPICE, mekanik/enclosure, firmware, wire harness, pemesanan pabrikasi.

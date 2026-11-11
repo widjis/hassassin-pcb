@@ -66,6 +66,8 @@ const defs: RuleDef[] = [
   { name: 'fontSize', label: 'Font size', kind: 'length', inheritable: true, help: 'Text height.' },
   { name: 'boardEdgeClearance', label: 'Board edge clearance', kind: 'length', inheritable: true, help: 'Keep copper this far from the board edge.' },
   { name: 'gridSpacing', label: 'Grid spacing', kind: 'length', inheritable: true, help: 'Canvas grid pitch.' },
+  { name: 'mirror', label: 'Mirror', kind: 'enum', inheritable: false, options: ['none', 'x', 'y'], help: 'Mirror a schematic symbol about its X or Y axis.' },
+  { name: 'pinLength', label: 'Pin length', kind: 'length', inheritable: false, help: 'Length of a schematic pin line.' },
   { name: 'autoPlacePriority', label: 'Auto-place priority', kind: 'number', inheritable: true, help: 'Higher numbers get placed or routed first.' },
 ];
 

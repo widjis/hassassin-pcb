@@ -4,7 +4,16 @@
  */
 import {
   computeRatsnest,
+  createDoc,
+  extractNetlist,
   hasClipper,
+  newProjectOps,
+  planSync,
+  runErc,
+  systemDefaults,
+  applyOps,
+  type ErcViolation,
+  type Netlist,
   History,
   planPours,
   refillOps,
@@ -25,7 +34,7 @@ import {
   type Ruleset,
   type Vec2,
 } from '@hassassin/core';
-import { importKicadPcb, type LayerInfo } from '@hassassin/kicad-import';
+import { importKicadPcb, importKicadSchematic, type LayerInfo } from '@hassassin/kicad-import';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './render/colors.ts';
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
@@ -34,9 +43,15 @@ import { RouteTool } from './tools/route.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
 export type Mode = 'select' | 'route';
-type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc';
+type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet';
+export type Space = 'layout' | 'schematic';
 
 const DEFAULT_HIDDEN = new Set(['paste', 'mask', 'adhesive', 'courtyard', 'fab', 'user']);
+const DEFAULT_LAYERS: LayerInfo[] = [
+  ['F.Cu', 'copper', 'front'], ['B.Cu', 'copper', 'back'], ['F.SilkS', 'silk', 'front'], ['B.SilkS', 'silk', 'back'],
+  ['F.Mask', 'mask', 'front'], ['B.Mask', 'mask', 'back'], ['F.Paste', 'paste', 'front'], ['B.Paste', 'paste', 'back'],
+  ['F.CrtYd', 'courtyard', 'front'], ['F.Fab', 'fab', 'front'], ['Edge.Cuts', 'edge', 'none'],
+].map(([name, kind, side], index) => ({ name: name!, kind: kind as LayerInfo['kind'], side: side as LayerInfo['side'], index }));
 const MOVABLE = new Set(['element', 'via', 'trace']);
 const DELETABLE = new Set(['element', 'via', 'trace', 'line', 'arc', 'circle', 'polygon', 'rectangle', 'text', 'fill', 'zone']);
 
@@ -56,6 +71,8 @@ export class App {
   scene: SceneCache | null = null;
   ratsnest: Ratsnest = { lines: [], nets: [], unroutedNets: 0 };
   drc: DrcResult | null = null;
+  erc: { violations: ErcViolation[]; netlist: Netlist } | null = null;
+  space: Space = 'layout';
   focusedViolation: string | null = null;
   private drcTimer = 0;
   visible = new Set<string>();
@@ -107,6 +124,77 @@ export class App {
   }
 
   // ---------- loading & saving ----------
+  /** Open several files at once: a board and/or schematics (first .kicad_sch named like the board is the root). */
+  loadProject(files: { name: string; text: string }[]): void {
+    const pcb = files.find((f) => /\.kicad_pcb$/i.test(f.name));
+    const hpcb = files.find((f) => /\.hpcb$/i.test(f.name));
+    const schs = files.filter((f) => /\.kicad_sch$/i.test(f.name));
+    if (hpcb) return this.load(hpcb.text, hpcb.name);
+    let doc: Doc;
+    let layers: LayerInfo[];
+    let stats: Record<string, number> = {};
+    let name = 'project';
+    if (pcb) {
+      const res = importKicadPcb(pcb.text, pcb.name);
+      doc = res.doc;
+      layers = res.layers;
+      stats = res.stats;
+      name = pcb.name.replace(/\.kicad_pcb$/i, '');
+    } else {
+      doc = createDoc(systemDefaults());
+      layers = DEFAULT_LAYERS;
+      doc.meta.layers = layers;
+    }
+    if (schs.length) {
+      const map: Record<string, string> = {};
+      for (const f of schs) map[f.name] = f.text;
+      const referenced = new Set<string>();
+      for (const f of schs) for (const m of f.text.matchAll(/\(property "Sheet ?file" "([^"]+)"/g)) referenced.add(m[1]!.split('/').pop()!);
+      const root = schs.find((f) => pcb && f.name === pcb.name.replace(/\.kicad_pcb$/i, '.kicad_sch')) ?? schs.find((f) => !referenced.has(f.name)) ?? schs[0]!;
+      const r = importKicadSchematic({ files: map, root: root.name }, doc);
+      for (const w of r.warnings) console.warn('[schematic]', w);
+      if (!pcb) name = root.name.replace(/\.kicad_sch$/i, '');
+    }
+    this.setDoc(doc, layers, name, stats);
+    if (schs.length && !pcb) this.setSpace('schematic');
+  }
+
+  newProject(): void {
+    const doc = createDoc(systemDefaults());
+    doc.meta.layers = DEFAULT_LAYERS;
+    applyOps(doc, newProjectOps(doc));
+    this.setDoc(doc, DEFAULT_LAYERS, 'untitled', {});
+    this.setSpace('schematic');
+    this.say('New project: add parts with A, draw wires with W, then “Update PCB”.');
+  }
+
+  setSpace(space: Space): void {
+    if (this.space === space) return;
+    this.space = space;
+    if (space === 'schematic') this.route.cancel();
+    this.emit('space');
+    this.requestRender();
+  }
+
+  /** Push schematic connectivity into the board as one undo step. */
+  syncToPcb(): void {
+    if (!this.doc || !this.engine) return;
+    if (![...this.doc.nodes.values()].some((n) => n.type === 'sheet')) return this.say('There is no schematic to update from.');
+    const nl = extractNetlist(this.doc, this.engine);
+    const { ops, report } = planSync(this.doc, this.engine, nl);
+    if (!ops.length) return this.say('The board already matches the schematic.');
+    this.apply('Update PCB from schematic', ops);
+    const parts = [
+      report.componentsAdded.length && `${report.componentsAdded.length} part(s) added`,
+      report.padChanges && `${report.padChanges} pad net(s) changed`,
+      report.netsRenamed.length && `${report.netsRenamed.length} net(s) renamed`,
+      report.netsCreated.length && `${report.netsCreated.length} net(s) created`,
+      report.netsRemoved.length && `${report.netsRemoved.length} empty net(s) removed`,
+      report.onlyOnPcb.length && `${report.onlyOnPcb.length} board-only part(s) kept (${report.onlyOnPcb.slice(0, 4).join(', ')})`,
+    ].filter(Boolean);
+    this.say(`Board updated: ${parts.join(' · ')}.`);
+  }
+
   load(text: string, fileName: string): void {
     let doc: Doc;
     let layers: LayerInfo[];
@@ -137,6 +225,7 @@ export class App {
     this.netHighlight.clear();
     this.inspected = { kind: 'none' };
     this.mode = 'select';
+    this.space = [...doc.nodes.values()].some((n) => n.type === 'layout') ? 'layout' : 'schematic';
     this.route.cancel();
     this.engine = new StyleEngine(doc);
     this.history = new History(doc);
@@ -221,8 +310,10 @@ export class App {
 
   runDrcNow(): void {
     if (!this.doc || !this.engine) return;
+    const hasSch = [...this.doc.nodes.values()].some((n) => n.type === 'sheet');
+    this.erc = hasSch ? runErc(this.doc, this.engine) : null;
     this.drc = runDrc(this.doc, this.engine, this.copper, { ratsnest: this.ratsnest });
-    if (this.focusedViolation && !this.drc.violations.some((v) => v.id === this.focusedViolation)) this.focusedViolation = null;
+    if (this.focusedViolation && !this.drc.violations.some((v) => v.id === this.focusedViolation) && !this.erc?.violations.some((v) => v.id === this.focusedViolation)) this.focusedViolation = null;
     this.emit('drc');
     this.requestRender();
   }

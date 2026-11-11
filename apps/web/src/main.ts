@@ -1,6 +1,8 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { setClipper } from '@hassassin/core';
-import { App, type Mode } from './app.ts';
+import { PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { App, type Mode, type Space } from './app.ts';
+import { SchematicView } from './sch/view.ts';
+import { mountProject } from './ui/project.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -16,7 +18,20 @@ mountLayers(app, $('layersPanel'));
 mountTree(app, $('treePanel'), $<HTMLInputElement>('treeFilter'));
 mountRules(app, $('rulesPanel'));
 mountInspector(app, $('inspector'));
-mountReview(app, $('reviewPanel'), $('reviewBadge'));
+mountProject(app, $('projectPanel'));
+const sch = new SchematicView(app, $<HTMLCanvasElement>('sch'));
+mountReview(app, $('reviewPanel'), $('reviewBadge'), (v) => {
+  app.setSpace('schematic');
+  if (v.sheet && v.sheet !== sch.sheet()?.uid) sch.openSheet(v.sheet);
+  sch.view.cx = v.at.x;
+  sch.view.cy = v.at.y;
+  sch.view.scale = Math.max(sch.view.scale, 12);
+  app.select(v.uids.filter((u) => app.node(u)));
+  app.focusedViolation = v.id;
+  app.emit('drc');
+  sch.requestRender();
+});
+(window as unknown as { sch: SchematicView }).sch = sch;
 
 // Polygon engine (WebAssembly) for pours; loads in the background.
 loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmWithAsmJsFallback)
@@ -48,13 +63,27 @@ app.on('status', () => {
   if (app.message && app.mode !== 'route') msgTimer = window.setTimeout(() => (msg.textContent = ''), 4000);
 });
 
+const loaded = () => {
+  $('dropHint').classList.add('hidden');
+  $('docTitle').textContent = app.fileName;
+  sch.sheetUid = null;
+  sch.fit();
+};
 const loadText = (text: string, name: string) => {
   try {
     app.load(text, name);
-    $('dropHint').classList.add('hidden');
-    $('docTitle').textContent = app.fileName;
+    loaded();
   } catch (e) {
     alert(`Could not open ${name}:\n${(e as Error).message}`);
+  }
+};
+const loadFiles = async (list: FileList | File[]) => {
+  const files = await Promise.all([...list].map(async (f) => ({ name: f.name, text: await f.text() })));
+  try {
+    app.loadProject(files);
+    loaded();
+  } catch (e) {
+    alert(`Could not open the files:\n${(e as Error).message}`);
   }
 };
 
@@ -84,8 +113,7 @@ app.on('change', () => {
 
 $<HTMLInputElement>('fileInput').addEventListener('change', async (e) => {
   const input = e.target as HTMLInputElement;
-  const f = input.files?.[0];
-  if (f) loadText(await f.text(), f.name);
+  if (input.files?.length) await loadFiles(input.files);
   input.value = '';
 });
 const wrap = $('canvasWrap');
@@ -97,16 +125,21 @@ wrap.addEventListener('dragleave', () => wrap.classList.remove('dragging'));
 wrap.addEventListener('drop', async (e) => {
   e.preventDefault();
   wrap.classList.remove('dragging');
-  const f = e.dataTransfer?.files?.[0];
-  if (f) loadText(await f.text(), f.name);
+  if (e.dataTransfer?.files?.length) await loadFiles(e.dataTransfer.files);
 });
 
-const boardParam = new URLSearchParams(location.search).get('board');
-if (boardParam) {
-  fetch(boardParam)
-    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-    .then((t) => loadText(t, decodeURIComponent(boardParam.split('/').pop() ?? boardParam)))
-    .catch((e) => (status.textContent = `Could not load ${boardParam}: ${(e as Error).message}`));
+const params = new URLSearchParams(location.search);
+const boardParam = params.get('board');
+const schParam = params.get('sch'); // comma-separated URLs of .kicad_sch files
+if (boardParam || schParam) {
+  const urls = [...(boardParam ? [boardParam] : []), ...(schParam ? schParam.split(',') : [])];
+  Promise.all(urls.map((u) => fetch(u).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${u}: HTTP ${r.status}`)))).then((text) => ({ name: decodeURIComponent(u.split('/').pop() ?? u), text }))))
+    .then((files) => {
+      app.loadProject(files);
+      loaded();
+      if (params.get('view') === 'schematic') app.setSpace('schematic');
+    })
+    .catch((e) => (status.textContent = `Could not load: ${(e as Error).message}`));
 } else {
   try {
     const saved = JSON.parse(localStorage.getItem(AUTOSAVE) ?? 'null') as { name: string; at: number; data: string } | null;
@@ -130,6 +163,79 @@ tools.addEventListener('click', (e) => {
   const m = (e.target as HTMLElement).closest('button')?.dataset.mode as Mode | undefined;
   if (m) app.setMode(m);
 });
+// ---- layout / schematic spaces ----
+const spaces = $('spaces');
+spaces.addEventListener('click', (e) => {
+  const s = (e.target as HTMLElement).closest('button')?.dataset.space as Space | undefined;
+  if (s) app.setSpace(s);
+});
+const sheetSelect = $<HTMLSelectElement>('sheetSelect');
+const syncSpace = () => {
+  const schMode = app.space === 'schematic';
+  for (const b of spaces.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.space === app.space);
+  $('schTools').classList.toggle('hidden', !schMode);
+  $('sch').classList.toggle('hidden', !schMode);
+  app.glCanvas.classList.toggle('hidden', schMode);
+  app.overlay.classList.toggle('hidden', schMode);
+  wrap.classList.toggle('sch-mode', schMode);
+  tools.classList.toggle('hidden', schMode);
+  $('layerBtn').classList.toggle('hidden', schMode);
+  $('flipBtn').classList.toggle('hidden', schMode);
+  // sheet list
+  sheetSelect.replaceChildren(
+    ...sch.sheets().map((s) => {
+      const o = document.createElement('option');
+      o.value = s.uid;
+      o.textContent = s.name === 'Root' ? 'Root sheet' : `↳ ${s.name}`;
+      o.selected = s.uid === sch.sheet()?.uid;
+      return o;
+    }),
+  );
+  if (schMode) sch.requestRender();
+  else app.requestRender();
+};
+sheetSelect.addEventListener('change', () => sch.openSheet(sheetSelect.value));
+for (const ev of ['space', 'doc', 'sheet'] as const) app.on(ev, syncSpace);
+for (const ev of ['change', 'selection', 'drc'] as const) app.on(ev, () => app.space === 'schematic' && sch.requestRender());
+const schToolSeg = $('schToolSeg');
+schToolSeg.addEventListener('click', (e) => {
+  const t = (e.target as HTMLElement).closest('button')?.dataset.tool as 'select' | 'wire' | undefined;
+  if (t) sch.setTool(t);
+});
+app.on('mode', () => {
+  for (const b of schToolSeg.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.tool === sch.tool);
+});
+const partSelect = $<HTMLSelectElement>('partSelect');
+for (const k of PART_KINDS) {
+  const o = document.createElement('option');
+  o.value = k.kind;
+  o.textContent = k.label;
+  partSelect.append(o);
+}
+const addPart = (kind: PartKind) => {
+  const pins = kind === 'ic' || kind === 'connector' ? Number(prompt('How many pins?', kind === 'ic' ? '8' : '4')) : undefined;
+  if (pins !== undefined && !(pins > 0)) return;
+  sch.addPart(kind, pins ? { pins } : {});
+};
+partSelect.addEventListener('change', () => {
+  if (partSelect.value) addPart(partSelect.value as PartKind);
+  partSelect.value = '';
+});
+const placeLabel = () => {
+  const name = prompt('Net label name (prefix with * for a global label):');
+  if (!name?.trim()) return;
+  const global = name.trim().startsWith('*');
+  sch.addLabel(sch.cursorPoint, global ? name.trim().slice(1) : name.trim(), global ? 'global' : 'local');
+};
+$('labelBtn').addEventListener('click', placeLabel);
+$('syncBtn').addEventListener('click', () => app.syncToPcb());
+$('newBtn').addEventListener('click', () => {
+  if (app.dirty && !confirm('Discard unsaved changes and start a new project?')) return;
+  app.newProject();
+  loaded();
+});
+showTab('layers');
+
 const layerBtn = $<HTMLButtonElement>('layerBtn');
 layerBtn.addEventListener('click', () => app.toggleActiveLayer());
 $('undoBtn').addEventListener('click', () => app.undo());
@@ -265,7 +371,60 @@ window.addEventListener('keydown', (e) => {
     return app.redo();
   }
   if (mod) return;
+  if (app.space === 'schematic') {
+    switch (e.key) {
+      case 'Escape':
+        if (sch.tool === 'wire') sch.setTool('select');
+        else app.select([]);
+        break;
+      case 'w':
+      case 'W':
+        sch.setTool('wire');
+        break;
+      case '/':
+        sch.toggleCorner();
+        break;
+      case 'l':
+      case 'L':
+        placeLabel();
+        break;
+      case 'a':
+      case 'A':
+        partSelect.focus();
+        partSelect.showPicker?.();
+        break;
+      case 'r':
+      case 'R':
+        sch.rotateSelection();
+        break;
+      case 'Delete':
+      case 'Backspace':
+        sch.deleteSelection();
+        break;
+      case 'u':
+      case 'U': {
+        const s = sch.sheet();
+        const block = s?.parent ? app.node(s.parent) : undefined;
+        const up = block?.type === 'block' && block.parent ? app.node(block.parent) : undefined;
+        if (up?.type === 'sheet') sch.openSheet(up.uid);
+        break;
+      }
+      case 'Home':
+      case '0':
+        sch.fit();
+        break;
+      case 'Tab':
+        app.setSpace('layout');
+        break;
+      default:
+        return;
+    }
+    return e.preventDefault();
+  }
   switch (e.key) {
+    case 'Tab':
+      app.setSpace('schematic');
+      break;
     case 'Escape':
       if (app.mode === 'route' && app.route.active) app.route.cancel();
       else if (app.mode === 'route') app.setMode('select');

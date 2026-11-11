@@ -22,11 +22,23 @@ export type NodeType =
   | 'circle'
   | 'arc'
   | 'polygon'
-  | 'rectangle';
+  | 'rectangle'
+  // schematic
+  | 'schematic'
+  | 'sheet'
+  | 'block'
+  | 'sheetPin'
+  | 'symbol'
+  | 'pin'
+  | 'wire'
+  | 'label'
+  | 'junction'
+  | 'noconnect';
 
 export const NODE_TYPES: readonly NodeType[] = [
   'root', 'layout', 'container', 'group', 'element', 'footprint', 'pad', 'trace', 'via',
   'fill', 'zone', 'net', 'text', 'line', 'circle', 'arc', 'polygon', 'rectangle',
+  'schematic', 'sheet', 'block', 'sheetPin', 'symbol', 'pin', 'wire', 'label', 'junction', 'noconnect',
 ];
 
 export interface Vec2 {

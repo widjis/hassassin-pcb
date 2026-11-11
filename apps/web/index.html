@@ -27,17 +27,20 @@
         <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
         <button id="saveBtn" title="Save as .hpcb (Cmd/Ctrl+S)">Save</button>
         <button id="fabBtn" title="Download Gerbers, drill, BOM and placement as a ZIP">Export fab</button>
-        <label class="btn primary">Open<input id="fileInput" type="file" accept=".kicad_pcb,.hpcb" hidden /></label>
+        <button id="newBtn" title="Start an empty project">New</button>
+        <label class="btn primary" title="Open a board, schematics (select several files) or a .hpcb project">Open<input id="fileInput" type="file" accept=".kicad_pcb,.kicad_sch,.hpcb" multiple hidden /></label>
       </div>
     </header>
     <main class="workspace">
       <aside class="sidebar left">
         <nav class="tabs" id="leftTabs">
+          <button data-tab="project">Project</button>
           <button data-tab="layers" class="active">Layers</button>
           <button data-tab="objects">Objects</button>
           <button data-tab="rules">Rules</button>
           <button data-tab="review">Review <span id="reviewBadge" class="badge"></span></button>
         </nav>
+        <section class="tab-body hidden" data-body="project" id="projectPanel"></section>
         <section class="tab-body" data-body="layers" id="layersPanel"></section>
         <section class="tab-body hidden" data-body="objects">
           <input id="treeFilter" class="filter" placeholder="Filter by name" spellcheck="false" />
@@ -47,10 +50,29 @@
         <section class="tab-body hidden" data-body="review" id="reviewPanel"></section>
       </aside>
       <div class="canvas-wrap" id="canvasWrap">
+        <div class="spacebar">
+          <div class="seg" id="spaces">
+            <button data-space="schematic">Schematic</button>
+            <button data-space="layout" class="on">Layout</button>
+          </div>
+          <div class="sch-tools" id="schTools">
+            <select id="sheetSelect" title="Sheet"></select>
+            <div class="seg" id="schToolSeg">
+              <button data-tool="select" class="on" title="Select and move (Esc)">Select</button>
+              <button data-tool="wire" title="Draw wires (W)">Wire</button>
+            </div>
+            <button id="labelBtn" title="Place a net label at the cursor (L)">Label</button>
+            <select id="partSelect" title="Add a part at the view centre (A)">
+              <option value="">+ Part…</option>
+            </select>
+            <button id="syncBtn" class="primary-outline" title="Push schematic connections into the board">Update PCB</button>
+          </div>
+        </div>
         <canvas id="gl"></canvas>
         <canvas id="overlay"></canvas>
+        <canvas id="sch" class="hidden"></canvas>
         <div class="drop-hint" id="dropHint">
-          <div>Drop a <b>.kicad_pcb</b> or <b>.hpcb</b> file here, or use <b>Open</b>.</div>
+          <div>Drop a <b>.kicad_pcb</b> (with its <b>.kicad_sch</b> files) or a <b>.hpcb</b> here — or start with <b>New</b>.</div>
           <button id="restoreBtn" class="hidden"></button>
         </div>
         <div class="statusbar" id="status"></div>
