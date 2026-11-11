@@ -36,7 +36,7 @@ only when all of its criteria pass.
 
 ### Milestone M1 — editor comfortable for manual work
 
-- [x] **S1. Wires follow moved symbols.** — done
+- [x] **S1. Wires follow moved symbols.** — `34ebd5a`
   - Delivered: drag, R, X / Y in the editor and the `move_symbol` tool (CLI, MCP, agent). The chain of
     wires from a moved pin up to the next branch point is re-routed at right angles, avoiding symbol
     bodies and other nets; pieces left dangling are removed. Every result is checked against the netlist
