@@ -1076,3 +1076,63 @@ export function dragWireOps(doc: Doc, engine: StyleEngine, uid: string, d: Vec2)
   }
   return ops;
 }
+
+// ---------- clean wire paths (S7) ----------
+
+/**
+ * A right-angle path for a new wire from `from` to `to` that does not pass through symbol
+ * bodies or over pins, wires or labels of other nets (items already on the nets at either end
+ * may be touched: that connects nothing new). Tries a straight line or one bend first, then
+ * two bends, then a grid search with as few bends as practical. Returns null when there is no
+ * clean path nearby; the caller should then suggest net labels.
+ */
+export function routeWirePath(doc: Doc, engine: StyleEngine, sheetUid: string, from: Vec2, to: Vec2, opts: { horizontalFirst?: boolean } = {}): Vec2[] | null {
+  if (same(from, to)) return null;
+  const netOf = itemNets(doc, engine);
+  const all = obstacles(doc, engine, sheetUid, '');
+  // Nets already present at the two ends.
+  const own = new Set<string>();
+  all.points.forEach((p, i) => {
+    if (same(p, from) || same(p, to)) {
+      const n = netOf.get(all.pointOwners?.[i] ?? '');
+      if (n !== undefined) own.add(n);
+    }
+  });
+  all.segs.forEach(([a, b], i) => {
+    if (onSeg(from, a, b) || onSeg(to, a, b)) {
+      const n = netOf.get(all.segOwners?.[i] ?? '');
+      if (n !== undefined) own.add(n);
+    }
+  });
+  const keepP = all.points.map((_, i) => !own.has(netOf.get(all.pointOwners?.[i] ?? '') ?? '\u0000'));
+  const keepS = all.segs.map((_, i) => !own.has(netOf.get(all.segOwners?.[i] ?? '') ?? '\u0000'));
+  const o: Obstacles = {
+    points: all.points.filter((_, i) => keepP[i]),
+    pointOwners: all.pointOwners?.filter((_, i) => keepP[i]),
+    segs: all.segs.filter((_, i) => keepS[i]),
+    segOwners: all.segOwners?.filter((_, i) => keepS[i]),
+    boxes: all.boxes,
+  };
+  const tidy = (path: Vec2[]) => path.filter((p, i) => i === 0 || !same(p, path[i - 1]!));
+  // Straight or one bend, in both orders, then two bends.
+  // candidates(…, wasH=false) starts with horizontal-then-vertical.
+  for (const path of candidates(from, to, opts.horizontalFirst === false).slice(0, 2)) if (clear(tidy(path), o)) return tidy(path);
+  for (const path of candidates(from, to, true).slice(2)) if (clear(tidy(path), o)) return tidy(path);
+  for (const margin of [12.7, 38.1]) {
+    const path = gridPath(from, to, o, margin);
+    if (path) return tidy(path);
+  }
+  return null;
+}
+
+/** Ops for a wire along `path` (one wire per straight piece) on a sheet. */
+export function wirePathOps(doc: Doc, sheetUid: string, path: Vec2[]): Op[] {
+  const sheet = doc.nodes.get(sheetUid);
+  if (!sheet) return [];
+  const ops: Op[] = [];
+  for (let i = 0; i + 1 < path.length; i++) {
+    if (same(path[i]!, path[i + 1]!)) continue;
+    ops.push({ op: 'add', parent: sheetUid, index: sheet.children.length + i, tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: round(path[i]!) }, { name: 'end', value: round(path[i + 1]!) }], parent: sheetUid, children: [] }] } });
+  }
+  return ops;
+}

@@ -9,6 +9,10 @@ async function routed(): Promise<Project> {
   await runTool(p, 'connect_pins', { from: 'R1.2', to: 'D1.2' });
   await runTool(p, 'add_power', { pin: 'R1.1', net: '+5V' });
   await runTool(p, 'add_power', { pin: 'D1.1', net: 'GND' });
+  // A second part on +5V, so the board has more than one trace to work with.
+  await runTool(p, 'add_part', { kind: 'resistor', x: -15.24, y: 0 });
+  await runTool(p, 'add_power', { pin: 'R2.1', net: '+5V' });
+  await runTool(p, 'add_power', { pin: 'R2.2', net: 'GND' });
   await runTool(p, 'update_pcb', {});
   await runTool(p, 'auto_place', {});
   await runTool(p, 'autoroute', {});

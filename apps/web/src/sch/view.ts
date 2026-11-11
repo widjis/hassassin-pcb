@@ -13,6 +13,8 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  routeWirePath,
+  wirePathOps,
   renameRefOps,
   setPartPropsOps,
   withJunctionsOps,
@@ -122,6 +124,9 @@ export class SchematicView {
   private clip: Clip | null = null;
   /** A paste in progress: follows the mouse until a click places it. */
   private swallowClick = false;
+  private wirePathCache: { key: string; value: { path: Vec2[]; clean: boolean } } | null = null;
+  /** Bumped on every document change (invalidates cached wire paths). */
+  private rev = 0;
   private pasting: { key: string; positions: { uid: string; name: string; value: Vec2 }[]; base: Vec2 } | null = null;
   /** Called with the sheet-space cursor (for presence). */
   onCursor: ((p: Vec2) => void) | null = null;
@@ -137,6 +142,7 @@ export class SchematicView {
     this.app = app;
     this.canvas = canvas;
     new ResizeObserver(() => this.requestRender()).observe(canvas);
+    app.on('change', () => this.rev++);
     this.bind();
   }
 
@@ -290,18 +296,25 @@ export class SchematicView {
     ]);
   }
 
+  /** Path the wire tool would draw from `a` to `b`: clean if possible, else the plain L (flagged). */
+  private wirePath(a: Vec2, b: Vec2): { path: Vec2[]; clean: boolean } {
+    const s = this.sheet();
+    const key = `${a.x},${a.y}>${b.x},${b.y}|${this.wireHorizontalFirst}|${this.rev}`;
+    if (this.wirePathCache?.key === key) return this.wirePathCache.value;
+    const routed = s && this.app.doc && this.app.engine ? routeWirePath(this.app.doc, this.app.engine, s.uid, a, b, { horizontalFirst: this.wireHorizontalFirst }) : null;
+    const mid = this.wireHorizontalFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
+    const value = routed ? { path: routed, clean: true } : { path: [a, mid, b], clean: false };
+    this.wirePathCache = { key, value };
+    return value;
+  }
+
   private addWire(a: Vec2, b: Vec2): void {
     const s = this.sheet();
-    if (!s || dist(a, b) < 1e-6) return;
-    const mid = this.wireHorizontalFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
-    const segs = [[a, mid], [mid, b]].filter(([p, q]) => dist(p!, q!) > 1e-6);
-    const ops: Op[] = segs.map(([p, q], i) => ({
-      op: 'add',
-      parent: s.uid,
-      index: s.children.length + i,
-      tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: p! }, { name: 'end', value: q! }], parent: s.uid, children: [] }] },
-    }));
-    this.app.apply('Draw wire', this.withJunctions(ops));
+    const doc = this.app.doc;
+    if (!s || !doc || dist(a, b) < 1e-6) return;
+    const { path, clean } = this.wirePath(a, b);
+    if (this.app.apply('Draw wire', this.withJunctions(wirePathOps(doc, s.uid, path))) && !clean)
+      this.app.say('No clean path: this wire crosses a part or touches another net. Undo and use net labels (L), or move parts to make room.');
   }
 
   cancelWire(): void {
@@ -1066,20 +1079,20 @@ export class SchematicView {
       ctx.moveTo(q.x, q.y - 8);
       ctx.lineTo(q.x, q.y + 8);
       ctx.stroke();
-      if (this.wireStart) {
-        const a = this.wireStart;
-        const b = this.cursor;
-        const mid = this.wireHorizontalFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
-        ctx.strokeStyle = C.wire;
+      if (this.wireStart && dist(this.wireStart, this.cursor) > 1e-6) {
+        const { path, clean } = this.wirePath(this.wireStart, this.cursor);
+        ctx.strokeStyle = clean ? C.wire : '#e5484d';
         ctx.globalAlpha = 0.6;
         ctx.lineWidth = lw(0.15);
+        if (!clean) ctx.setLineDash([6, 4]);
         ctx.beginPath();
-        const pa = S(a);
-        const pm = S(mid);
-        ctx.moveTo(pa.x, pa.y);
-        ctx.lineTo(pm.x, pm.y);
-        ctx.lineTo(q.x, q.y);
+        path.forEach((pt, i) => {
+          const sp = S(pt);
+          if (i === 0) ctx.moveTo(sp.x, sp.y);
+          else ctx.lineTo(sp.x, sp.y);
+        });
         ctx.stroke();
+        ctx.setLineDash([]);
         ctx.globalAlpha = 1;
       }
     }

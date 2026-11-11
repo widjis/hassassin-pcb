@@ -67,6 +67,8 @@ import {
   withJunctionsOps,
   renameRefOps,
   annotateOps,
+  routeWirePath,
+  wirePathOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -591,35 +593,21 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'connect_pins',
-    description: 'Draw a schematic wire between two pins on the same sheet, e.g. from "R1.2" to "D1.2". This is the normal way to connect parts: wires make the schematic easy to read and trace. The wire bends once (L-shape) and avoids passing over other pins when it can; place parts so their connected pins are close and aligned. Use add_label only for long-distance or cross-sheet signals, and add_power for GND/supply rails.',
+    description: 'Draw a schematic wire between two pins on the same sheet, e.g. from "R1.2" to "D1.2". This is the normal way to connect parts: wires make the schematic easy to read and trace. The wire is routed at right angles around part bodies and never touches pins or wires of other nets (as few bends as practical); if no clean path exists the call fails and suggests labels. Place parts so their connected pins are close and aligned. Use add_label only for long-distance or cross-sheet signals, and add_power for GND/supply rails.',
     mutates: true,
     input: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] },
     run: (p, a) => {
       const A = pinOf(p, str(a.from, 'from'));
       const B = pinOf(p, str(a.to, 'to'));
       if (A.sheet.uid !== B.sheet.uid) throw new ToolError('Pins are on different sheets; use add_label with the same net name on both.');
-      const others: Vec2[] = [];
-      for (const n of p.doc.nodes.values()) {
-        if (n.type !== 'pin' || n.uid === A.pin.uid || n.uid === B.pin.uid || sheetOf(p.doc, n)?.uid !== A.sheet.uid) continue;
-        const q = pinPoint(p.doc, p.engine, n);
-        if (q) others.push(q);
-      }
-      const onSeg = (q: Vec2, s: Vec2, t: Vec2) => Math.abs(dist(s, q) + dist(q, t) - dist(s, t)) < 1e-3;
-      const paths = [
-        [A.at, { x: B.at.x, y: A.at.y }, B.at],
-        [A.at, { x: A.at.x, y: B.at.y }, B.at],
-      ];
-      const collisions = (path: Vec2[]) => others.filter((q) => path.slice(1).some((t, i) => onSeg(q, path[i]!, t))).length;
-      const path = paths.sort((x, y) => collisions(x) - collisions(y))[0]!;
-      const hits = collisions(path);
-      const ops: Op[] = [];
-      for (let i = 0; i + 1 < path.length; i++) {
-        if (dist(path[i]!, path[i + 1]!) < 1e-6) continue;
-        ops.push({ op: 'add', parent: A.sheet.uid, index: A.sheet.children.length + i, tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: path[i]! }, { name: 'end', value: path[i + 1]! }], parent: A.sheet.uid, children: [] }] } });
-      }
-      apply(p, 'Connect pins', ops);
+      const path = routeWirePath(p.doc, p.engine, A.sheet.uid, A.at, B.at);
+      if (!path)
+        throw new ToolError(
+          `No clean wire path from ${a.from} to ${a.to}: every route would cross a part body or touch another net. Move the parts closer / clear the way (move_symbol), or connect them with net labels instead (add_label with the same name on both pins).`,
+        );
+      apply(p, 'Connect pins', wirePathOps(p.doc, A.sheet.uid, path));
       const net = extractNetlist(p.doc, p.engine).byPin.get(String(a.from));
-      return { connected: [a.from, a.to], net, ...(hits ? { warning: `The wire passes over ${hits} other pin(s) and connects them too; consider labels instead.` } : {}) };
+      return { connected: [a.from, a.to], net, bends: path.length - 2 };
     },
   },
   {

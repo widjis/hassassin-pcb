@@ -15,7 +15,7 @@ import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
 import { allSheets, pinPoint, sheetItems } from './schematic.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -25,6 +25,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   danglingWire: 'Wire end not connected',
   danglingLabel: 'Label not connected',
   duplicateRef: 'Duplicate reference',
+  wireOverPin: 'Wire runs over a pin',
 };
 
 export interface ErcViolation {
@@ -103,6 +104,19 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
         const touches = points.some((p) => dist(p, end) < EPS) || wires.some((v) => v !== w && distToSegment(end, v.a, v.b) < EPS);
         if (!touches) out.push({ id: `dw:${w.n.uid}:${end.x},${end.y}`, kind: 'danglingWire', severity: 'warning', message: 'Wire end is not connected to anything', sheet: sheet.uid, at: end, uids: [w.n.uid] });
       }
+    }
+    // A pin in the middle of a wire is connected, but a reader cannot tell it from a wire that
+    // only passes by: wires should end on pins (or branch with a junction).
+    for (const n of its) {
+      if (n.type !== 'pin') continue;
+      const p = pointOf.get(n.uid);
+      if (!p) continue;
+      const w = wires.find((v) => dist(p, v.a) > EPS && dist(p, v.b) > EPS && distToSegment(p, v.a, v.b) < EPS);
+      if (!w) continue;
+      const sym = n.parent ? doc.nodes.get(n.parent) : undefined;
+      if (sym?.props.power) continue;
+      const ref = String(sym?.props.ref ?? sym?.name ?? '?');
+      out.push({ id: `wop:${n.uid}`, kind: 'wireOverPin', severity: 'warning', message: `A wire runs over ${ref} pin ${n.name || ''}`.trim() + ' instead of ending on it; route the wire around the pin or end it there', sheet: sheet.uid, at: p, uids: [w.n.uid, n.uid] });
     }
     // Every connectable point on the sheet, tagged with its owner.
     const anchors: { uid: string; p: Vec2 }[] = [];
