@@ -33,7 +33,9 @@ describe('S7: wires that avoid symbols and pins', () => {
     await runTool(p, 'add_part', { kind: 'resistor', x: 50.8, y: 0 });
     // Labels of another net on all four grid points next to R2.2: every approach would touch one.
     const sheet = [...p.doc.nodes.values()].find((n) => n.type === 'sheet')!;
-    const tip = { x: 50.8, y: 3.81 };
+    const r2 = sym(p, 'R2');
+    const tipPin = r2.children.map((c) => p.doc.nodes.get(c)!).find((k) => k.type === 'pin' && k.name === '2')!;
+    const tip = (await import('@hassassin/core')).pinPoint(p.doc, p.engine, tipPin)!;
     const ops: Op[] = [[1.27, 0], [-1.27, 0], [0, 1.27], [0, -1.27]].map(([dx, dy], i) => ({
       op: 'add',
       parent: sheet.uid,

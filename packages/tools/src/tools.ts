@@ -70,6 +70,9 @@ import {
   routeWirePath,
   routeConnection,
   wirePathOps,
+  pinGridOrigin,
+  symbolPinLocals,
+  tidyWiresOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -531,9 +534,9 @@ export const TOOLS: ToolDef[] = [
       const kind = str(a.kind, 'kind') as PartKind;
       if (!PART_KINDS.some((k) => k.kind === kind)) throw new ToolError(`Unknown kind "${kind}"`);
       const sheet = sheetByName(p, a.sheet);
-      const g = 1.27;
-      const at = { x: Math.round(num(a.x, 'x') / g) * g, y: Math.round(num(a.y, 'y') / g) * g };
       const spec = makeSymbol(kind, { ...(a.pins ? { pins: num(a.pins, 'pins') } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}), ...(Array.isArray(a.pin_names) ? { pinNames: a.pin_names.map(String) } : {}) });
+      // Pins land on the 2.54 mm grid, so wires to other parts can run straight.
+      const at = pinGridOrigin({ x: num(a.x, 'x'), y: num(a.y, 'y') }, spec.pins.map((q) => q.at));
       const ref = typeof a.ref === 'string' && a.ref.trim() ? a.ref.trim() : undefined;
       if (ref && resolveTargets(p, ref).length) throw new ToolError(`Reference ${ref} is already used`);
       const { op, uid } = addSymbolOp(p.doc, sheet.uid, spec, at, ref);
@@ -556,7 +559,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'move_symbol',
-    description: 'Move, rotate or mirror a schematic symbol; wires on its pins follow (bent to stay at right angles), and short stubs to power symbols / labels move along with their symbols, so connections never break. Positions in mm on the 1.27 mm grid. mirror: "h" flips left↔right, "v" flips top↔bottom (toggles). unit selects one unit of a multi-unit part (default: all units move by the same offset).',
+    description: 'Move, rotate or mirror a schematic symbol; wires on its pins follow (bent to stay at right angles), and short stubs to power symbols / labels move along with their symbols, so connections never break. Positions in mm; the part is snapped so its pins land on the 2.54 mm grid (line up connected pins on the same row / column for straight wires). mirror: "h" flips left↔right, "v" flips top↔bottom (toggles). unit selects one unit of a multi-unit part (default: all units move by the same offset).',
     mutates: true,
     input: { type: 'object', properties: { ref: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, rotation: { type: 'number', description: 'degrees, counter-clockwise' }, mirror: { type: 'string', enum: ['h', 'v'] }, unit: { type: 'number' } }, required: ['ref'] },
     run: (p, a) => {
@@ -582,7 +585,7 @@ export const TOOLS: ToolDef[] = [
       // Connections must stay exactly as they were: refuse a spot where pins or wires would land on other nets.
       const partition = () => extractNetlist(p.doc, p.engine).nets.map((n) => n.pins.map((x) => `${x.ref}.${x.pin}`).sort().join(' ')).filter((g0) => g0.includes(' ')).sort();
       const before = partition();
-      apply(p, `Move ${ref}`, moveSymbolsOps(p.doc, p.engine, moves));
+      apply(p, `Move ${ref}`, moveSymbolsOps(p.doc, p.engine, moves, { pinGrid: true }));
       const after = partition();
       if (JSON.stringify(after) !== JSON.stringify(before)) {
         p.history.undo();
@@ -646,16 +649,11 @@ export const TOOLS: ToolDef[] = [
       let path: Vec2[] = [];
       let port: Vec2 = P.at;
       for (let k = 1; k <= 8; k++) {
-        if (out.y !== 0) {
-          // Vertical pin: straight stub; if taken, jog sideways.
-          const p1 = { x: P.at.x, y: P.at.y + out.y * g };
-          path = k === 1 ? [P.at, p1] : [P.at, p1, { x: p1.x + (k - 1) * g, y: p1.y }];
-        } else {
-          // Horizontal pin: step out, then down (ground) or up (supply).
-          const p1 = { x: P.at.x + out.x * g * k, y: P.at.y };
-          path = [P.at, p1, { x: p1.x, y: p1.y + (down ? g : -g) }];
-        }
-        port = path[path.length - 1]!;
+        // A straight stub out of the pin, in the pin's own direction (no jog); if the spot is
+        // taken by another power symbol, the stub gets longer instead.
+        const p1 = { x: P.at.x + out.x * g * k, y: P.at.y + out.y * g * k };
+        path = [P.at, p1];
+        port = p1;
         if (free(port)) break;
       }
       const ops: Op[] = [];
@@ -686,6 +684,23 @@ export const TOOLS: ToolDef[] = [
     mutates: true,
     input: { type: 'object', properties: {} },
     run: (p, _a, ctx) => syncPcb(p, ctx),
+  },
+  {
+    name: 'tidy_wires',
+    description: 'Straighten schematic wiring: wires that bend between two points are re-routed (for example sliding a T along the wire it joins), and where only a small part is off by a grid step or two (a divider, a pull-up), that part is moved so the pins line up. Connections never change. Run it after wiring a block. move_parts: false only re-routes.',
+    mutates: true,
+    input: { type: 'object', properties: { sheet: { type: 'string', description: 'Sheet name or path (default: every sheet)' }, move_parts: { type: 'boolean' } } },
+    run: (p, a) => {
+      const sheets = [...p.doc.nodes.values()].filter((n) => n.type === 'sheet' && (typeof a.sheet !== 'string' || !a.sheet.trim() || n.name === a.sheet.trim() || sheetPath(p.doc, n) === a.sheet.trim()));
+      if (!sheets.length) throw new ToolError(`No sheet ${String(a.sheet)}`);
+      const report: { sheet: string; bendsBefore: number; bendsAfter: number; rerouted: number; moved: string[] }[] = [];
+      for (const sh of sheets) {
+        const r = tidyWiresOps(p.doc, p.engine, sh.uid, { ...(a.move_parts === false ? { moveParts: false } : {}) });
+        apply(p, 'Tidy wires', r.ops);
+        report.push({ sheet: sheetPath(p.doc, sh), bendsBefore: r.before, bendsAfter: r.after, rerouted: r.rerouted, moved: r.moved });
+      }
+      return { sheets: report, connections: 'unchanged' };
+    },
   },
   {
     name: 'annotate',
@@ -748,7 +763,8 @@ export const TOOLS: ToolDef[] = [
       }
       const clip = copyItems(p.doc, p.engine, items);
       if (!clip) throw new ToolError('Nothing to copy');
-      const g = 1.27;
+      // Whole pin-grid steps, so copied pins stay on the 2.54 mm grid.
+      const g = 2.54;
       const dx = Math.round((optNum(a.dx, 'dx') ?? 25.4) / g) * g;
       const dy = Math.round((optNum(a.dy, 'dy') ?? 0) / g) * g;
       const before = groupsOf(p);

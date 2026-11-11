@@ -4,12 +4,15 @@ import { newProject, runTool, type Project } from '@hassassin/tools';
 
 const refs = (p: Project) => [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && !n.props.power).map((n) => `${n.props.ref}@${JSON.stringify(p.engine.get(n.uid, 'position')!.value)}`).sort();
 const refAt = (p: Project, x: number, y: number) => {
-  const n = [...p.doc.nodes.values()].find((s) => {
-    if (s.type !== 'symbol' || s.props.power) return false;
+  // Parts snap so their pins sit on the 2.54 mm grid: take the symbol nearest to (x, y).
+  let best: { ref: string; d: number } | null = null;
+  for (const s of p.doc.nodes.values()) {
+    if (s.type !== 'symbol' || s.props.power) continue;
     const v = p.engine.get(s.uid, 'position')!.value as { x: number; y: number };
-    return Math.abs(v.x - x) < 1e-6 && Math.abs(v.y - y) < 1e-6;
-  });
-  return String(n?.props.ref);
+    const d = Math.hypot(v.x - x, v.y - y);
+    if (!best || d < best.d) best = { ref: String(s.props.ref), d };
+  }
+  return best && best.d < 2.6 ? best.ref : 'none';
 };
 const groups = (p: Project) =>
   extractNetlist(p.doc, p.engine).nets.map((n) => n.pins.map((x) => `${x.ref}.${x.pin}`).sort().join(' ')).filter((g) => g.includes(' ')).sort();

@@ -98,6 +98,7 @@ How to work:
   - Use net labels only for signals that run between blocks or far across the sheet (for example SDA, SCL, LED_DATA), and give them clear names.
   - Keep blocks apart (power, MCU, LED driver, sensors, connectors) and leave room between them.
   - To tidy a block after wiring, move_symbol keeps every connection; there is no need to rewire.
+  - Parts snap so their pins sit on the 2.54 mm grid. Place a part so the pin it connects to is on the same row (or column) as the other pin, then the wire is straight; run tidy_wires after wiring a block to straighten what is left.
 - Be concise. When you finish, summarise what changed and what the user should look at next.`;
 
 export interface AgentOptions {

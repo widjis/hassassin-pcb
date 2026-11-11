@@ -14,7 +14,7 @@ import { applyOps, type Op } from './commands.ts';
 import type { Doc, DocNode, Vec2 } from './model.ts';
 import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
-import { sheetOf, symbolFrame, symToSheet, type Mirror, type SymbolFrame } from './schematic.ts';
+import { pinGridOrigin, sheetOf, symbolFrame, symbolPinLocals, symToSheet, type Mirror, type SymbolFrame } from './schematic.ts';
 import { extractNetlist } from './netlist.ts';
 
 export interface SymbolMove {
@@ -52,7 +52,7 @@ export function moveSymbolsOps(
   doc: Doc,
   engine: StyleEngine,
   moves: SymbolMove[],
-  opts: { orthogonal?: boolean; skip?: Set<string>; points?: { from: Vec2; to: Vec2 }[]; sheet?: string; pre?: Op[] } = {},
+  opts: { orthogonal?: boolean; skip?: Set<string>; points?: { from: Vec2; to: Vec2 }[]; sheet?: string; pre?: Op[]; pinGrid?: boolean } = {},
 ): Op[] {
   // `pre`: the caller's own edits (selected wires, labels …), applied together with these.
   const ops: Op[] = [...(opts.pre ?? [])];
@@ -63,13 +63,19 @@ export function moveSymbolsOps(
   const moved = new Map<string, { from: Vec2; to: Vec2 }>();
   const sheets = new Set<string>();
 
-  for (const m of moves) {
+  for (let m of moves) {
     const sym = doc.nodes.get(m.uid);
     if (!sym || sym.type !== 'symbol') continue;
     const sheet = sheetOf(doc, sym);
     if (sheet) sheets.add(sheet.uid);
     const oldF = symbolFrame(engine, sym.uid);
     const newF: SymbolFrame = { origin: m.position ?? oldF.origin, rot: m.rotation ?? oldF.rot, mirror: m.mirror ?? oldF.mirror };
+    if (opts.pinGrid && !sym.props.power) {
+      // Keep the pins on the 2.54 mm grid (also after a rotation moves them off it).
+      const snapped = pinGridOrigin(newF.origin, symbolPinLocals(doc, engine, sym.uid), newF.rot, newF.mirror);
+      if (!same(snapped, newF.origin) || m.position) m = { ...m, position: snapped };
+      newF.origin = m.position ?? newF.origin;
+    }
     if (m.position) ops.push({ op: 'setRule', uid: sym.uid, name: 'position', decl: { name: 'position', value: round(m.position) } });
     if (m.rotation !== undefined) ops.push({ op: 'setRule', uid: sym.uid, name: 'rotation', decl: { name: 'rotation', value: ((m.rotation % 360) + 360) % 360 } });
     if (m.mirror !== undefined) ops.push({ op: 'setRule', uid: sym.uid, name: 'mirror', decl: { name: 'mirror', value: m.mirror } });
@@ -886,7 +892,7 @@ export function transformSelectionOps(doc: Doc, engine: StyleEngine, uids: strin
     how === 'rotate' ? { rotation: (r + (m === 'none' ? 90 : 270)) % 360, mirror: m } : toggleMirror(r, m, how === 'mirror-h' ? 'h' : 'v');
   if (nodes.length === 1 && nodes[0]!.type === 'symbol') {
     const n = nodes[0]!;
-    return moveSymbolsOps(doc, engine, [{ uid: n.uid, ...turn(rot(n), mir(n)) }], { skip: new Set(uids) });
+    return moveSymbolsOps(doc, engine, [{ uid: n.uid, ...turn(rot(n), mir(n)) }], { skip: new Set(uids), pinGrid: true });
   }
   // Centre of everything selected, on the grid so turned items stay on it.
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

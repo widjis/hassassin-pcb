@@ -13,6 +13,9 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  pinGridOrigin,
+  symbolPinLocals,
+  PIN_GRID,
   routeWirePath,
   wirePathOps,
   renameRefOps,
@@ -342,7 +345,7 @@ export class SchematicView {
     const doc = this.app.doc;
     const e = this.app.engine;
     if (!doc || !e) return;
-    const ops = transformSelectionOps(doc, e, [...this.app.selection], 'rotate', SCH_GRID);
+    const ops = transformSelectionOps(doc, e, [...this.app.selection], 'rotate', PIN_GRID);
     if (ops.length) this.applyKeepingNets('Rotate', ops, 'Rotating');
   }
 
@@ -368,7 +371,7 @@ export class SchematicView {
     const doc = this.app.doc;
     const e = this.app.engine;
     if (!doc || !e) return;
-    const ops = transformSelectionOps(doc, e, [...this.app.selection], axis === 'h' ? 'mirror-h' : 'mirror-v', SCH_GRID);
+    const ops = transformSelectionOps(doc, e, [...this.app.selection], axis === 'h' ? 'mirror-h' : 'mirror-v', PIN_GRID);
     if (ops.length) this.applyKeepingNets(axis === 'h' ? 'Mirror left–right' : 'Mirror top–bottom', ops, 'Mirroring');
     else this.app.say('Select something to mirror.');
   }
@@ -503,7 +506,7 @@ export class SchematicView {
     if (!doc || !s) return;
     this.finishPaste();
     const at = this.cursor;
-    const offset = this.snap({ x: at.x - clip.anchor.x, y: at.y - clip.anchor.y });
+    const offset = snapToGrid({ x: at.x - clip.anchor.x, y: at.y - clip.anchor.y }, PIN_GRID);
     const res = pasteOps(doc, s.uid, clip, offset);
     const key = newUid('paste');
     if (!this.app.apply(label, res.ops, key)) return;
@@ -515,7 +518,7 @@ export class SchematicView {
   private followPaste(p: Vec2): void {
     const ps = this.pasting;
     if (!ps) return;
-    const d = this.snap({ x: p.x - ps.base.x, y: p.y - ps.base.y });
+    const d = snapToGrid({ x: p.x - ps.base.x, y: p.y - ps.base.y }, PIN_GRID);
     const ops: Op[] = ps.positions.map((r) => ({ op: 'setRule', uid: r.uid, name: r.name, decl: { name: r.name, value: { x: r.value.x + d.x, y: r.value.y + d.y } } }));
     if (ops.length) this.app.apply('Paste', ops, ps.key);
   }
@@ -657,7 +660,15 @@ export class SchematicView {
           d.x = e.clientX;
           d.y = e.clientY;
         } else if (d.moved && d.kind === 'move') {
-          const delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, SCH_GRID);
+          let delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, SCH_GRID);
+          // With symbols in the move, step so the first one's pins land on the 2.54 mm grid;
+          // everything else moves by the same offset, so the selection stays rigid.
+          const lead = d.symbols[0];
+          if (lead && this.app.doc && this.app.engine) {
+            const f = symbolFrame(this.app.engine, lead.uid);
+            const to = pinGridOrigin({ x: lead.at.x + p.x - d.start.x, y: lead.at.y + p.y - d.start.y }, symbolPinLocals(this.app.doc, this.app.engine, lead.uid), f.rot, f.mirror);
+            delta = { x: to.x - lead.at.x, y: to.y - lead.at.y };
+          }
           if (d.wireOnly && this.app.doc && this.app.engine) {
             const last = d.last ?? { x: 0, y: 0 };
             const step = dragWireOps(this.app.doc, this.app.engine, d.wireOnly, { x: delta.x - last.x, y: delta.y - last.y });

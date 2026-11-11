@@ -32,6 +32,34 @@ export function symToSheet(f: SymbolFrame, p: Vec2): Vec2 {
   return { x: f.origin.x + m.x, y: f.origin.y + m.y };
 }
 
+/** Pins of placed symbols sit on this grid (mm), so wires between parts can run straight. */
+export const PIN_GRID = 2.54;
+
+/**
+ * The symbol origin nearest to `at` that puts its pins (symbol-local `pins`) on the pin grid,
+ * for the given rotation / mirror. Without pins, `at` is snapped to half the pin grid.
+ */
+export function pinGridOrigin(at: Vec2, pins: Vec2[], rot = 0, mirror: Mirror = 'none', grid = PIN_GRID): Vec2 {
+  const r4 = (v: number) => Math.round(v * 10000) / 10000;
+  const pin = pins[0];
+  if (!pin) return { x: r4(Math.round(at.x / (grid / 2)) * (grid / 2)), y: r4(Math.round(at.y / (grid / 2)) * (grid / 2)) };
+  const q = symToSheet({ origin: at, rot, mirror }, pin);
+  const snapped = { x: Math.round(q.x / grid) * grid, y: Math.round(q.y / grid) * grid };
+  return { x: r4(at.x + snapped.x - q.x), y: r4(at.y + snapped.y - q.y) };
+}
+
+/** Local pin positions of a placed symbol (visible pins first). */
+export function symbolPinLocals(doc: Doc, engine: StyleEngine, symbolUid: string): Vec2[] {
+  const sym = doc.nodes.get(symbolUid);
+  const out: { p: Vec2; hidden: boolean }[] = [];
+  for (const c of sym?.children ?? []) {
+    const n = doc.nodes.get(c);
+    const p = n?.type === 'pin' ? vec(engine.get(n.uid, 'position')?.value) : undefined;
+    if (p) out.push({ p, hidden: !!n!.props.hidden });
+  }
+  return out.sort((a, b) => Number(a.hidden) - Number(b.hidden)).map((x) => x.p);
+}
+
 /** Sheet-space connection point of a pin. */
 export function pinPoint(doc: Doc, engine: StyleEngine, pin: DocNode): Vec2 | null {
   const sym = pin.parent ? doc.nodes.get(pin.parent) : undefined;

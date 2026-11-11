@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -285,6 +285,18 @@ const openAnnotate = () => {
   dlg.showModal();
 };
 $('annotateBtn').addEventListener('click', openAnnotate);
+
+// Tidy wires (S8): straighten bends on this sheet, as one undo step.
+$('tidyBtn').addEventListener('click', () => {
+  const doc = app.doc;
+  const engine = app.engine;
+  const sheet = sch.sheet();
+  if (!doc || !engine || !sheet) return;
+  const r = tidyWiresOps(doc, engine, sheet.uid);
+  if (!r.ops.length) return app.say('Nothing to straighten on this sheet.');
+  app.apply('Tidy wires', withJunctionsOps(doc, engine, r.ops));
+  app.say(`Bends ${r.before} → ${r.after}: ${r.rerouted} wire${r.rerouted === 1 ? '' : 's'} re-routed${r.moved.length ? `, moved ${r.moved.join(', ')}` : ''}. Connections are unchanged.`);
+});
 $('newBtn').addEventListener('click', () => {
   if (app.dirty && !confirm('Discard unsaved changes and start a new project?')) return;
   app.newProject();
