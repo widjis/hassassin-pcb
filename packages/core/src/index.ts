@@ -29,3 +29,4 @@ export * from './clipboard.ts';
 export * from './annotate.ts';
 export * from './tidy.ts';
 export * from './textLayout.ts';
+export * from './arrange.ts';

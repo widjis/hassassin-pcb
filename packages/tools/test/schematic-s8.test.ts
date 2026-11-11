@@ -136,4 +136,41 @@ describe('S8: pin grid and jog removal', () => {
     const again = (await import('@hassassin/tools')).openProject([{ name: 't.hpcb', text: (await import('@hassassin/tools')).saveProject(p) }]);
     expect(core.schematicGrid(again.doc)).toEqual({ pin: 5.08, wire: 2.54 });
   });
+
+  it('align and distribute line parts up; wires follow and connections stay', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    for (const [x, y] of [[0, 0], [12.7, 7.62], [33.02, -5.08]] as const) await runTool(p, 'add_part', { kind: 'capacitor', x, y });
+    await runTool(p, 'connect_pins', { from: 'C1.1', to: 'C2.1' });
+    await runTool(p, 'connect_pins', { from: 'C2.1', to: 'C3.1' });
+    const before = groups(p);
+    await runTool(p, 'align', { refs: 'C1 C2 C3', mode: 'top' });
+    const tops = ['C1', 'C2', 'C3'].map((r) => core.symbolBounds(p.doc, p.engine, [...p.doc.nodes.values()].find((n) => n.props.ref === r)!.uid).minY);
+    expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1e-6);
+    expect(groups(p)).toEqual(before);
+    await runTool(p, 'align', { refs: 'C1 C2 C3', mode: 'distributeX' });
+    const xs = ['C1', 'C2', 'C3'].map((r) => core.symbolBounds(p.doc, p.engine, [...p.doc.nodes.values()].find((n) => n.props.ref === r)!.uid)).sort((a, b) => a.minX - b.minX);
+    const g1 = xs[1]!.minX - xs[0]!.maxX, g2 = xs[2]!.minX - xs[1]!.maxX;
+    expect(Math.abs(g1 - g2)).toBeLessThanOrEqual(2.54 + 1e-6); // within one grid step after snapping
+    expect(groups(p)).toEqual(before);
+  });
+
+  it('place_relative puts decoupling capacitors in a row below the IC', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    await runTool(p, 'add_part', { kind: 'ic', x: 0, y: 0, pins: 8 });
+    for (const x of [50, 70, 90]) await runTool(p, 'add_part', { kind: 'capacitor', x, y: 40 });
+    await runTool(p, 'place_relative', { anchor: 'U1', refs: 'C1 C2 C3', side: 'below' });
+    const u = core.symbolBounds(p.doc, p.engine, [...p.doc.nodes.values()].find((n) => n.props.ref === 'U1')!.uid);
+    const cs = ['C1', 'C2', 'C3'].map((r) => core.symbolBounds(p.doc, p.engine, [...p.doc.nodes.values()].find((n) => n.props.ref === r)!.uid));
+    for (const c of cs) {
+      expect(c.minY).toBeGreaterThan(u.maxY);
+      expect(c.minY - u.maxY).toBeLessThan(10);
+    }
+    // In order, left to right, not overlapping, roughly centred under U1.
+    expect(cs[0]!.maxX).toBeLessThanOrEqual(cs[1]!.minX + 1e-6);
+    expect(cs[1]!.maxX).toBeLessThanOrEqual(cs[2]!.minX + 1e-6);
+    const mid = (cs[0]!.minX + cs[2]!.maxX) / 2;
+    expect(Math.abs(mid - (u.minX + u.maxX) / 2)).toBeLessThan(2.6);
+  });
 });

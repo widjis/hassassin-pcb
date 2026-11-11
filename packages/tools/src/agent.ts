@@ -99,6 +99,7 @@ How to work:
   - Keep blocks apart (power, MCU, LED driver, sensors, connectors) and leave room between them.
   - To tidy a block after wiring, move_symbol keeps every connection; there is no need to rewire.
   - Parts snap so their pins sit on the 2.54 mm grid. Place a part so the pin it connects to is on the same row (or column) as the other pin, then the wire is straight; run tidy_wires after wiring a block to straighten what is left.
+  - Keep the sheet compact and readable: build each block tightly around its main part (place_relative puts decoupling capacitors, pull-ups or dividers in a row next to an IC; align lines parts up), leave about 10 mm between blocks, and do not spread parts over the whole sheet. Texts are placed automatically so they do not overlap.
 - Be concise. When you finish, summarise what changed and what the user should look at next.`;
 
 export interface AgentOptions {

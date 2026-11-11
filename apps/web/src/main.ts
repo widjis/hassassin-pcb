@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -285,6 +285,14 @@ const openAnnotate = () => {
   dlg.showModal();
 };
 $('annotateBtn').addEventListener('click', openAnnotate);
+
+// Align / distribute the selected parts (S8); refused if a connection would change.
+const alignSelect = $('alignSelect') as HTMLSelectElement;
+alignSelect.addEventListener('change', () => {
+  const mode = alignSelect.value as AlignMode;
+  alignSelect.value = '';
+  if (mode) sch.alignSelection(mode);
+});
 
 // Schematic grid (S8, agreement 0.4): a project setting, shared with collaborators.
 const gridSelect = $('gridSelect') as HTMLSelectElement;

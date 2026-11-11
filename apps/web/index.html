@@ -80,6 +80,17 @@
             </select>
             <button id="libBtn" title="Search the part library (P)">Library</button>
             <button id="annotateBtn" title="Renumber references (R1, R2 …) in reading order">Annotate</button>
+            <select id="alignSelect" title="Align or spread the selected parts">
+              <option value="">Align…</option>
+              <option value="left">Align left</option>
+              <option value="right">Align right</option>
+              <option value="top">Align top</option>
+              <option value="bottom">Align bottom</option>
+              <option value="centerX">Align centres (column)</option>
+              <option value="centerY">Align centres (row)</option>
+              <option value="distributeX">Spread evenly ↔</option>
+              <option value="distributeY">Spread evenly ↕</option>
+            </select>
             <select id="gridSelect" title="Schematic grid: where part pins land / where wires snap">
               <option value="1.27/1.27">Grid 1.27</option>
               <option value="2.54/1.27">Grid 2.54 · wire 1.27</option>

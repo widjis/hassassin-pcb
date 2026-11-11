@@ -77,6 +77,10 @@ import {
   setSchematicGridOp,
   PIN_GRIDS,
   WIRE_GRIDS,
+  alignOps,
+  placeRelativeOps,
+  type AlignMode,
+  type Side,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -200,6 +204,28 @@ function copyTouches(p: Project, sheetUid: string, fresh: Set<string>): boolean 
     Math.min(a.x, b.x) - 1e-3 <= q.x && q.x <= Math.max(a.x, b.x) + 1e-3 && Math.min(a.y, b.y) - 1e-3 <= q.y && q.y <= Math.max(a.y, b.y) + 1e-3 &&
     Math.abs((b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)) < 1e-3;
   return pts.new.some((q) => segs.old.some((sg) => onSeg(q, sg)) || pts.old.some((r) => Math.abs(r.x - q.x) < 1e-3 && Math.abs(r.y - q.y) < 1e-3)) || pts.old.some((q) => segs.new.some((sg) => onSeg(q, sg)));
+}
+
+/** Symbol uids (first unit of each) for a list of references, in the given order. */
+function symbolsByRefs(p: Project, refs: string): string[] {
+  const out: string[] = [];
+  for (const r of refs.split(/[,\s]+/).filter(Boolean)) {
+    const n = [...p.doc.nodes.values()].find((x) => x.type === 'symbol' && (String(x.props.ref ?? x.name) === r || x.uid === r));
+    if (!n) throw new ToolError(`No schematic symbol ${r}`);
+    if (!out.includes(n.uid)) out.push(n.uid);
+  }
+  return out;
+}
+
+/** Apply a move-type edit only if every connection stays as it was. */
+function applyKeepingConnections(p: Project, label: string, ops: Op[]): void {
+  if (!ops.length) return;
+  const before = groupsOf(p);
+  apply(p, label, ops);
+  if (JSON.stringify(groupsOf(p)) !== JSON.stringify(before)) {
+    p.history.undo();
+    throw new ToolError(`${label} would change connections (pins or wires would land on other nets). Make room first, or move the parts one by one with move_symbol.`);
+  }
 }
 
 /** Connectivity as sorted pin groups ("R1.1 C1.1"), nets with one pin left out. */
@@ -704,6 +730,34 @@ export const TOOLS: ToolDef[] = [
       }
       apply(p, 'Schematic grid', [op]);
       return schematicGrid(p.doc);
+    },
+  },
+  {
+    name: 'align',
+    description: 'Align schematic parts (refs, e.g. "C1 C2 C3") by their outlines: left, right, top, bottom, centerX (same vertical axis), centerY (same row), or spread them evenly: distributeX / distributeY (first and last stay). Wires follow; pins stay on the pin grid; refused if a connection would change.',
+    mutates: true,
+    input: { type: 'object', properties: { refs: { type: 'string' }, mode: { type: 'string', enum: ['left', 'right', 'top', 'bottom', 'centerX', 'centerY', 'distributeX', 'distributeY'] } }, required: ['refs', 'mode'] },
+    run: (p, a) => {
+      const uids = symbolsByRefs(p, str(a.refs, 'refs'));
+      const ops = alignOps(p.doc, p.engine, uids, str(a.mode, 'mode') as AlignMode);
+      applyKeepingConnections(p, `Align ${a.mode}`, ops);
+      return { aligned: uids.length, mode: a.mode, connections: 'unchanged' };
+    },
+  },
+  {
+    name: 'place_relative',
+    description: 'Put schematic parts in a row next to an anchor part: side below / above / left / right of the anchor, gap mm from its outline (default 2 pin-grid steps), spacing mm between parts (default 1 step), in the given order, centred on the anchor. Example: decoupling capacitors below U1. Wires follow; refused if a connection would change. Use it to build compact blocks.',
+    mutates: true,
+    input: { type: 'object', properties: { anchor: { type: 'string' }, refs: { type: 'string' }, side: { type: 'string', enum: ['below', 'above', 'left', 'right'] }, gap: { type: 'number' }, spacing: { type: 'number' } }, required: ['anchor', 'refs', 'side'] },
+    run: (p, a) => {
+      const anchor = symbolsByRefs(p, str(a.anchor, 'anchor'))[0];
+      if (!anchor) throw new ToolError(`No schematic symbol ${a.anchor}`);
+      const uids = symbolsByRefs(p, str(a.refs, 'refs')).filter((u) => u !== anchor);
+      const gap = optNum(a.gap, 'gap');
+      const spacing = optNum(a.spacing, 'spacing');
+      const ops = placeRelativeOps(p.doc, p.engine, anchor, uids, str(a.side, 'side') as Side, { ...(gap !== undefined ? { gap } : {}), ...(spacing !== undefined ? { spacing } : {}) });
+      applyKeepingConnections(p, `Place next to ${a.anchor}`, ops);
+      return { placed: uids.length, anchor: a.anchor, side: a.side, connections: 'unchanged' };
     },
   },
   {

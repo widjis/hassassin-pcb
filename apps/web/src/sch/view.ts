@@ -13,6 +13,8 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  alignOps,
+  type AlignMode,
   layoutSheetTexts,
   type PlacedText,
   pinGridOrigin,
@@ -356,6 +358,16 @@ export class SchematicView {
     if (!doc || !e) return;
     const ops = transformSelectionOps(doc, e, [...this.app.selection], 'rotate', this.grid().pin);
     if (ops.length) this.applyKeepingNets('Rotate', ops, 'Rotating');
+  }
+
+  /** Align or spread the selected parts (at least two; three to spread). */
+  alignSelection(mode: AlignMode): void {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!doc || !e) return;
+    const ops = alignOps(doc, e, this.app.selection, mode);
+    if (!ops.length) return this.app.say(mode.startsWith('distribute') ? 'Select at least three parts to spread them.' : 'Select at least two parts to align them.');
+    this.applyKeepingNets(`Align ${mode}`, ops, 'Aligning');
   }
 
   /** Apply an edit that must not change connectivity; undo it and explain if it would. */
