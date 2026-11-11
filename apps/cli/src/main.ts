@@ -14,7 +14,6 @@ import { isHpcb, loadGeometry, readProject, toolContext, writeAny, writeProject 
 import { serveMcp } from './mcp.ts';
 import { openLive, parseLiveLink, runLive } from './live.ts';
 import { AgentSession, type AgentEvent } from '@hassassin/tools';
-import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
 
 const VERSION = '0.5.0';
 
@@ -200,6 +199,7 @@ async function agentCommand(positional: string[], flags: Record<string, string |
   const [projectPath, ...rest] = positional;
   const prompt = rest.join(' ').trim();
   if (!projectPath || !prompt) fail('Usage: hassassin agent <project.hpcb | share link> "<request>" [--mode ask] [-o out.hpcb]');
+  const { anthropicModel, hasAnthropicCredentials } = await import('../../../packages/tools/src/agentModel.ts');
   if (!hasAnthropicCredentials()) process.stderr.write('Note: no ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN set; trying the SDK\'s other credential sources.\n');
   const mode = flags.mode === 'ask' ? 'ask' : 'agent';
   const ctx = toolContext();

@@ -42,7 +42,7 @@ describe('agents on live projects', () => {
     await o.sc.connect();
     // Async spawn: the server runs in this process, so it must keep serving meanwhile.
     const out = await new Promise<string>((res) => {
-      const c = spawn(process.execPath, [BIN, 'add-part', s.link, 'resistor', '0', '0', '--value', '1k']);
+      const c = spawn(process.execPath, [BIN, 'add-part', s.link, 'resistor', '0', '0', '--value', '1k'], { env: { ...process.env, HASSASSIN_NO_KICAD: '1' } });
       let o = '';
       c.stdout.on('data', (d) => (o += d));
       c.on('close', () => res(o));
@@ -57,7 +57,7 @@ describe('agents on live projects', () => {
     const s = await shared();
     const o = observer(s.id, s.tokens.view);
     await o.sc.connect();
-    const child = spawn(process.execPath, [BIN, 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [BIN, 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HASSASSIN_NO_KICAD: '1' } });
     const pending = new Map<number, (v: any) => void>();
     let buf = '';
     child.stdout.on('data', (d) => {

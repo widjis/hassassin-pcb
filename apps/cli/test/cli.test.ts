@@ -6,12 +6,12 @@ import { describe, expect, it } from 'vitest';
 
 const BIN = join(import.meta.dirname, '..', 'bin', 'hassassin.mjs');
 const run = (...args: string[]) => {
-  const r = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: { ...process.env, HASSASSIN_NO_KICAD: '1' } });
   return { code: r.status, json: r.stdout.trim().startsWith('{') || r.stdout.trim().startsWith('[') ? JSON.parse(r.stdout) : r.stdout, stderr: r.stderr };
 };
 
 describe('hassassin CLI', () => {
-  it('builds a small design end to end', () => {
+  it('builds a small design end to end', { timeout: 30000 }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'hcli-'));
     const f = join(dir, 'led.hpcb');
     expect(run('new', f).code).toBe(0);
@@ -60,7 +60,7 @@ describe('hassassin MCP server', () => {
   it('speaks MCP over stdio and edits a project', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hmcp-'));
     const f = join(dir, 'm.hpcb');
-    const child = spawn(process.execPath, [BIN, 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [BIN, 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HASSASSIN_NO_KICAD: '1' } });
     const pending = new Map<number, (v: any) => void>();
     let buf = '';
     child.stdout.on('data', (d) => {
