@@ -282,6 +282,18 @@ port/label net untuk sinyal bernama.
   "Renamed …", "Created 3 tasks") yang bisa dibuka-tutup; durasi kerja total ditampilkan.
 - Pengguna bisa mengetik arahan saat agent bekerja ("guide while it works") atau
   menghentikannya.
+- **Hasil akhir sesi agent** (proyek pengguna, ±25 menit, berhenti karena kuota trial
+  habis): schematic awal 41 komponen / 24 net, layout belum dikerjakan. Laporan penutup
+  di chat terstruktur: *yang sudah tersedia* (blok rangkaian) → *hasil pemeriksaan*
+  (jumlah cek ERC yang lulus + temuan review teknis yang belum diperbaiki, mis.
+  proteksi polaritas, toleransi suplai, timing sinyal) → *koneksi yang perlu
+  diperhatikan* (pin per konektor) → *dokumen & pekerjaan tersisa* (spesifikasi,
+  rencana uji, catatan kepatuhan sebagai unduhan; layout, firmware, casing belum).
+- Kuota agent diukur dalam unit kerja; saat habis, agent berhenti di tengah dan
+  laporan menyebut alasannya, lalu muncul tawaran upgrade.
+- Pelajaran untuk kita: agent harus **jujur soal status** (apa yang lulus, apa yang
+  belum diverifikasi), dan pekerjaan panjang harus bisa berhenti dengan rapi lalu
+  dilanjutkan.
 
 ---
 
