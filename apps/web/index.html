@@ -26,6 +26,7 @@
         <button id="flipBtn" title="View from the other side (F)">Top</button>
         <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
         <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
+        <button id="view3dBtn" title="3D view of the board (3)">3D</button>
         <button id="saveBtn" title="Save as .hpcb (Cmd/Ctrl+S)">Save</button>
         <button id="fabBtn" title="Download Gerbers, drill, BOM and placement as a ZIP">Export fab</button>
         <button id="newBtn" title="Start an empty project">New</button>
@@ -38,6 +39,7 @@
           <button data-tab="project">Project</button>
           <button data-tab="agent">Agent</button>
           <button data-tab="parts">Parts</button>
+          <button data-tab="board">Board</button>
           <button data-tab="layers" class="active">Layers</button>
           <button data-tab="objects">Objects</button>
           <button data-tab="rules">Rules</button>
@@ -57,8 +59,10 @@
         <section class="tab-body hidden" data-body="review" id="reviewPanel"></section>
         <section class="tab-body hidden" data-body="comments" id="commentsPanel"></section>
         <section class="tab-body hidden" data-body="history" id="historyPanel"></section>
+        <section class="tab-body hidden" data-body="board" id="boardPanel"></section>
       </aside>
       <div class="canvas-wrap" id="canvasWrap">
+        <div id="view3d" class="view3d hidden"></div>
         <div class="spacebar">
           <div class="seg" id="spaces">
             <button data-space="schematic">Schematic</button>

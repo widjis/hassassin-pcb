@@ -8,6 +8,7 @@ import type { DocNode, Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
+import { mountBoard } from './ui/board.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -48,6 +49,7 @@ const tabs = $('leftTabs');
 const showTab = (name: string) => {
   for (const b of tabs.querySelectorAll('button')) b.classList.toggle('active', b.dataset.tab === name);
   for (const s of document.querySelectorAll<HTMLElement>('.tab-body')) s.classList.toggle('hidden', s.dataset.body !== name);
+  (document.querySelector<HTMLElement>(`.tab-body[data-body="${name}"]`) as (HTMLElement & { refresh?: () => void }) | null)?.refresh?.();
 };
 tabs.addEventListener('click', (e) => {
   const t = (e.target as HTMLElement).closest('button')?.dataset.tab;
@@ -325,6 +327,29 @@ $('undoBtn').addEventListener('click', () => app.undo());
 $('redoBtn').addEventListener('click', () => app.redo());
 $('saveBtn').addEventListener('click', save);
 $('pourBtn').addEventListener('click', () => app.refillPours());
+mountBoard(app, $('boardPanel'));
+
+// ---- 3D view (three.js is loaded on first use) ----
+let board3d: import('./render/view3d.ts').Board3D | null = null;
+let rebuild3d = 0;
+const host3d = $('view3d');
+const toggle3d = async () => {
+  const on = host3d.classList.toggle('hidden') === false;
+  $('view3dBtn').classList.toggle('on', on);
+  if (!on) return;
+  if (!board3d) {
+    const { Board3D } = await import('./render/view3d.ts');
+    board3d = new Board3D(host3d);
+  }
+  board3d.build(app);
+};
+$('view3dBtn').addEventListener('click', () => void toggle3d());
+app.on('change', () => {
+  if (!board3d || host3d.classList.contains('hidden')) return;
+  clearTimeout(rebuild3d);
+  rebuild3d = window.setTimeout(() => board3d?.build(app), 300);
+});
+app.on('doc', () => board3d && !host3d.classList.contains('hidden') && board3d.build(app));
 $('fabBtn').addEventListener('click', () => {
   const r = app.exportFab();
   if (!r) return;
@@ -471,6 +496,8 @@ window.addEventListener('keydown', (e) => {
     app.say(app.commentMode ? 'Click where the comment should go.' : '');
     return e.preventDefault();
   }
+  if (e.key === '3') return void toggle3d();
+  if (e.key === 'p' || e.key === 'P') return openLibrary();
   if (app.space === 'schematic') {
     switch (e.key) {
       case 'Escape':
@@ -487,10 +514,6 @@ window.addEventListener('keydown', (e) => {
       case 'l':
       case 'L':
         placeLabel();
-        break;
-      case 'p':
-      case 'P':
-        openLibrary();
         break;
       case 'a':
       case 'A':

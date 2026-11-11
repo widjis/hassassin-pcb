@@ -1,6 +1,6 @@
 # Roadmap — Hassassin AI PCB Designer
 
-Sembilan fase (termasuk 3.5). Setiap fase berakhir dengan sesuatu yang bisa dicoba di browser.
+Sembilan fase (termasuk 3.5) — semuanya sudah punya versi pertama yang bisa dicoba. Setiap fase berakhir dengan sesuatu yang bisa dicoba di browser.
 Urutan disusun mengikuti ketergantungan: **mesin rules** dan **command layer** dibangun
 paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya.
 
@@ -14,7 +14,7 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **4** ✅ | Kolaborasi | Edit multi-user real-time, kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View; **MCP live** (agent mengedit proyek yang sedang terbuka) |
 | **5** ✅ | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
 | **6** ✅ | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, memakai definisi tool yang sama dengan CLI/MCP (Fase 3.5), DRC/ERC-fix, placement & routing berbantuan AI |
-| **7** | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
+| **7** ✅ (versi pertama) | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
 
 ## Lapisan alur proyek (lintas fase)
 
@@ -226,6 +226,35 @@ Batasan yang diketahui:
 - Perlu kredensial Anthropic di mesin server (`ANTHROPIC_API_KEY` atau `ant auth login`); biaya API per pemakaian.
 - Riwayat chat disimpan di memori server (hilang saat restart); belum ada kompaksi untuk chat sangat panjang.
 - Placement/routing "berbantuan AI" saat ini lewat tool yang ada (move_part, route); autoplacer/autorouter di Fase 7.
+
+## Fase 7 — yang sudah dibangun (versi pertama)
+
+- **Autorouter** (`core/autoroute.ts`): A* di grid per lapisan tembaga (8 arah → trace 45°), via tembus,
+  clearance tiap net dijaga (grid "inti tembaga" + "zona clearance"), trace otomatis menyempit di pad
+  fine-pitch yang lebih kecil dari lebar trace, pour net lain diabaikan (diisi ulang setelahnya).
+  Koneksi yang tidak bisa diselesaikan dilaporkan, tidak dipaksakan. Satu langkah undo.
+  Uji pada board solar asli (QFN 0,4 mm): rip-up semua net sinyal lalu autoroute → 41/60 koneksi,
+  **0 error DRC** setelah refill pour, ±14 detik.
+- **Autoplacer** (`core/autoplace.ts`): part di luar board dipindah ke dalam, yang terhubung didekatkan,
+  courtyard tidak bertumpuk, jarak dari tepi board dijaga.
+- **Stackup & impedansi** (`core/stackup.ts`): stackup default 1/2/4/6+ lapis atau kustom (tebal, bahan, Er),
+  preset flex (polyimide + coverlay). Impedansi microstrip (Hammerstad–Jensen), stripline simetris dan
+  offset (IPC-2141), pasangan diferensial edge-coupled, lebar untuk target impedansi.
+- **Panjang & diff-pair** (`core/lengths.ts`): panjang ter-routing per net, pasangan diferensial dari nama
+  (`_P/_N`, `+/-`, `DP/DM`) dengan skew, grup length-match (properti net `lengthGroup`), serpentine otomatis
+  untuk menyamakan panjang (dibatalkan otomatis bila menimbulkan error DRC).
+- **Tampilan 3D** (three.js, dimuat saat dibuka): board diekstrusi setebal stackup dengan lubang bor, pad &
+  trace sisi atas/bawah, badan komponen kotak dari courtyard. Tombol **3D** / tombol `3`.
+- **Tool baru**: `auto_place`, `autoroute`, `get_stackup`, `set_stackup`, `impedance`, `net_lengths`,
+  `tune_length` (CLI, MCP, dan agent). **Web**: tab *Board*.
+
+Batasan yang diketahui:
+- Autorouter tanpa rip-up-and-retry dan tanpa push-and-shove; pada board padat sebagian koneksi tersisa
+  untuk diselesaikan manual. Belum ada routing pasangan diferensial bersama (dirute sebagai dua net).
+- Rumus impedansi adalah perkiraan (±5–10 %); gunakan kalkulator pabrikan untuk produksi.
+- Serpentine sederhana (sudut 90°) pada satu segmen lurus terpanjang.
+- 3D memakai kotak, bukan model STEP pabrikan; belum ada ekspor STEP.
+- Flex/rigid-flex baru sebatas stackup (bahan polyimide); belum ada zona tekuk atau stackup berbeda per area.
 
 ## Di luar cakupan (untuk sekarang)
 Simulasi SPICE, mekanik/enclosure, firmware, wire harness, pemesanan pabrikasi.

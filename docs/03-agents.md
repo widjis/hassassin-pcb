@@ -83,6 +83,10 @@ CLI juga menerima link yang sama: `pnpm hassassin run-drc "http://…?p=…&t=�
 | set_part_info | tulis | MPN, pabrikan, datasheet, LCSC, nilai, DNP |
 | import_offers / set_offer | tulis | Data harga & stok (CSV / manual) |
 | import_kicad_library | tulis | Salin `.kicad_sym` / `.kicad_mod` ke proyek |
+| auto_place / autoroute | tulis | Penempatan & routing otomatis |
+| get_stackup / set_stackup | baca / tulis | Stackup lapisan (termasuk preset flex) |
+| impedance | baca | Impedansi dari lebar, atau lebar untuk target impedansi |
+| net_lengths / tune_length | baca / tulis | Panjang net, diff-pair & skew, serpentine |
 | export_fab | tulis file | ZIP Gerber, drill, BOM, pick-and-place |
 | undo / redo / apply_ops | tulis | Riwayat, operasi mentah |
 

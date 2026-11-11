@@ -10,11 +10,15 @@
   },
   "dependencies": {
     "@hassassin/core": "workspace:*",
-    "@hassassin/kicad-import": "workspace:*",
-    "earcut": "^3.0.2",
     "@hassassin/fab": "workspace:*",
-    "js-angusj-clipper": "1.3.1",
+    "@hassassin/kicad-import": "workspace:*",
+    "@hassassin/sync": "workspace:*",
     "@hassassin/tools": "workspace:*",
-    "@hassassin/sync": "workspace:*"
+    "earcut": "^3.0.2",
+    "js-angusj-clipper": "1.3.1",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0"
   }
 }
