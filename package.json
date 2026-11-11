@@ -8,8 +8,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "hassassin": "node apps/cli/bin/hassassin.mjs",
-    "server": "node apps/server/src/main.ts --data .data",
-    "start": "pnpm build && node apps/server/src/main.ts --data .data --static apps/web/dist"
+    "server": "node --env-file-if-exists=.env apps/server/src/main.ts --data .data",
+    "start": "pnpm build && node --env-file-if-exists=.env apps/server/src/main.ts --data .data --static apps/web/dist"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
