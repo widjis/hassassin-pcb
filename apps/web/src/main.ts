@@ -2,6 +2,9 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
+import { Collab } from './collab.ts';
+import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
+import type { DocNode, Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
@@ -236,6 +239,70 @@ $('newBtn').addEventListener('click', () => {
 });
 showTab('layers');
 
+// ---- collaboration ----
+const collab = new Collab(app);
+(window as unknown as { collab: Collab }).collab = collab;
+mountCollabBar(app, collab, $('collabBar'), () => openShareDialog(app, collab));
+const focusComment = (c: DocNode) => {
+  app.focusedComment = c.uid;
+  showTab('comments');
+  const at: Vec2 = { x: Number(c.props.x), y: Number(c.props.y) };
+  if (c.props.space === 'schematic') {
+    app.setSpace('schematic');
+    if (typeof c.props.sheet === 'string' && c.props.sheet !== sch.sheet()?.uid && app.node(c.props.sheet)) sch.openSheet(c.props.sheet);
+    sch.view.cx = at.x;
+    sch.view.cy = at.y;
+    sch.requestRender();
+  } else {
+    app.setSpace('layout');
+    app.view.cx = at.x;
+    app.view.cy = at.y;
+    app.requestRender();
+  }
+  app.emit('comments');
+};
+mountComments(app, collab, $('commentsPanel'), focusComment);
+mountHistory(app, collab, $('historyPanel'));
+app.on('comments', () => {
+  const open = app.comments().filter((c) => !c.props.resolved).length;
+  $('commentBadge').textContent = open ? String(open) : '';
+  $('commentBadge').className = `badge${open ? ' ok' : ''}`;
+  sch.requestRender();
+  app.requestRender();
+});
+app.on('selection', () => collab.presence(lastCursor));
+let lastCursor: { space: 'layout' | 'schematic'; sheet?: string; x: number; y: number } | null = null;
+const placeComment = (space: 'layout' | 'schematic', p: Vec2, sheet?: string) => {
+  app.commentMode = false;
+  app.emit('comments');
+  if (!app.collab) return app.say('Share the project first; comments are stored on the collaboration server.');
+  const text = prompt('Comment:');
+  if (!text?.trim()) return;
+  const blocking = confirm('Mark as blocking? (It must be resolved before the Review stage is green.)');
+  app.addComment({ space, ...(sheet ? { sheet } : {}), x: p.x, y: p.y }, text.trim(), collab.user.name, collab.user.color, blocking);
+  showTab('comments');
+};
+sch.onCursor = (p) => {
+  lastCursor = { space: 'schematic', ...(sch.sheet() ? { sheet: sch.sheet()!.uid } : {}), x: p.x, y: p.y };
+  collab.presence(lastCursor);
+};
+sch.onPlaceComment = (p) => placeComment('schematic', p, sch.sheet()?.uid);
+sch.onCommentClick = focusComment;
+{
+  const p = new URLSearchParams(location.search);
+  const pid = p.get('p');
+  const tok = p.get('t');
+  if (pid && tok) {
+    collab
+      .join(pid, tok)
+      .then(() => {
+        loaded();
+        if (p.get('view') === 'schematic') app.setSpace('schematic');
+      })
+      .catch((e) => alert(`Could not open the shared project: ${(e as Error).message}`));
+  }
+}
+
 const layerBtn = $<HTMLButtonElement>('layerBtn');
 layerBtn.addEventListener('click', () => app.toggleActiveLayer());
 $('undoBtn').addEventListener('click', () => app.undo());
@@ -300,6 +367,8 @@ canvas.addEventListener('pointermove', (e) => {
   const { sx, sy } = local(e);
   const world = app.toWorld(sx, sy);
   app.cursor = world;
+  lastCursor = { space: 'layout', x: world.x, y: world.y };
+  collab.presence(lastCursor);
   if (drag) {
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -322,6 +391,15 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   const { sx, sy } = local(e);
   if (drag?.kind === 'move') app.endMove();
+  if (drag && !drag.moved && e.button === 0 && app.commentMode) {
+    drag = null;
+    return placeComment('layout', app.toWorld(sx, sy));
+  }
+  const pin = drag && !drag.moved && e.button === 0 ? app.commentAt('layout', undefined, sx, sy, (q) => worldToScreenPx(q)) : null;
+  if (pin) {
+    drag = null;
+    return focusComment(pin);
+  }
   if (drag && !drag.moved && e.button === 0) {
     if (app.mode === 'route') app.route.click(app.toWorld(sx, sy), e.shiftKey);
     else {
@@ -371,6 +449,12 @@ window.addEventListener('keydown', (e) => {
     return app.redo();
   }
   if (mod) return;
+  if (e.key === 'c' || e.key === 'C') {
+    app.commentMode = !app.commentMode;
+    app.emit('comments');
+    app.say(app.commentMode ? 'Click where the comment should go.' : '');
+    return e.preventDefault();
+  }
   if (app.space === 'schematic') {
     switch (e.key) {
       case 'Escape':
@@ -505,3 +589,11 @@ function updateStatus(): void {
   status.textContent = `x ${app.cursor.x.toFixed(3)}  y ${app.cursor.y.toFixed(3)} mm  ·  ${app.view.scale.toFixed(1)} px/mm  ·  ${rn} unrouted${hovText}`;
 }
 for (const ev of ['doc', 'change'] as const) app.on(ev, updateStatus);
+
+function worldToScreenPx(p: Vec2): Vec2 {
+  const r = app.glCanvas.getBoundingClientRect();
+  const w = r.width;
+  const h = r.height;
+  const dx = (p.x - app.view.cx) * app.view.scale;
+  return { x: w / 2 + (app.view.flipped ? -dx : dx), y: h / 2 + (p.y - app.view.cy) * app.view.scale };
+}

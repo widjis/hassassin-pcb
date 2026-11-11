@@ -12,6 +12,7 @@
 import { newProject, ToolError, TOOL_MAP, TOOLS, runTool, saveProject, type ToolDef } from '@hassassin/tools';
 import { isHpcb, loadGeometry, readProject, writeAny, writeProject } from './io.ts';
 import { serveMcp } from './mcp.ts';
+import { openLive, parseLiveLink, runLive } from './live.ts';
 
 const VERSION = '0.3.5';
 
@@ -153,6 +154,17 @@ export async function main(argv: string[]): Promise<void> {
   // For export-fab, -o is the zip path.
   if (tool.name === 'export_fab' && typeof flags.out === 'string' && args.out === undefined) args.out = flags.out;
 
+  const link = parseLiveLink(projectPath);
+  if (link) {
+    const s = await openLive(link);
+    if (tool.name === 'refill_pours') await loadGeometry();
+    try {
+      print(await runLive(s, () => runTool(s.project, tool.name, args, { writeFile: writeAny }), tool.mutates));
+    } finally {
+      s.client.close();
+    }
+    return;
+  }
   const p = await readProject([projectPath]);
   if (tool.name === 'refill_pours') await loadGeometry();
   const result = await runTool(p, tool.name, args, { writeFile: writeAny });

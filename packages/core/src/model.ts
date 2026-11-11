@@ -33,12 +33,14 @@ export type NodeType =
   | 'wire'
   | 'label'
   | 'junction'
-  | 'noconnect';
+  | 'noconnect'
+  // collaboration
+  | 'comment';
 
 export const NODE_TYPES: readonly NodeType[] = [
   'root', 'layout', 'container', 'group', 'element', 'footprint', 'pad', 'trace', 'via',
   'fill', 'zone', 'net', 'text', 'line', 'circle', 'arc', 'polygon', 'rectangle',
-  'schematic', 'sheet', 'block', 'sheetPin', 'symbol', 'pin', 'wire', 'label', 'junction', 'noconnect',
+  'schematic', 'sheet', 'block', 'sheetPin', 'symbol', 'pin', 'wire', 'label', 'junction', 'noconnect', 'comment',
 ];
 
 export interface Vec2 {

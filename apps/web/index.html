@@ -14,6 +14,7 @@
         <input id="query" spellcheck="false" placeholder="Selector, e.g. net[netClass=power] > trace" />
         <span id="queryInfo" class="query-info"></span>
       </div>
+      <div class="collab-bar" id="collabBar"></div>
       <div class="actions">
         <div class="seg tools" id="tools">
           <button data-mode="select" class="on" title="Select and move (Esc)">Select</button>
@@ -39,6 +40,8 @@
           <button data-tab="objects">Objects</button>
           <button data-tab="rules">Rules</button>
           <button data-tab="review">Review <span id="reviewBadge" class="badge"></span></button>
+          <button data-tab="comments">Comments <span id="commentBadge" class="badge"></span></button>
+          <button data-tab="history">History</button>
         </nav>
         <section class="tab-body hidden" data-body="project" id="projectPanel"></section>
         <section class="tab-body" data-body="layers" id="layersPanel"></section>
@@ -48,6 +51,8 @@
         </section>
         <section class="tab-body hidden" data-body="rules" id="rulesPanel"></section>
         <section class="tab-body hidden" data-body="review" id="reviewPanel"></section>
+        <section class="tab-body hidden" data-body="comments" id="commentsPanel"></section>
+        <section class="tab-body hidden" data-body="history" id="historyPanel"></section>
       </aside>
       <div class="canvas-wrap" id="canvasWrap">
         <div class="spacebar">

@@ -34,7 +34,8 @@ export interface Project {
   dirty: boolean;
 }
 
-function wrap(doc: Doc, layers: LayerInfo[], name: string): Project {
+/** Wrap a document as a tool-ready project (style engine + history). */
+export function wrapProject(doc: Doc, layers: LayerInfo[], name: string): Project {
   if (!doc.meta.layers) doc.meta.layers = layers;
   const engine = new StyleEngine(doc);
   const history = new History(doc);
@@ -56,7 +57,7 @@ export function openProject(files: InputFile[]): Project {
   const hpcb = files.find((f) => /\.hpcb$/i.test(f.name));
   if (hpcb) {
     const doc = parseDoc(hpcb.text);
-    return wrap(doc, (doc.meta.layers as LayerInfo[]) ?? DEFAULT_LAYERS, hpcb.name.replace(/\.hpcb$/i, ''));
+    return wrapProject(doc, (doc.meta.layers as LayerInfo[]) ?? DEFAULT_LAYERS, hpcb.name.replace(/\.hpcb$/i, ''));
   }
   const pcb = files.find((f) => /\.kicad_pcb$/i.test(f.name));
   const schs = files.filter((f) => /\.kicad_sch$/i.test(f.name));
@@ -80,14 +81,14 @@ export function openProject(files: InputFile[]): Project {
     importKicadSchematic({ files: map, root: base(root.name) }, doc);
     if (!pcb) name = base(root.name).replace(/\.kicad_sch$/i, '');
   }
-  return wrap(doc, layers, name);
+  return wrapProject(doc, layers, name);
 }
 
 export function newProject(name = 'untitled'): Project {
   const doc = createDoc(systemDefaults());
   doc.meta.layers = DEFAULT_LAYERS;
   applyOps(doc, newProjectOps(doc));
-  return wrap(doc, DEFAULT_LAYERS, name);
+  return wrapProject(doc, DEFAULT_LAYERS, name);
 }
 
 export function saveProject(p: Project): string {

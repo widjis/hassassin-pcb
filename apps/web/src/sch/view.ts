@@ -21,7 +21,7 @@ import {
   type SymGraphicSpec,
   type Vec2,
 } from '@hassassin/core';
-import type { App } from '../app.ts';
+import { drawComments, drawPeerCursor, type App } from '../app.ts';
 
 export const SCH_GRID = 1.27;
 
@@ -64,6 +64,12 @@ export class SchematicView {
   private cursor: Vec2 = { x: 0, y: 0 };
   private drag: { x: number; y: number; moved: boolean; kind: 'pan' | 'move'; start: Vec2; key: string; items: { uid: string; rules: Record<string, Vec2> }[] } | null = null;
   private frame = 0;
+  /** Called with the sheet-space cursor (for presence). */
+  onCursor: ((p: Vec2) => void) | null = null;
+  /** Called when the user clicks with comment mode on. */
+  onPlaceComment: ((p: Vec2) => void) | null = null;
+  /** Called when a comment pin is clicked. */
+  onCommentClick: ((c: DocNode) => void) | null = null;
 
   private app: App;
   readonly canvas: HTMLCanvasElement;
@@ -322,6 +328,7 @@ export class SchematicView {
       const { sx, sy } = local(e);
       const p = this.toWorld(sx, sy);
       this.cursor = this.snap(p);
+      this.onCursor?.(p);
       const d = this.drag;
       if (d) {
         const dx = e.clientX - d.x;
@@ -348,6 +355,9 @@ export class SchematicView {
       if (!d || d.moved || e.button !== 0) return;
       const { sx, sy } = local(e);
       const p = this.toWorld(sx, sy);
+      if (this.app.commentMode) return this.onPlaceComment?.(p);
+      const pin = this.app.commentAt('schematic', this.sheet()?.uid, sx, sy, (q) => this.toScreen(q));
+      if (pin) return this.onCommentClick?.(pin);
       if (this.tool === 'wire') {
         const q = this.snap(p);
         if (!this.wireStart) this.wireStart = q;
@@ -657,6 +667,21 @@ export class SchematicView {
       ctx.beginPath();
       ctx.arc(q.x, q.y, r, 0, Math.PI * 2);
       ctx.stroke();
+    }
+
+    // Comment pins and collaborators on this sheet
+    drawComments(ctx, this.app, 'schematic', sheet.uid, S);
+    for (const p of this.app.collab?.peers.values() ?? []) {
+      for (const uid of p.selection) {
+        const n = doc.nodes.get(uid);
+        if (n?.type !== 'symbol' || items.indexOf(n) < 0) continue;
+        const b = this.symbolBox(n);
+        const a = S({ x: b.minX, y: b.minY });
+        ctx.strokeStyle = p.user.color;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(a.x - 3, a.y - 3, (b.maxX - b.minX) * s + 6, (b.maxY - b.minY) * s + 6);
+      }
+      if (p.cursor?.space === 'schematic' && p.cursor.sheet === sheet.uid) drawPeerCursor(ctx, S(p.cursor), p.user.name, p.user.color, p.user.kind === 'agent');
     }
 
     // Wire tool preview

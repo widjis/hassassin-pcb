@@ -16,7 +16,7 @@ export function mountProject(app: App, root: HTMLElement): void {
     }
     const spec = (doc.meta.spec ?? {}) as Spec;
     root.append(h('div', { class: 'section-title' }, h('span', {}, 'Stages')));
-    for (const gate of computeGates({ doc, erc: app.erc, drc: app.drc, ratsnest: app.ratsnest })) {
+    for (const gate of computeGates({ doc, erc: app.erc, drc: app.drc, ratsnest: app.ratsnest, ...(app.collab ? { blockingComments: app.comments().filter((c) => c.props.blocking && !c.props.resolved).length } : {}) })) {
       const icon = gate.state === 'ok' ? '●' : gate.state === 'override' ? '◐' : '○';
       root.append(
         h(
@@ -64,6 +64,6 @@ export function mountProject(app: App, root: HTMLElement): void {
       root.append(h('label', { class: 'spec-field' }, h('span', {}, f.label, f.required ? h('span', { style: 'color:var(--accent)' }, ' *') : ''), input));
     }
   };
-  for (const ev of ['doc', 'change', 'drc'] as const) app.on(ev, render);
+  for (const ev of ['doc', 'change', 'drc', 'collab', 'comments'] as const) app.on(ev, render);
   render();
 }

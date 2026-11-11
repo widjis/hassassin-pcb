@@ -36,6 +36,7 @@ import {
 } from '@hassassin/core';
 import { importKicadPcb, importKicadSchematic, type LayerInfo } from '@hassassin/kicad-import';
 import { buildFab, fabZip } from '@hassassin/fab';
+import { commentsContainer, opsAllowed, type SyncClient, type SyncTarget } from '@hassassin/sync';
 import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './render/colors.ts';
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
 import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
@@ -43,7 +44,7 @@ import { RouteTool } from './tools/route.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
 export type Mode = 'select' | 'route';
-type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet';
+type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet' | 'collab' | 'presence' | 'comments';
 export type Space = 'layout' | 'schematic';
 
 const DEFAULT_HIDDEN = new Set(['paste', 'mask', 'adhesive', 'courtyard', 'fab', 'user']);
@@ -73,6 +74,11 @@ export class App {
   drc: DrcResult | null = null;
   erc: { violations: ErcViolation[]; netlist: Netlist } | null = null;
   space: Space = 'layout';
+  /** Live collaboration session, when the project is opened from a server. */
+  collab: SyncClient | null = null;
+  /** Next canvas click places a comment. */
+  commentMode = false;
+  focusedComment: string | null = null;
   focusedViolation: string | null = null;
   private drcTimer = 0;
   visible = new Set<string>();
@@ -214,7 +220,24 @@ export class App {
     this.setDoc(doc, layers, fileName.replace(/\.(kicad_pcb|hpcb)$/i, ''), stats);
   }
 
-  private setDoc(doc: Doc, layers: LayerInfo[], name: string, stats: Record<string, number>): void {
+  /** Swap in a new copy of the document (from the server) without resetting the view. */
+  replaceDoc(doc: Doc, name?: string): void {
+    const layers = (doc.meta.layers as LayerInfo[] | undefined) ?? this.layers;
+    this.setDoc(doc, layers.length ? layers : DEFAULT_LAYERS, name ?? this.fileName, this.stats, true);
+  }
+
+  /** The adapter the collaboration client uses to read and update this app. */
+  syncTarget(): SyncTarget {
+    return {
+      doc: () => this.doc!,
+      history: () => this.history!,
+      replace: (d) => this.replaceDoc(d),
+      changed: (res) => this.applyChange(res, true),
+    };
+  }
+
+  private setDoc(doc: Doc, layers: LayerInfo[], name: string, stats: Record<string, number>, keepView = false): void {
+    const keep = keepView && this.doc ? { view: { ...this.view }, space: this.space, visible: new Set(this.visible), selection: [...this.selection] } : null;
     this.doc = doc;
     this.layers = layers;
     this.copper = layers.filter((l) => l.kind === 'copper').map((l) => l.name);
@@ -231,16 +254,23 @@ export class App {
     this.route.cancel();
     this.engine = new StyleEngine(doc);
     this.history = new History(doc);
-    this.history.onChange((res) => this.onChange(res));
+    this.history.onChange((res, kind) => kind !== 'remote' && this.applyChange(res, false));
     this.scene = new SceneCache(doc, this.engine, this.copper);
+    if (keep) {
+      this.view = keep.view;
+      this.space = keep.space;
+      this.visible = keep.visible;
+      for (const u of keep.selection) if (doc.nodes.has(u)) this.selection.add(u);
+    }
     this.uploadLayers(true);
     this.updateRatsnest();
     this.drc = null;
     this.runDrcSoon(50);
     this.dirty = false;
-    this.fit();
+    if (!keep) this.fit();
     this.emit('doc');
     this.emit('mode');
+    this.emit('comments');
   }
 
   serialize(): string {
@@ -250,7 +280,14 @@ export class App {
 
   // ---------- editing ----------
   apply(label: string, ops: Op[], mergeKey?: string): boolean {
-    if (!this.history || !ops.length) return false;
+    if (!this.history || !ops.length || !this.doc) return false;
+    if (this.collab) {
+      const why = opsAllowed(this.collab.role, this.doc, ops);
+      if (why) {
+        this.say(why);
+        return false;
+      }
+    }
     try {
       this.history.apply(label, ops, mergeKey);
       return true;
@@ -269,8 +306,10 @@ export class App {
     this.say(e ? `Redid: ${e.label}` : 'Nothing to redo');
   }
 
-  private onChange(res: ApplyResult): void {
+  /** React to a document change (local edit, or `remote` from collaborators). */
+  applyChange(res: ApplyResult, remote: boolean): void {
     if (!this.doc || !this.engine || !this.scene) return;
+    if (remote && this.move) this.endMove();
     this.engine.recompute();
     if (res.global) this.scene.rebuildAll();
     else this.scene.update(res.touched);
@@ -280,8 +319,9 @@ export class App {
     this.updateRatsnest();
     this.runDrcSoon();
     if (this.queryText) this.runQuery(this.queryText);
-    this.dirty = true;
+    if (!this.collab) this.dirty = true;
     this.emit('change');
+    if ([...res.touched].some((u) => this.doc!.nodes.get(u)?.type === 'comment') || res.global) this.emit('comments');
     if (res.global) this.emit('rules');
     this.emit('inspect');
   }
@@ -299,6 +339,75 @@ export class App {
     if (!this.doc || !this.engine) return;
     this.ratsnest = computeRatsnest(this.doc, this.engine, this.copper);
     this.requestRender();
+  }
+
+  /** World bounding box of an object (components: all their shapes). */
+  boxFor(uid: string): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (!this.scene || !this.doc) return null;
+    const want = new Set<string>([uid]);
+    const n = this.doc.nodes.get(uid);
+    if (n?.type === 'element') for (const c of n.children) want.add(c);
+    let b: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    for (const pk of this.scene.pick) {
+      if (!want.has(pk.uid)) continue;
+      b = b ? { minX: Math.min(b.minX, pk.box.minX), minY: Math.min(b.minY, pk.box.minY), maxX: Math.max(b.maxX, pk.box.maxX), maxY: Math.max(b.maxY, pk.box.maxY) } : { ...pk.box };
+    }
+    return b;
+  }
+
+  /** Comment thread whose pin is under the screen point, if any. */
+  commentAt(space: Space, sheet: string | undefined, sx: number, sy: number, toScreen: (p: Vec2) => Vec2): DocNode | null {
+    for (const c of this.comments()) {
+      if (c.props.space !== space || (space === 'schematic' && c.props.sheet !== sheet) || c.props.resolved) continue;
+      const q = toScreen({ x: Number(c.props.x), y: Number(c.props.y) });
+      if (Math.hypot(q.x + 9 - sx, q.y - 9 - sy) < 12) return c;
+    }
+    return null;
+  }
+
+  // ---------- comments ----------
+  comments(): DocNode[] {
+    const c = this.doc ? commentsContainer(this.doc) : undefined;
+    return c ? c.children.map((u) => this.doc!.nodes.get(u)!).filter((n) => n?.type === 'comment') : [];
+  }
+
+  addComment(anchor: { space: Space; sheet?: string; x: number; y: number }, text: string, author: string, color: string, blocking = false): void {
+    const c = this.doc ? commentsContainer(this.doc) : undefined;
+    if (!c) return this.say('Comments need a shared project: click Share first.');
+    const uid = newUid('cm');
+    if (
+      this.apply('Comment', [
+        {
+          op: 'add',
+          parent: c.uid,
+          index: c.children.length,
+          tree: {
+            nodes: [
+              {
+                uid,
+                type: 'comment',
+                name: '',
+                props: { text, author, color, createdAt: new Date().toISOString(), resolved: false, blocking, space: anchor.space, ...(anchor.sheet ? { sheet: anchor.sheet } : {}), x: anchor.x, y: anchor.y },
+                rules: [],
+                parent: c.uid,
+                children: [],
+              },
+            ],
+          },
+        },
+      ])
+    )
+      this.focusedComment = uid;
+  }
+
+  reply(threadUid: string, text: string, author: string, color: string): void {
+    const t = this.node(threadUid);
+    if (!t) return;
+    this.apply('Reply', [{ op: 'add', parent: t.uid, index: t.children.length, tree: { nodes: [{ uid: newUid('cm'), type: 'comment', name: '', props: { text, author, color, createdAt: new Date().toISOString() }, rules: [], parent: t.uid, children: [] }] } }]);
+  }
+
+  setCommentProp(uid: string, key: string, value: string | boolean | null): void {
+    this.apply(key === 'resolved' ? (value ? 'Resolve comment' : 'Reopen comment') : 'Edit comment', [{ op: 'setProp', uid, key, value }]);
   }
 
   // ---------- checks, pours, fabrication ----------
@@ -737,7 +846,87 @@ export class App {
       }
     }
 
+    // Comment pins and collaborators
+    drawComments(ctx, this, 'layout', undefined, S);
+    if (this.collab) {
+      for (const p of this.collab.peers.values()) {
+        for (const uid of p.selection) {
+          const b = this.boxFor(uid);
+          if (!b) continue;
+          const a = S({ x: b.minX, y: b.minY });
+          const c = S({ x: b.maxX, y: b.maxY });
+          ctx.strokeStyle = p.user.color;
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(Math.min(a.x, c.x) - 2, Math.min(a.y, c.y) - 2, Math.abs(c.x - a.x) + 4, Math.abs(c.y - a.y) + 4);
+        }
+        if (p.cursor?.space === 'layout') drawPeerCursor(ctx, S(p.cursor), p.user.name, p.user.color, p.user.kind === 'agent');
+      }
+    }
+
     // Routing cursor
     this.route.drawOverlay(ctx, S);
   }
+}
+
+
+/** Speech-bubble pins for unresolved comments in one space (and sheet). */
+export function drawComments(ctx: CanvasRenderingContext2D, app: App, space: Space, sheet: string | undefined, S: (p: Vec2) => Vec2): void {
+  const all = app.comments();
+  all.forEach((c, i) => {
+    if (c.props.space !== space || (space === 'schematic' && c.props.sheet !== sheet) || c.props.resolved) return;
+    const p = S({ x: Number(c.props.x), y: Number(c.props.y) });
+    const focused = app.focusedComment === c.uid;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.fillStyle = String(c.props.color ?? '#f2a93b');
+    ctx.strokeStyle = focused ? '#ffffff' : 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = focused ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(4, -6);
+    ctx.arc(9, -9, 9, Math.PI * 0.75, Math.PI * 0.75 + Math.PI * 2 - 0.4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#16120a';
+    ctx.font = '600 10px system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(i + 1), 9, -9);
+    if (c.props.blocking) {
+      ctx.fillStyle = '#ff6b6b';
+      ctx.beginPath();
+      ctx.arc(16, -16, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
+}
+
+/** A collaborator's pointer with a name tag. */
+export function drawPeerCursor(ctx: CanvasRenderingContext2D, p: Vec2, name: string, color: string, agent: boolean): void {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, 15);
+  ctx.lineTo(4, 11);
+  ctx.lineTo(8, 18);
+  ctx.lineTo(10, 17);
+  ctx.lineTo(6, 10);
+  ctx.lineTo(11, 10);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.font = '600 11px system-ui';
+  const label = agent ? `⚙ ${name}` : name;
+  const w = ctx.measureText(label).width + 10;
+  ctx.fillRect(12, 14, w, 17);
+  ctx.fillStyle = '#111';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, 17, 23);
+  ctx.restore();
 }

@@ -46,6 +46,14 @@ command = "node"
 args = ["/ABS/PATH/hassassin-ai-pcb-designer/apps/cli/bin/hassassin.mjs", "mcp"]
 ```
 
+### Proyek live (Fase 4)
+
+Selain path `.hpcb`, `project` boleh berupa **link berbagi** dari tombol Share, misalnya
+`http://localhost:5178/?p=<id>&t=<token>`. Agent lalu bergabung ke sesi live sebagai kolaborator
+berlabel *agent* (nama bisa diatur dengan env `HASSASSIN_AGENT_NAME`): editnya langsung terlihat
+oleh semua orang yang membuka proyek, dan link *view*/*comment* tidak bisa dipakai untuk mengedit.
+CLI juga menerima link yang sama: `pnpm hassassin run-drc "http://…?p=…&t=…"`.
+
 ### Alur yang disarankan untuk agent
 
 `project_status` → `set_spec` → `add_part` / `connect_pins` / `add_label` → `run_erc` →

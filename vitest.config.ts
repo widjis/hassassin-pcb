@@ -8,7 +8,8 @@ export default defineConfig({
       '@hassassin/kicad-import': fileURLToPath(new URL('./packages/kicad-import/src/index.ts', import.meta.url)),
       '@hassassin/fab': fileURLToPath(new URL('./packages/fab/src/index.ts', import.meta.url)),
       '@hassassin/tools': fileURLToPath(new URL('./packages/tools/src/index.ts', import.meta.url)),
+      '@hassassin/sync': fileURLToPath(new URL('./packages/sync/src/index.ts', import.meta.url)),
     },
   },
-  test: { include: ['packages/*/test/**/*.test.ts', 'apps/cli/test/**/*.test.ts'], setupFiles: ['./vitest.setup.ts'] },
+  test: { include: ['packages/*/test/**/*.test.ts', 'apps/cli/test/**/*.test.ts', 'apps/server/test/**/*.test.ts'], setupFiles: ['./vitest.setup.ts'] },
 });

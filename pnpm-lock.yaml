@@ -35,12 +35,31 @@ importers:
       '@hassassin/kicad-import':
         specifier: workspace:*
         version: link:../../packages/kicad-import
+      '@hassassin/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
       '@hassassin/tools':
         specifier: workspace:*
         version: link:../../packages/tools
       js-angusj-clipper:
         specifier: 1.3.1
         version: 1.3.1
+
+  apps/server:
+    dependencies:
+      '@hassassin/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@hassassin/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
+      ws:
+        specifier: ^8.18.3
+        version: 8.22.2
+    devDependencies:
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.2
 
   apps/web:
     dependencies:
@@ -53,6 +72,9 @@ importers:
       '@hassassin/kicad-import':
         specifier: workspace:*
         version: link:../../packages/kicad-import
+      '@hassassin/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
       '@hassassin/tools':
         specifier: workspace:*
         version: link:../../packages/tools
@@ -76,6 +98,12 @@ importers:
         version: link:../core
 
   packages/kicad-import:
+    dependencies:
+      '@hassassin/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/sync:
     dependencies:
       '@hassassin/core':
         specifier: workspace:*
@@ -396,6 +424,9 @@ packages:
   '@types/node@24.19.2':
     resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
 
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
+
   '@vitest/expect@3.2.7':
     resolution: {integrity: sha512-E8eBXaKibuvH2pSZErOjdVb5vF4PbKYcrnluBTYxEk1l/VhhwZg1kZQsdtjq+CsF5CFydf2Rdkz7jDHKSisi3w==}
 
@@ -653,6 +684,18 @@ packages:
     engines: {node: '>=8'}
     hasBin: true
 
+  ws@8.22.2:
+    resolution: {integrity: sha512-/rEZ2ejown2N5gxVTHUu9bVVC7ttu0/Tgzf5hbTOixR3Fs7mbbXgn2DbdbcKgJOmpQMtrIUWivtYuVMnp/W/yA==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
 snapshots:
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -825,6 +868,10 @@ snapshots:
   '@types/node@24.19.2':
     dependencies:
       undici-types: 7.24.6
+
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 24.19.2
 
   '@vitest/expect@3.2.7':
     dependencies:
@@ -1103,3 +1150,5 @@ snapshots:
     dependencies:
       siginfo: 2.0.0
       stackback: 0.0.2
+
+  ws@8.22.2: {}

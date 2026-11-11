@@ -154,7 +154,8 @@ export interface HistoryEntry {
   mergeKey?: string;
 }
 
-export type ChangeListener = (res: ApplyResult, kind: 'do' | 'undo' | 'redo') => void;
+/** `ops` are the forward operations that were just applied (what a collaborator needs). */
+export type ChangeListener = (res: ApplyResult, kind: 'do' | 'undo' | 'redo' | 'remote', ops: Op[], label: string) => void;
 
 export class History {
   private undoStack: HistoryEntry[] = [];
@@ -172,8 +173,23 @@ export class History {
     return () => this.listeners.delete(fn);
   }
 
-  private notify(res: ApplyResult, kind: 'do' | 'undo' | 'redo') {
-    for (const l of this.listeners) l(res, kind);
+  private notify(res: ApplyResult, kind: 'do' | 'undo' | 'redo' | 'remote', ops: Op[], label: string) {
+    for (const l of this.listeners) l(res, kind, ops, label);
+  }
+
+  /**
+   * Apply operations that came from someone else: they change the document and notify
+   * listeners, but do not enter this user's undo stack.
+   */
+  applyRemote(label: string, ops: Op[]): ApplyResult {
+    const res = applyOps(this.doc, ops);
+    this.notify(res, 'remote', ops, label);
+    return res;
+  }
+
+  /** Tell listeners that the document changed outside of ops (e.g. a full reload). */
+  notifyExternal(res: ApplyResult): void {
+    this.notify(res, 'remote', [], '');
   }
 
   apply(label: string, ops: Op[], mergeKey?: string): ApplyResult {
@@ -188,7 +204,7 @@ export class History {
       if (this.undoStack.length > this.limit) this.undoStack.shift();
     }
     this.redoStack = [];
-    this.notify(res, 'do');
+    this.notify(res, 'do', ops, label);
     return res;
   }
 
@@ -201,9 +217,10 @@ export class History {
   undo(): HistoryEntry | null {
     const e = this.undoStack.pop();
     if (!e) return null;
-    const res = applyOps(this.doc, e.inverse);
+    const inv = e.inverse;
+    const res = applyOps(this.doc, inv);
     this.redoStack.push(e);
-    this.notify(res, 'undo');
+    this.notify(res, 'undo', inv, `Undo ${e.label}`);
     return e;
   }
 
@@ -213,7 +230,7 @@ export class History {
     const res = applyOps(this.doc, e.ops);
     e.inverse = res.inverse;
     this.undoStack.push(e);
-    this.notify(res, 'redo');
+    this.notify(res, 'redo', e.ops, e.label);
     return e;
   }
 

@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
 import { newProject, saveProject, ToolError, TOOLS, runTool, type Project } from '@hassassin/tools';
 import { isHpcb, loadGeometry, mtime, readProject, writeAny, writeProject } from './io.ts';
+import { openLive, parseLiveLink, runLive, type LiveSession } from './live.ts';
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
@@ -20,7 +21,7 @@ interface Cached {
   mtime: number;
 }
 
-const projectProp = { type: 'string', description: 'Path to the project (.hpcb). Read-only tools also accept a .kicad_pcb (its .kicad_sch files are loaded too).' };
+const projectProp = { type: 'string', description: 'Path to the project (.hpcb), or a share link (http://…/?p=…&t=…) to work live on a project others have open. Read-only tools also accept a .kicad_pcb.' };
 
 const EXTRA_TOOLS = [
   {
@@ -37,6 +38,7 @@ const EXTRA_TOOLS = [
 
 export async function serveMcp(version: string): Promise<void> {
   const cache = new Map<string, Cached>();
+  const live = new Map<string, LiveSession>();
   const send = (msg: unknown) => process.stdout.write(JSON.stringify(msg) + '\n');
   const log = (...a: unknown[]) => process.stderr.write(`[hassassin-mcp] ${a.join(' ')}\n`);
 
@@ -66,7 +68,20 @@ export async function serveMcp(version: string): Promise<void> {
       return { created: out, parts: [...p.doc.nodes.values()].filter((n) => n.type === 'element').length };
     }
     const path = args.project;
-    if (typeof path !== 'string' || !path) throw new ToolError('Every tool needs "project": a path to a .hpcb file.');
+    if (typeof path !== 'string' || !path) throw new ToolError('Every tool needs "project": a path to a .hpcb file or a share link.');
+    const link = parseLiveLink(path);
+    if (link) {
+      let s = live.get(path);
+      if (!s || s.client.status === 'closed') {
+        s = await openLive(link);
+        live.set(path, s);
+      }
+      const rest = { ...args };
+      delete rest.project;
+      if (name === 'refill_pours') await loadGeometry();
+      const session = s;
+      return runLive(session, () => runTool(session.project, name, rest, { writeFile: writeAny }), TOOLS.find((t) => t.name === name)?.mutates ?? false);
+    }
     const p = await getProject(path);
     const rest = { ...args };
     delete rest.project;
@@ -143,4 +158,5 @@ export async function serveMcp(version: string): Promise<void> {
       .catch((e) => log('handler crashed:', (e as Error).message));
   });
   await new Promise<void>((done) => rl.on('close', () => queue.then(() => done())));
+  for (const s of live.values()) s.client.close();
 }

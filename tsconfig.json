@@ -20,8 +20,9 @@
       "@hassassin/core": ["packages/core/src/index.ts"],
       "@hassassin/kicad-import": ["packages/kicad-import/src/index.ts"],
       "@hassassin/fab": ["packages/fab/src/index.ts"],
-      "@hassassin/tools": ["packages/tools/src/index.ts"]
+      "@hassassin/tools": ["packages/tools/src/index.ts"],
+      "@hassassin/sync": ["packages/sync/src/index.ts"]
     }
   },
-  "include": ["packages/*/src", "packages/*/test", "apps/web/src", "apps/cli/src", "apps/cli/test", "vitest.setup.ts"]
+  "include": ["packages/*/src", "packages/*/test", "apps/web/src", "apps/cli/src", "apps/cli/test", "apps/server/src", "apps/server/test", "vitest.setup.ts"]
 }

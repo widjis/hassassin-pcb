@@ -1,0 +1,13 @@
+{
+  "name": "@hassassin/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/main.ts" },
+  "dependencies": {
+    "@hassassin/core": "workspace:*",
+    "@hassassin/sync": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": { "@types/ws": "^8.18.1" }
+}

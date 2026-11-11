@@ -11,7 +11,7 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **2** ✅ | Benar secara elektrik | DRC inkremental (clearance, unrouted, overlap), copper pour, panel Review, ekspor Gerber/drill/BOM/pick-and-place |
 | **3** ✅ | Schematic + alur proyek | Editor schematic, netlist, ERC, sinkron schematic → PCB (satu sumber data), dokumen spesifikasi proyek, tahap & gerbang pemeriksaan |
 | **3.5** ✅ | Akses untuk agent | CLI `hassassin` + MCP server (stdio) di atas file `.hpcb`/KiCad: query, inspect, ubah rule, tambah part, kabel, update PCB, DRC/ERC, refill pour, ekspor fab — dipakai Claude Code, Codex, atau klien MCP lain |
-| **4** | Kolaborasi | Edit multi-user real-time, kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View; **MCP live** (agent mengedit proyek yang sedang terbuka) |
+| **4** ✅ | Kolaborasi | Edit multi-user real-time, kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View; **MCP live** (agent mengedit proyek yang sedang terbuka) |
 | **5** | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
 | **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, memakai definisi tool yang sama dengan CLI/MCP (Fase 3.5), DRC/ERC-fix, placement & routing berbantuan AI |
 | **7** | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
@@ -147,6 +147,32 @@ logika gerbang tahap dipindah ke sini), CLI `hassassin` (JSON, `--fail-on-error`
 stdio tanpa SDK (initialize, tools/list, tools/call, ping). Paket inti kini berjalan langsung di Node
 (sintaks TypeScript yang bisa dihapus saja). Diuji end-to-end: alur LED dari proyek kosong sampai ZIP
 fabrikasi lewat CLI, dan sesi MCP lewat stdio (termasuk undo dalam sesi).
+
+## Fase 4 — yang sudah dibangun
+
+- **Model sinkronisasi**: server menentukan urutan transaksi (log operasi dari command layer).
+  Klien menerapkan editnya langsung, mengirimnya, dan saat transaksi orang lain datang
+  menggulung balik edit yang belum dikonfirmasi → menerapkan transaksi remote → menerapkan ulang.
+  Hasilnya identik di semua klien dan server (diuji dengan edit bersamaan pada objek yang sama).
+- **`packages/sync`**: protokol, aturan peran, `SyncClient` (optimis, rebase, reject, reconnect
+  dengan replay edit offline, presence, `flush()`).
+- **`apps/server`**: HTTP API + WebSocket (`ws`), penyimpanan snapshot + log JSONL + checkpoint
+  tiap 200 transaksi, versi otomatis (tiap 100 transaksi / 10 menit) dan bernama, restore (state saat
+  ini disimpan dulu), fork (dengan riwayat) & clone, link per peran (edit/comment/view) + akses publik,
+  bisa juga melayani hasil build web (`pnpm start`).
+- **Web**: tombol Share + dialog link, avatar & status live, kursor dan seleksi kolaborator di layout
+  dan schematic, komentar ber-pin (C) dengan balasan/resolve/blocking, tab Comments & History,
+  penegakan peran di UI, gerbang "Review" kini dihitung dari komentar blocking yang terbuka.
+- **MCP/CLI live**: `project` boleh berupa link berbagi; agent tampil sebagai kolaborator *agent*.
+- Diuji: 6 test server/live (konvergensi, peran, versi/restore/fork, restart, CLI & MCP live) + uji
+  dua tab di browser (geser komponen, kursor, komentar, MPN dari agent CLI, restore, view-only).
+
+Batasan yang diketahui:
+- Belum ada akun/login: akses lewat token di link (siapa pun yang punya link bisa masuk).
+- Konflik diselesaikan "yang terakhir sampai di server menang" per operasi; tidak ada merge
+  karakter-per-karakter untuk teks.
+- Undo setelah edit orang lain bisa ditolak bila objeknya sudah berubah (pesan ditampilkan).
+- Server tunggal tanpa skala horizontal; penyimpanan berbasis file.
 
 ## Di luar cakupan (untuk sekarang)
 Simulasi SPICE, mekanik/enclosure, firmware, wire harness, pemesanan pabrikasi.

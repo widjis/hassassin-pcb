@@ -17,6 +17,8 @@ Editor PCB berbasis browser (schematic, layout, kolaborasi real-time, AI agent),
 ```sh
 pnpm install
 pnpm dev        # http://localhost:5178 — buka file .kicad_pcb lewat tombol Open atau drag-and-drop
+pnpm server     # server kolaborasi di :5179 (Vite mem-proxy /api dan /ws ke sini) — perlu untuk Share
+pnpm start      # produksi: build web lalu satu proses melayani aplikasi + kolaborasi di :5179
 pnpm test       # unit test (set KICAD_SAMPLE=/path/board.kicad_pcb untuk uji board nyata)
 pnpm typecheck
 pnpm build
@@ -27,4 +29,9 @@ Board contoh bisa ditaruh di `apps/web/public/samples/` (diabaikan git) lalu dib
 ## Struktur
 - `packages/core` — pohon dokumen, satuan, selector ala CSS, mesin cascade rules, default per tipe.
 - `packages/kicad-import` — parser S-expression dan impor `.kicad_pcb`.
-- `apps/web` — viewer WebGL2, panel Layers/Objects/Rules, inspector Computed/Specified.
+- `apps/web` — editor web (layout WebGL2, schematic Canvas2D, panel, kolaborasi).
+- `packages/fab` — Gerber, drill, BOM, pick-and-place, ZIP.
+- `packages/tools` — tool bersama untuk CLI, MCP, dan agent.
+- `packages/sync` — protokol & klien kolaborasi.
+- `apps/cli` — CLI `hassassin` + MCP server.
+- `apps/server` — server kolaborasi (HTTP + WebSocket, penyimpanan di `.data/`).
