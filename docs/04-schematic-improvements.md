@@ -139,7 +139,7 @@ only when all of its criteria pass.
     suggest a label instead.
   - Re-running the RGB sleep lamp prompt (same prompt as in v0.0.1): no wire crosses a pin it is not
     connected to.
-- [ ] **S8. Compact, aligned layout of blocks.**
+- [x] **S8. Compact, aligned layout of blocks.** — `0bc28bf`
   - Align and distribute commands for a selection (left / right / top / bottom / centre, even spacing).
   - A tool for agents to place a block of parts relative to an anchor part (for example "decoupling
     capacitors below U1, 2.54 mm apart").
@@ -160,15 +160,20 @@ only when all of its criteria pass.
     toolbar and a `set_schematic_grid` tool change them; placing, dragging, rotating, pasting,
     `add_part`, `move_symbol`, `duplicate` and `tidy_wires` all follow them; `project_status` reports
     them.
-  - Progress (not yet complete): delivered in `56d41a7`, `a2d1e4c`, `3e16644`, `2463e76`, `c968dd1`.
-    Agent re-run (same prompt as v0.0.1, Claude Code, stopped after the schematic stage):
-    | | v0.0.1 | S8 re-run | Target |
-    |---|---|---|---|
-    | Sheet bounding-box area | 50 896 mm² (284 × 179) | 31 213 mm² (208 × 150), **−38.7 %** | ≥ 40 % less — **not met** |
-    | Short jogs | 30 | 1 (−96.7 %) | ≥ 80 % less — met |
-    | Overlapping texts | — | 0 | 0 — met |
-    | Wires through part bodies / ERC errors | 5 / 0 | 0 / 0 | — |
-    The agent used `tidy_wires` but not `place_relative` / `align`.
+  - Delivered in `56d41a7`, `a2d1e4c`, `3e16644`, `2463e76`, `c968dd1`, `9f3e442` and `0bc28bf` (fix below).
+    Agent re-runs (benchmark prompt `docs/benchmarks/rgb-sleep-lamp.prompt.txt`, Claude Code, stopped after
+    the schematic stage):
+    | | v0.0.1 | Re-run 1 | Re-run 2 (final) | Target |
+    |---|---|---|---|---|
+    | Sheet bounding-box area | 50 896 mm² | 31 213 mm² (−38.7 %) | **25 560 mm² (−49.8 %)** | ≥ 40 % less — met |
+    | Short jogs | 30 | 1 | **3 (−90 %)** | ≥ 80 % less — met |
+    | Overlapping texts | — | 0 | **0** | 0 — met |
+    | ERC errors / warnings | 0 / 0 | 0 / 0 | 0 / 0 | — |
+    Re-run 1 missed the area target because the agent did not use `place_relative` / `align`; `compact_blocks`
+    and a required finishing step (compact_blocks → tidy_wires → run_erc) were added before re-run 2.
+  - Finding in re-run 2, fixed: two wires crossed a part body (R1, C4) without shorting it. Router, ERC
+    (`wireThroughPart`) and `tidy_wires` were fixed; on that sheet `tidy_wires` now leaves 0 wires through
+    bodies and 0 ERC warnings (jogs 5, still −83 %). Not yet confirmed by a new agent run.
 - [ ] **S9. Sheet frame, title block, notes and group boxes.**
   - Each sheet can have a frame with a title block (title, revision, date, author, sheet number), filled
     from project data where possible.
