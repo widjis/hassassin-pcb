@@ -9,6 +9,7 @@ import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { schematicGrid, symbolFrame, symToSheet } from './schematic.ts';
 import { netGroups, symbolBounds, type Rect } from './schematicEdit.ts';
+import { groupBoxRect, noteBox } from './sheetFrame.ts';
 
 const EPS = 1e-3;
 const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x' in v ? (v as Vec2) : undefined);
@@ -29,7 +30,13 @@ interface Item {
   points: Vec2[];
   seg?: [Vec2, Vec2];
   box: Rect;
+  /** Group boxes and notes: joined by area, not by connection points. */
+  area?: boolean;
 }
+
+const inRect = (p: Vec2, r: Rect) => p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY;
+const centre = (r: Rect): Vec2 => ({ x: (r.minX + r.maxX) / 2, y: (r.minY + r.maxY) / 2 });
+const near = (a: Rect, b: Rect, d: number) => a.minX - d < b.maxX && b.minX - d < a.maxX && a.minY - d < b.maxY && b.minY - d < a.maxY;
 
 /** Blocks of a sheet: items joined through wires and shared points. */
 export function sheetBlocks(doc: Doc, engine: StyleEngine, sheetUid: string): Block[] {
@@ -60,6 +67,9 @@ export function sheetBlocks(doc: Doc, engine: StyleEngine, sheetUid: string): Bl
     } else if (n.type === 'label' || n.type === 'junction' || n.type === 'noconnect') {
       const p = vec(engine.get(n.uid, 'position')?.value);
       if (p) items.push({ node: n, points: [p], box: { minX: p.x - 0.5, minY: p.y - 0.5, maxX: p.x + 0.5 + (n.type === 'label' ? n.name.length * 0.75 : 0), maxY: p.y + 0.5 } });
+    } else if (n.type === 'groupBox' || n.type === 'note') {
+      const b = n.type === 'note' ? noteBox(engine, n) : groupBoxRect(engine, n);
+      if (b) items.push({ node: n, points: [], box: b, area: true });
     }
   }
   // Union-find over items that touch.
@@ -69,7 +79,11 @@ export function sheetBlocks(doc: Doc, engine: StyleEngine, sheetUid: string): Bl
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
       const A = items[i]!, B = items[j]!;
+      // A group box holds what lies inside it; a note belongs to what it sits next to.
+      const holds = (X: Item, Y: Item) => X.area && (X.node.type === 'groupBox' ? Y.points.some((q) => inRect(q, X.box)) || (Y.area ? false : inRect(centre(Y.box), X.box)) : near(X.box, Y.box, 2.54));
       const touch =
+        holds(A, B) ||
+        holds(B, A) ||
         A.points.some((p) => B.points.some((q) => same(p, q))) ||
         (A.seg && B.points.some((q) => onSeg(q, A.seg![0], A.seg![1]))) ||
         (B.seg && A.points.some((q) => onSeg(q, B.seg![0], B.seg![1])));

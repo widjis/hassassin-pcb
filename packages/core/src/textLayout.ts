@@ -10,6 +10,7 @@ import type { StyleEngine } from './style.ts';
 import { isGroundNet } from './symbolGen.ts';
 import { symbolFrame, symToSheet } from './schematic.ts';
 import { symbolBounds, type Rect } from './schematicEdit.ts';
+import { groupBoxRect, noteBox, sheetFrame } from './sheetFrame.ts';
 
 export type TextField = 'ref' | 'value' | 'power' | 'label';
 
@@ -88,6 +89,13 @@ export function layoutSheetTexts(doc: Doc, engine: StyleEngine, sheetUid: string
     } else if (n.type === 'junction') {
       const p = vec(engine.get(n.uid, 'position')?.value);
       if (p) fixed.push({ minX: p.x - 0.5, minY: p.y - 0.5, maxX: p.x + 0.5, maxY: p.y + 0.5 });
+    } else if (n.type === 'note') {
+      const b = noteBox(engine, n);
+      if (b) fixed.push(b);
+    } else if (n.type === 'groupBox') {
+      // The title in the top-left corner of the box.
+      const b = groupBoxRect(engine, n);
+      if (b) fixed.push({ minX: b.minX, minY: b.minY, maxX: b.minX + 1.5 + n.name.length * 1.4 * 0.6, maxY: b.minY + 2.6 });
     } else if (n.type === 'symbol') {
       const body = bodyBox(n, engine) ?? symbolBounds(doc, engine, n.uid);
       fixed.push(body);
@@ -139,6 +147,9 @@ export function layoutSheetTexts(doc: Doc, engine: StyleEngine, sheetUid: string
     }
   }
 
+  // The title block of the sheet frame.
+  const frame = sheetFrame(doc, sheet);
+  if (frame) fixed.push(frame.titleBlock);
   const placed: PlacedText[] = [];
   const free = (boxes: Rect[], own: Rect) =>
     boxes.every((bx) => !fixed.some((f) => f !== own && hit(bx, f)) && !placed.some((t) => hit(bx, t.box)) && !hit(bx, own));

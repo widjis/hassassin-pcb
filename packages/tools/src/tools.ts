@@ -82,6 +82,13 @@ import {
   type AlignMode,
   type Side,
   compactBlocksOps,
+  setSheetFrameOps,
+  localDate,
+  sheetFrame,
+  addNoteOp,
+  addGroupBoxOp,
+  groupBoxAround,
+  sheetBlocks,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -777,6 +784,75 @@ export const TOOLS: ToolDef[] = [
         report.push({ sheet: sheetPath(p.doc, sh), groups: r.blocks, moved: r.moved, areaBefore: Math.round(r.areaBefore), areaAfter: Math.round(r.areaAfter) });
       }
       return { sheets: report, connections: 'unchanged' };
+    },
+  },
+  {
+    name: 'set_sheet_frame',
+    description: 'Give a schematic sheet a drawing frame with a title block (title, revision, date, author, sheet n / m). size: auto (smallest paper that holds the sheet; default), A4, A3, A2, A1, A0, or none to remove it. The frame is centred on what is drawn. Fields you leave out keep their value; title defaults to the project name.',
+    mutates: true,
+    input: { type: 'object', properties: { sheet: { type: 'string' }, size: { type: 'string' }, title: { type: 'string' }, project: { type: 'string' }, revision: { type: 'string' }, date: { type: 'string', description: 'e.g. 2026-11-12' }, author: { type: 'string' } } },
+    run: (p, a) => {
+      const sheet = sheetByName(p, a.sheet);
+      const opt = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : undefined);
+      let r;
+      try {
+        r = setSheetFrameOps(p.doc, p.engine, sheet, {
+          ...(opt('size') ? { size: opt('size')! } : {}),
+          ...(opt('title') !== undefined ? { title: opt('title')! } : !sheet.props.title ? { title: p.name.replace(/\.hpcb$/i, '') } : {}),
+          ...(opt('revision') !== undefined ? { revision: opt('revision')! } : {}),
+          ...(opt('date') !== undefined ? { date: opt('date')! } : !sheet.props.date ? { date: localDate() } : {}),
+          ...(opt('project') !== undefined ? { project: opt('project')! } : !p.doc.meta.projectName ? { project: p.name.replace(/\.hpcb$/i, '') } : {}),
+          ...(opt('author') !== undefined ? { author: opt('author')! } : {}),
+        });
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      apply(p, 'Sheet frame', r.ops);
+      const f = sheetFrame(p.doc, sheet);
+      return { sheet: sheetPath(p.doc, sheet), size: r.size, ...(f ? { fields: f.fields } : {}), ...(r.fits ? {} : { warning: 'The drawing is larger than the biggest paper; consider compact_blocks or more sheets.' }) };
+    },
+  },
+  {
+    name: 'add_note',
+    description: 'Put a free text note on a schematic sheet (top-left corner at x, y mm; "\\n" for new lines), e.g. design decisions, calculations or assembly hints. size = text height in mm (default 1.5).',
+    mutates: true,
+    input: { type: 'object', properties: { text: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, size: { type: 'number' }, sheet: { type: 'string' } }, required: ['text', 'x', 'y'] },
+    run: (p, a) => {
+      const sheet = sheetByName(p, a.sheet);
+      const text = str(a.text, 'text').replace(/\\n/g, '\n');
+      const { op, uid } = addNoteOp(sheet, text, { x: num(a.x, 'x'), y: num(a.y, 'y') }, optNum(a.size, 'size') ?? 1.5);
+      apply(p, 'Add note', [op]);
+      return { uid };
+    },
+  },
+  {
+    name: 'add_group_box',
+    description: 'Draw a titled box around a block on a schematic sheet, e.g. "Power 20 V → 5 V", "MCU", "Sensors". Give refs (the parts of the block; their wires and power symbols are included) to size it automatically, or x, y, width, height in mm.',
+    mutates: true,
+    input: { type: 'object', properties: { title: { type: 'string' }, refs: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' }, sheet: { type: 'string' } }, required: ['title'] },
+    run: (p, a) => {
+      let rect;
+      let sheet = sheetByName(p, a.sheet);
+      if (typeof a.refs === 'string' && a.refs.trim()) {
+        const uids = symbolsByRefs(p, a.refs);
+        const first = p.doc.nodes.get(uids[0]!)!;
+        sheet = sheetOf(p.doc, first) ?? sheet;
+        // The block = these parts plus the wires and power symbols joined to them.
+        const block = sheetBlocks(p.doc, p.engine, sheet.uid).filter((b) => b.items.some((u) => uids.includes(u)));
+        const items = new Set<string>(uids);
+        for (const b of block) for (const u of b.items) {
+          const n = p.doc.nodes.get(u);
+          if (n && (n.type !== 'symbol' || n.props.power || uids.includes(u))) items.add(u);
+        }
+        rect = groupBoxAround(p.doc, p.engine, items);
+      } else {
+        const x = num(a.x, 'x'), y = num(a.y, 'y');
+        rect = { minX: x, minY: y, maxX: x + num(a.width, 'width'), maxY: y + num(a.height, 'height') };
+      }
+      if (!rect) throw new ToolError('Nothing to put a box around');
+      const { op, uid } = addGroupBoxOp(sheet, str(a.title, 'title'), rect);
+      apply(p, 'Add group box', [op]);
+      return { uid, box: { x: rect.minX, y: rect.minY, width: +(rect.maxX - rect.minX).toFixed(2), height: +(rect.maxY - rect.minY).toFixed(2) } };
     },
   },
   {

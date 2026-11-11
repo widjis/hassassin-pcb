@@ -830,7 +830,7 @@ export function symbolBounds(doc: Doc, engine: StyleEngine, uid: string): Rect {
 }
 
 /** Items a selection box picks: symbols, wires, labels (not a symbol's own), junctions, no-connects, sheet blocks. */
-const SELECTABLE = new Set(['symbol', 'wire', 'label', 'junction', 'noconnect', 'block']);
+const SELECTABLE = new Set(['symbol', 'wire', 'label', 'junction', 'noconnect', 'block', 'note', 'groupBox']);
 
 function segTouchesRect(a: Vec2, b: Vec2, r: Rect): boolean {
   const inside = (p: Vec2) => p.x >= r.minX && p.x <= r.maxX && p.y >= r.minY && p.y <= r.maxY;
@@ -869,7 +869,7 @@ export function itemsInRect(doc: Doc, engine: StyleEngine, sheetUid: string, r: 
       const a = vec(engine.get(n.uid, 'start')?.value);
       const b = vec(engine.get(n.uid, 'end')?.value);
       if (a && b && (mode === 'inside' ? inR(a) && inR(b) : segTouchesRect(a, b, r))) out.push(n.uid);
-    } else if (n.type === 'block') {
+    } else if (n.type === 'block' || n.type === 'groupBox') {
       const p = vec(engine.get(n.uid, 'position')?.value);
       const s = vec(engine.get(n.uid, 'size')?.value);
       if (p && s && boxIn({ minX: p.x, minY: p.y, maxX: p.x + s.x, maxY: p.y + s.y })) out.push(n.uid);

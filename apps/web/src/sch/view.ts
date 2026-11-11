@@ -13,6 +13,13 @@ import {
   applyOps,
   type WiresBefore,
   transformSelectionOps,
+  sheetFrame,
+  noteBox,
+  groupBoxRect,
+  sheetContentBox,
+  addNoteOp,
+  addGroupBoxOp,
+  groupBoxAround,
   alignOps,
   type AlignMode,
   layoutSheetTexts,
@@ -235,6 +242,10 @@ export class SchematicView {
         if (p) grow(p);
       }
     }
+    const fr = this.app.doc && this.sheet() ? sheetFrame(this.app.doc, this.sheet()!) : null;
+    if (fr) (grow({ x: fr.paper.minX, y: fr.paper.minY - 3 }), grow({ x: fr.paper.maxX, y: fr.paper.maxY }));
+    const content = this.app.doc && this.sheet() ? sheetContentBox(this.app.doc, e, this.sheet()!) : null;
+    if (content) (grow({ x: content.minX, y: content.minY }), grow({ x: content.maxX, y: content.maxY }));
     const { w, h } = this.size();
     this.view.cx = (minX + maxX) / 2;
     this.view.cy = (minY + maxY) / 2;
@@ -263,6 +274,17 @@ export class SchematicView {
       } else if (n.type === 'symbol') {
         const b = this.symbolBox(n);
         if (p.x >= b.minX - tol && p.x <= b.maxX + tol && p.y >= b.minY - tol && p.y <= b.maxY + tol) offer(n, 2 - (b.maxX - b.minX) * (b.maxY - b.minY) * 1e-4);
+      } else if (n.type === 'note') {
+        const b = noteBox(e, n);
+        if (b && p.x >= b.minX - tol && p.x <= b.maxX + tol && p.y >= b.minY - tol && p.y <= b.maxY + tol) offer(n, 3.5);
+      } else if (n.type === 'groupBox') {
+        // Only its outline and title pick a group box, so clicks inside still reach the parts.
+        const b = groupBoxRect(e, n);
+        if (!b) continue;
+        const onEdge = (Math.abs(p.x - b.minX) < tol * 1.5 || Math.abs(p.x - b.maxX) < tol * 1.5) && p.y >= b.minY && p.y <= b.maxY;
+        const onEdgeY = (Math.abs(p.y - b.minY) < tol * 1.5 || Math.abs(p.y - b.maxY) < tol * 1.5) && p.x >= b.minX && p.x <= b.maxX;
+        const onTitle = p.x >= b.minX && p.x <= b.minX + 2 + n.name.length * 0.85 && p.y >= b.minY && p.y <= b.minY + 2.6;
+        if (onEdge || onEdgeY || onTitle) offer(n, 1.5);
       } else if (n.type === 'block') {
         const q = vec(e.get(n.uid, 'position')?.value);
         const s = vec(e.get(n.uid, 'size')?.value);
@@ -490,6 +512,72 @@ export class SchematicView {
     input.addEventListener('blur', () => close(true));
   }
 
+  // ---------- notes, group boxes, frame (S9) ----------
+  /** A text box over the sheet at `at`; multi-line uses Shift+Enter for a new line. Enter saves, Esc cancels. */
+  private openEditor(at: Vec2, value: string, multiline: boolean, onSave: (v: string) => void): void {
+    const box = this.canvas.getBoundingClientRect();
+    const q = this.toScreen(at);
+    const el = document.createElement(multiline ? 'textarea' : 'input') as HTMLInputElement | HTMLTextAreaElement;
+    el.className = 'sch-field-edit';
+    el.value = value;
+    Object.assign(el.style, { position: 'fixed', left: `${box.left + q.x - 4}px`, top: `${box.top + q.y - 4}px`, font: '14px ui-monospace, Menlo, monospace', minWidth: '160px', zIndex: '50', ...(multiline ? { minHeight: '60px' } : {}) });
+    document.body.append(el);
+    el.focus();
+    el.select();
+    let done = false;
+    const close = (save: boolean) => {
+      if (done) return;
+      done = true;
+      el.remove();
+      if (save && el.value.trim() && el.value !== value) onSave(el.value.replace(/\s+$/, ''));
+      this.requestRender();
+    };
+    el.addEventListener('keydown', (e) => {
+      const ev = e as KeyboardEvent;
+      ev.stopPropagation();
+      if (ev.key === 'Enter' && !(multiline && ev.shiftKey)) (ev.preventDefault(), close(true));
+      else if (ev.key === 'Escape') close(false);
+    });
+    el.addEventListener('blur', () => close(true));
+  }
+
+  /** Key T: a free text note at the cursor. */
+  addNoteAtCursor(): void {
+    const s = this.sheet();
+    if (!s) return;
+    const at = this.cursor;
+    this.openEditor(at, '', true, (text) => {
+      const { op, uid } = addNoteOp(s, text, at);
+      if (this.app.apply('Add note', [op])) this.app.select([uid]);
+    });
+  }
+
+  /** Key G: a titled box around the selection. */
+  groupSelection(): void {
+    const s = this.sheet();
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!s || !doc || !e) return;
+    const rect = groupBoxAround(doc, e, this.app.selection);
+    if (!rect) return this.app.say('Select the parts of a block, then press G to draw a titled box around them.');
+    this.openEditor({ x: rect.minX + 1, y: rect.minY + 0.6 }, 'Group', false, (title) => {
+      const { op, uid } = addGroupBoxOp(s, title, rect);
+      if (this.app.apply('Add group box', [op])) this.app.select([uid]);
+    });
+  }
+
+  /** Double-click on a note or a group box title edits its text. */
+  private editNoteOrGroup(n: DocNode): void {
+    const e = this.app.engine;
+    if (!e) return;
+    const at = n.type === 'note' ? vec(e.get(n.uid, 'position')?.value) : (() => {
+      const r = groupBoxRect(e, n);
+      return r ? { x: r.minX + 1, y: r.minY + 0.6 } : undefined;
+    })();
+    if (!at) return;
+    this.openEditor(at, n.name, n.type === 'note', (v) => this.app.apply(n.type === 'note' ? 'Edit note' : 'Rename group box', [{ op: 'setName', uid: n.uid, name: v }]));
+  }
+
   // ---------- copy / paste ----------
   copySelection(): void {
     const doc = this.app.doc;
@@ -576,7 +664,7 @@ export class SchematicView {
     const ops: Op[] = [];
     for (const uid of this.app.selection) {
       const n = this.app.node(uid);
-      if (n && ['symbol', 'wire', 'label', 'junction', 'noconnect'].includes(n.type) && !(n.type === 'label' && this.app.node(n.parent ?? '')?.type === 'symbol')) ops.push({ op: 'remove', uid });
+      if (n && ['symbol', 'wire', 'label', 'junction', 'noconnect', 'note', 'groupBox'].includes(n.type) && !(n.type === 'label' && this.app.node(n.parent ?? '')?.type === 'symbol')) ops.push({ op: 'remove', uid });
     }
     if (ops.length) {
       this.app.apply(`Delete ${ops.length} item${ops.length > 1 ? 's' : ''}`, this.withJunctions(ops));
@@ -638,7 +726,7 @@ export class SchematicView {
       const symbols: { uid: string; at: Vec2 }[] = [];
       if (kind === 'none' && this.tool === 'select' && e.button === 0) {
         const hit = this.pick(p);
-        if (hit && ['symbol', 'label', 'wire', 'junction', 'noconnect', 'block'].includes(hit.type) && !(hit.type === 'label' && this.app.node(hit.parent ?? '')?.type === 'symbol')) {
+        if (hit && ['symbol', 'label', 'wire', 'junction', 'noconnect', 'block', 'note', 'groupBox'].includes(hit.type) && !(hit.type === 'label' && this.app.node(hit.parent ?? '')?.type === 'symbol')) {
           if (!this.app.selection.has(hit.uid)) this.app.select([hit.uid], e.shiftKey);
           kind = 'move';
           const eng = this.app.engine!;
@@ -776,6 +864,7 @@ export class SchematicView {
       const field = this.fieldAt(this.toWorld(sx, sy));
       if (field) return this.editField(field.sym, field.field);
       const hit = this.pick(this.toWorld(sx, sy));
+      if (hit?.type === 'note' || hit?.type === 'groupBox') return this.editNoteOrGroup(hit);
       if (hit?.type === 'block') {
         const child = hit.children.map((u) => this.app.node(u)).find((n) => n?.type === 'sheet');
         if (child) this.openSheet(child.uid);
@@ -902,6 +991,75 @@ export class SchematicView {
       const q = S(p);
       ctx.fillText(t.replace(/~\{([^}]*)\}/g, '$1'), q.x, q.y);
     };
+
+    // Frame and title block (S9)
+    const frame = sheetFrame(doc, sheet);
+    if (frame) {
+      const R = (r: { minX: number; minY: number; maxX: number; maxY: number }, w: number, color: string) => {
+        const a = S({ x: r.minX, y: r.minY });
+        const b = S({ x: r.maxX, y: r.maxY });
+        ctx.strokeStyle = color;
+        ctx.lineWidth = w;
+        ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      };
+      R(frame.paper, 1, '#3a3f4b');
+      R(frame.inner, Math.max(1, 0.35 * s), '#7a8194');
+      const tb = frame.titleBlock;
+      R(tb, Math.max(1, 0.3 * s), '#7a8194');
+      // Rows: title / project / rev, date, sheet / author.
+      const rowY = [tb.minY + 12, tb.minY + 19, tb.minY + 25.5];
+      ctx.beginPath();
+      for (const y of rowY) {
+        const a = S({ x: tb.minX, y });
+        const b = S({ x: tb.maxX, y });
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
+      for (const x of [tb.minX + 30, tb.minX + 75]) {
+        const a = S({ x, y: rowY[1]! });
+        const b = S({ x, y: rowY[2]! });
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
+      ctx.stroke();
+      const f = frame.fields;
+      const lab = (t: string, x: number, y: number) => text(t, { x, y }, 1.1, '#6c7383', 'left', 'top');
+      lab('Title', tb.minX + 1.5, tb.minY + 1);
+      text(f.title, { x: tb.minX + 1.5, y: tb.minY + 4.5 }, 3.2, C.ref, 'left', 'top');
+      lab('Project', tb.minX + 1.5, rowY[0]! + 0.8);
+      text(f.project || '—', { x: tb.minX + 14, y: rowY[0]! + 0.6 }, 1.8, C.value, 'left', 'top');
+      lab('Rev', tb.minX + 1.5, rowY[1]! + 0.8);
+      text(f.revision, { x: tb.minX + 9, y: rowY[1]! + 0.8 }, 1.8, C.value, 'left', 'top');
+      lab('Date', tb.minX + 31.5, rowY[1]! + 0.8);
+      text(f.date || '—', { x: tb.minX + 40, y: rowY[1]! + 0.8 }, 1.8, C.value, 'left', 'top');
+      lab('Sheet', tb.minX + 76.5, rowY[1]! + 0.8);
+      text(f.sheet, { x: tb.minX + 87, y: rowY[1]! + 0.8 }, 1.8, C.value, 'left', 'top');
+      lab('Author', tb.minX + 1.5, rowY[2]! + 0.8);
+      text(f.author || '—', { x: tb.minX + 14, y: rowY[2]! + 0.6 }, 1.8, C.value, 'left', 'top');
+      text(`${f.title} · ${frame.size}`, { x: frame.paper.minX + 1, y: frame.paper.minY - 1 }, 1.4, '#6c7383', 'left', 'bottom');
+    }
+
+    // Group boxes and notes (S9)
+    for (const n of items) {
+      if (n.type === 'groupBox') {
+        const r = groupBoxRect(e, n);
+        if (!r) continue;
+        const a = S({ x: r.minX, y: r.minY });
+        const b = S({ x: r.maxX, y: r.maxY });
+        ctx.save();
+        ctx.strokeStyle = isSel(n) ? C.sel : '#8a7fc4';
+        ctx.lineWidth = isSel(n) ? 2 : 1.2;
+        ctx.setLineDash([8, 5]);
+        ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+        ctx.restore();
+        text(n.name, { x: r.minX + 1, y: r.minY + 0.6 }, 1.4, isSel(n) ? C.sel : '#a99de6', 'left', 'top');
+      } else if (n.type === 'note') {
+        const at = vec(e.get(n.uid, 'position')?.value);
+        if (!at) continue;
+        const size = Number(n.props.size ?? 1.5) || 1.5;
+        n.name.split('\n').forEach((line, i) => text(line, { x: at.x, y: at.y + i * size * 1.4 }, size, isSel(n) ? C.sel : '#c9cdd6', 'left', 'top'));
+      }
+    }
 
     // Sheet texts
     for (const t of ((sheet.data?.texts ?? []) as { at: Vec2; text: string; size: number }[])) {

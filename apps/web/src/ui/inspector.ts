@@ -311,6 +311,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
             h('b', {}, 'Select'), ' click · Shift+click add · drag on empty sheet for a box (left→right: inside, right→left: touching)', h('br', {}),
             h('b', {}, 'Edit'), ' drag to move (a lone wire segment: neighbours stretch) · R rotate · X / Y mirror · Del delete · W wire (may end on a wire) · L label · A part', h('br', {}),
             h('b', {}, 'Copy'), ' Cmd/Ctrl+C copy · Cmd/Ctrl+V paste · Cmd/Ctrl+D duplicate (click to drop, Esc cancels)', h('br', {}),
+            h('b', {}, 'Sheet'), ' T note at cursor · G titled box around the selection · Frame… title block · double-click a note or box title to edit', h('br', {}),
             h('b', {}, 'View'), ' middle drag or Space+drag to pan · two-finger scroll pans · wheel or pinch zooms · Home fit', h('br', {}),
             h('b', {}, 'History'), ' Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
           )

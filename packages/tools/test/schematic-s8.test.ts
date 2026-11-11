@@ -216,3 +216,64 @@ describe('S8: pin grid and jog removal', () => {
     expect(core.runErc(p.doc, p.engine).violations.filter((v) => v.kind === 'wireOverPin')).toEqual([]);
   });
 });
+
+describe('S9: sheet frame, title block, notes and group boxes', () => {
+  it('a frame fits the drawing and fills the title block from project data', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('lamp');
+    await runTool(p, 'add_part', { kind: 'resistor', x: 0, y: 0 });
+    await runTool(p, 'add_part', { kind: 'capacitor', x: 60, y: 30 });
+    const out = (await runTool(p, 'set_sheet_frame', { author: 'widjis', revision: 'A' })) as { size: string; fields: { title: string; sheet: string; author: string; date: string } };
+    expect(out.size).toBe('A4');
+    expect(out.fields.title).toBe('lamp');
+    expect(out.fields.sheet).toBe('1 / 1');
+    expect(out.fields.author).toBe('widjis');
+    expect(out.fields.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Everything drawn is inside the drawing area and clear of the title block.
+    const s = sheet(p);
+    const f = core.sheetFrame(p.doc, s)!;
+    const box = core.sheetContentBox(p.doc, p.engine, s)!;
+    expect(box.minX).toBeGreaterThan(f.inner.minX);
+    expect(box.maxX).toBeLessThan(f.inner.maxX);
+    expect(box.maxY).toBeLessThan(f.titleBlock.minY);
+    await runTool(p, 'set_sheet_frame', { size: 'none' });
+    expect(core.sheetFrame(p.doc, s)).toBeNull();
+    await expect(runTool(p, 'set_sheet_frame', { size: 'B5' })).rejects.toThrow(/Frame size/);
+  });
+
+  it('group boxes surround their block and travel with it; notes too; nothing changes electrically', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    for (const [i, [x, y]] of ([[0, 0], [150, 120]] as const).entries()) {
+      await runTool(p, 'add_part', { kind: 'resistor', x, y });
+      await runTool(p, 'add_part', { kind: 'led', x: x + 12.7, y: y + 5.08 });
+      await runTool(p, 'connect_pins', { from: `R${i + 1}.2`, to: `D${i + 1}.2` });
+      await runTool(p, 'add_power', { pin: `R${i + 1}.1`, net: '+5V' });
+      await runTool(p, 'add_power', { pin: `D${i + 1}.1`, net: 'GND' });
+    }
+    const box = (await runTool(p, 'add_group_box', { title: 'Indicator 2', refs: 'R2 D2' })) as { uid: string };
+    const note = (await runTool(p, 'add_note', { text: 'R2 sets about 3 mA\\nfor a red LED', x: 150, y: 140 })) as { uid: string };
+    const s = sheet(p).uid;
+    const g = p.doc.nodes.get(box.uid)!;
+    const r = core.groupBoxRect(p.engine, g)!;
+    for (const ref of ['R2', 'D2']) {
+      const b = core.symbolBounds(p.doc, p.engine, [...p.doc.nodes.values()].find((n) => n.props.ref === ref)!.uid);
+      expect(b.minX).toBeGreaterThan(r.minX);
+      expect(b.maxY).toBeLessThan(r.maxY);
+    }
+    expect(p.doc.nodes.get(note.uid)!.name).toBe('R2 sets about 3 mA\nfor a red LED');
+    const before = groups(p);
+    const d2 = [...p.doc.nodes.values()].find((n) => n.props.ref === 'D2')!.uid;
+    const d2Before = core.symbolBounds(p.doc, p.engine, d2);
+    await runTool(p, 'compact_blocks', {});
+    const d2After = core.symbolBounds(p.doc, p.engine, d2);
+    const r2 = core.groupBoxRect(p.engine, p.doc.nodes.get(box.uid)!)!;
+    // The box moved by the same amount as its parts.
+    expect(r2.minX - r.minX).toBeCloseTo(d2After.minX - d2Before.minX, 6);
+    expect(r2.minY - r.minY).toBeCloseTo(d2After.minY - d2Before.minY, 6);
+    expect(groups(p)).toEqual(before);
+    expect(core.runErc(p.doc, p.engine).violations.filter((v) => v.severity === 'error')).toEqual([]);
+    // Part texts keep clear of notes and box titles.
+    expect(core.textClashes(p.doc, p.engine, s, core.layoutSheetTexts(p.doc, p.engine, s))).toBe(0);
+  });
+});

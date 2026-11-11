@@ -358,3 +358,5 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .annotate-dialog .dim { font-size: 12px; margin: 4px 0 12px; }
 .annotate-dialog .row { display: flex; justify-content: flex-end; gap: 8px; }
 .annotate-dialog button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.frame-dialog label { display: grid; grid-template-columns: 70px 1fr; align-items: center; gap: 6px; }
+.annotate-dialog input, .annotate-dialog select { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; color: inherit; }

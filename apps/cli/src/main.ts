@@ -31,6 +31,8 @@ const POSITIONAL: Record<string, string[]> = {
   move_symbol: ['ref', 'x', 'y'],
   set_schematic_grid: ['pin', 'wire'],
   align: ['refs', 'mode'],
+  add_note: ['text', 'x', 'y'],
+  add_group_box: ['title', 'refs'],
   place_relative: ['anchor', 'refs', 'side'],
   duplicate: ['refs', 'dx', 'dy'],
   set_board_outline: ['width', 'height'],

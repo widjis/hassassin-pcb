@@ -100,7 +100,7 @@ How to work:
   - To tidy a block after wiring, move_symbol keeps every connection; there is no need to rewire.
   - Parts snap so their pins sit on the 2.54 mm grid. Place a part so the pin it connects to is on the same row (or column) as the other pin, then the wire is straight; run tidy_wires after wiring a block to straighten what is left.
   - Keep the sheet compact and readable: build each block tightly around its main part (place_relative puts decoupling capacitors, pull-ups or dividers in a row next to an IC; align lines parts up), leave about 10 mm between blocks, and do not spread parts over the whole sheet. Texts are placed automatically so they do not overlap.
-  - Required finishing step for the schematic stage, before update_pcb: when every block is wired and run_erc is clean, call compact_blocks, then tidy_wires, then run_erc again.
+  - Required finishing step for the schematic stage, before update_pcb: when every block is wired and run_erc is clean, call compact_blocks, then tidy_wires, then run_erc again. Then name each block with add_group_box (refs of its parts, a short title such as "Power 20 V → 5 V"), add a note for any design decision a reader needs, and call set_sheet_frame.
 - Be concise. When you finish, summarise what changed and what the user should look at next.`;
 
 export interface AgentOptions {

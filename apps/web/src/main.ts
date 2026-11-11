@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, compactBlocksOps, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, compactBlocksOps, localDate, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -312,6 +312,56 @@ gridSelect.addEventListener('change', () => {
 });
 for (const ev of ['doc', 'change'] as const) app.on(ev, showGrid);
 showGrid();
+
+// Sheet frame and title block (S9).
+$('frameBtn').addEventListener('click', () => {
+  const doc = app.doc;
+  const engine = app.engine;
+  const sheet = sch.sheet();
+  if (!doc || !engine || !sheet) return;
+  const f = sheetFrame(doc, sheet);
+  const dlg = document.createElement('dialog');
+  dlg.className = 'annotate-dialog frame-dialog';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <h3>Sheet frame</h3>
+      <fieldset><legend>Paper</legend>
+        <select name="size">${['auto', 'A4', 'A3', 'A2', 'A1', 'A0', 'none'].map((k) => `<option value="${k}">${k === 'auto' ? 'Smallest that fits' : k === 'none' ? 'No frame' : k + ' landscape'}</option>`).join('')}</select>
+      </fieldset>
+      <fieldset><legend>Title block</legend>
+        <label>Title <input name="title"></label>
+        <label>Project <input name="project"></label>
+        <label>Revision <input name="revision"></label>
+        <label>Date <input name="date" placeholder="YYYY-MM-DD"></label>
+        <label>Author <input name="author"></label>
+      </fieldset>
+      <div class="row"><button value="cancel">Cancel</button><button value="ok" class="primary">Apply</button></div>
+    </form>`;
+  const form = dlg.querySelector('form')!;
+  (form.elements.namedItem('size') as HTMLSelectElement).value = f ? f.size : 'auto';
+  const fill = (k: 'title' | 'project' | 'revision' | 'date' | 'author', v: string) => ((form.elements.namedItem(k) as HTMLInputElement).value = v);
+  fill('title', String(sheet.props.title ?? (f?.fields.title && f.fields.title !== 'Untitled' ? f.fields.title : (app.fileName ?? '').replace(/\.(hpcb|kicad_pcb|kicad_sch)$/i, ''))));
+  fill('revision', String(sheet.props.revision ?? '1'));
+  fill('date', String(sheet.props.date ?? localDate()));
+  fill('project', String(doc.meta.projectName ?? (app.fileName ?? '').replace(/\.(hpcb|kicad_pcb|kicad_sch)$/i, '')));
+  fill('author', String(sheet.props.author ?? ''));
+  document.body.append(dlg);
+  dlg.addEventListener('close', () => {
+    const data = new FormData(form);
+    dlg.remove();
+    if (dlg.returnValue !== 'ok') return;
+    const get = (k: string) => String(data.get(k) ?? '');
+    try {
+      const r = setSheetFrameOps(doc, engine, sheet, { size: get('size'), title: get('title'), project: get('project'), revision: get('revision'), date: get('date'), author: get('author') });
+      if (r.ops.length) app.apply('Sheet frame', r.ops);
+      sch.fit();
+      app.say(r.size === 'none' ? 'Frame removed.' : `Frame ${r.size}${r.fits ? '' : ' (the drawing is larger than the paper)'}.`);
+    } catch (e) {
+      app.say((e as Error).message);
+    }
+  });
+  dlg.showModal();
+});
 
 // Compact (S8): pack the blocks of this sheet into rows, as one undo step.
 $('compactBtn').addEventListener('click', () => {
@@ -638,6 +688,14 @@ window.addEventListener('keydown', (e) => {
       case 'Delete':
       case 'Backspace':
         sch.deleteSelection();
+        break;
+      case 't':
+      case 'T':
+        sch.addNoteAtCursor();
+        break;
+      case 'g':
+      case 'G':
+        sch.groupSelection();
         break;
       case 'u':
       case 'U': {
