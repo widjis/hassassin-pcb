@@ -1,11 +1,20 @@
 /**
  * Schematic editor view (Canvas 2D). Shows one sheet at a time.
- * Tools: select/move (drag), wire (W), net label (L), add part (A), rotate (R),
+ * Tools: select/move (drag; attached wires follow), wire (W), net label (L), add part (A), rotate (R), mirror (X / Y),
  * delete (Del), enter sub-sheet (double-click a sheet block), up (Backspace on empty / U).
  */
 import {
   genericPart,
   isGroundNet,
+  moveSymbolsOps,
+  snapshotWires,
+  straightenSafelyOps,
+  netGroups,
+  applyOps,
+  type WiresBefore,
+  toggleMirror,
+  type Mirror,
+  type SymbolMove,
   placePartOps,
   type PartDef,
   arcPoints,
@@ -64,7 +73,21 @@ export class SchematicView {
   private wireStart: Vec2 | null = null;
   private wireHorizontalFirst = true;
   private cursor: Vec2 = { x: 0, y: 0 };
-  private drag: { x: number; y: number; moved: boolean; kind: 'pan' | 'move'; start: Vec2; key: string; items: { uid: string; rules: Record<string, Vec2> }[] } | null = null;
+  private drag: {
+    x: number;
+    y: number;
+    moved: boolean;
+    kind: 'pan' | 'move';
+    start: Vec2;
+    key: string;
+    items: { uid: string; rules: Record<string, Vec2> }[];
+    /** Selected symbols: original positions (moved through moveSymbolsOps so wires follow). */
+    symbols: { uid: string; at: Vec2 }[];
+    /** Wire ends before the drag, to straighten wires on drop. */
+    wires: WiresBefore | null;
+    /** Net partition before the drag, to warn when the drop connects or splits nets. */
+    nets: string | null;
+  } | null = null;
   private frame = 0;
   /** Called with the sheet-space cursor (for presence). */
   onCursor: ((p: Vec2) => void) | null = null;
@@ -236,7 +259,7 @@ export class SchematicView {
     const { ops, ref, uids } = placePartOps(doc, s.uid, part, at);
     if (this.app.apply(`Place ${part.name}`, [...extra, ...ops])) {
       this.app.select(uids);
-      this.app.say(`Placed ${ref}${uids.length > 1 ? ` (${uids.length} units)` : ''}. Drag it into place; R rotates.`);
+      this.app.say(`Placed ${ref}${uids.length > 1 ? ` (${uids.length} units)` : ''}. Drag it into place; R rotates, X / Y mirror.`);
     }
   }
 
@@ -274,16 +297,61 @@ export class SchematicView {
     this.app.emit('mode');
   }
 
+  /** Nets as sorted pin groups (names ignored), to notice connection changes. */
+  private netPartition(): string | null {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!doc || !e) return null;
+    return netGroups(doc, e);
+  }
+
   rotateSelection(): void {
     const e = this.app.engine!;
+    const doc = this.app.doc;
+    if (!doc) return;
     const ops: Op[] = [];
+    const moves: SymbolMove[] = [];
     for (const uid of this.app.selection) {
       const n = this.app.node(uid);
-      if (n?.type !== 'symbol' && n?.type !== 'label') continue;
       const cur = Number(e.get(uid, 'rotation')?.value ?? 0);
-      ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: (cur + 90) % 360 } });
+      if (n?.type === 'symbol') moves.push({ uid, rotation: (cur + 90) % 360 });
+      else if (n?.type === 'label') ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: (cur + 90) % 360 } });
     }
-    if (ops.length) this.app.apply('Rotate', ops);
+    ops.push(...moveSymbolsOps(doc, e, moves, { skip: new Set(this.app.selection) }));
+    if (ops.length) this.applyKeepingNets('Rotate', ops, 'Rotating');
+  }
+
+  /** Apply an edit that must not change connectivity; undo it and explain if it would. */
+  private applyKeepingNets(label: string, ops: Op[], verb: string): void {
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (doc && e) {
+      // Try it on the document for a moment, then put it back before deciding.
+      const before = netGroups(doc, e);
+      const r = applyOps(doc, ops);
+      e.recompute();
+      const after = netGroups(doc, e);
+      applyOps(doc, r.inverse);
+      e.recompute();
+      if (after !== before) return this.app.say(`${verb} here would connect a pin or wire to another net. Move the part to a spot with more room first.`);
+    }
+    this.app.apply(label, ops);
+  }
+
+  /** Flip selected symbols left↔right ('h', key X) or top↔bottom ('v', key Y); wires follow. */
+  mirrorSelection(axis: 'h' | 'v'): void {
+    const e = this.app.engine!;
+    const doc = this.app.doc;
+    if (!doc) return;
+    const moves: SymbolMove[] = [];
+    for (const uid of this.app.selection) {
+      if (this.app.node(uid)?.type !== 'symbol') continue;
+      const m = toggleMirror(Number(e.get(uid, 'rotation')?.value ?? 0), (e.get(uid, 'mirror')?.value as Mirror) ?? 'none', axis);
+      moves.push({ uid, rotation: m.rotation, mirror: m.mirror });
+    }
+    const ops = moveSymbolsOps(doc, e, moves, { skip: new Set(this.app.selection) });
+    if (ops.length) this.applyKeepingNets(axis === 'h' ? 'Mirror left–right' : 'Mirror top–bottom', ops, 'Mirroring');
+    else this.app.say('Select a symbol to mirror it.');
   }
 
   deleteSelection(): void {
@@ -312,6 +380,7 @@ export class SchematicView {
       const p = this.toWorld(sx, sy);
       let kind: 'pan' | 'move' = 'pan';
       const items: { uid: string; rules: Record<string, Vec2> }[] = [];
+      const symbols: { uid: string; at: Vec2 }[] = [];
       if (this.tool === 'select' && e.button === 0) {
         const hit = this.pick(p);
         if (hit && ['symbol', 'label', 'wire', 'junction', 'noconnect', 'block'].includes(hit.type) && !(hit.type === 'label' && this.app.node(hit.parent ?? '')?.type === 'symbol')) {
@@ -321,6 +390,11 @@ export class SchematicView {
           for (const uid of this.app.selection) {
             const n = this.app.node(uid);
             if (!n) continue;
+            if (n.type === 'symbol') {
+              const at = vec(eng.get(uid, 'position')?.value);
+              if (at) symbols.push({ uid, at: { ...at } });
+              continue;
+            }
             const keys = n.type === 'wire' ? ['start', 'end'] : ['position'];
             const rules: Record<string, Vec2> = {};
             for (const k of keys) {
@@ -331,7 +405,10 @@ export class SchematicView {
           }
         }
       }
-      this.drag = { x: e.clientX, y: e.clientY, moved: false, kind, start: p, key: newUid('smv'), items };
+      const sheetUid = this.sheet()?.uid;
+      const wires = symbols.length && sheetUid && this.app.doc && this.app.engine ? snapshotWires(this.app.doc, this.app.engine, sheetUid) : null;
+      const nets = kind === 'move' ? this.netPartition() : null;
+      this.drag = { x: e.clientX, y: e.clientY, moved: false, kind, start: p, key: newUid('smv'), items, symbols, wires, nets };
     });
     c.addEventListener('pointermove', (e) => {
       const { sx, sy } = local(e);
@@ -352,7 +429,11 @@ export class SchematicView {
           const delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, SCH_GRID);
           const ops: Op[] = [];
           for (const it of d.items) for (const [k, v] of Object.entries(it.rules)) ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: { x: v.x + delta.x, y: v.y + delta.y } } });
-          this.app.apply('Move', ops, d.key);
+          if (d.symbols.length && this.app.doc && this.app.engine) {
+            // Symbols go through moveSymbolsOps so attached wires, stubs and power symbols follow.
+            ops.push(...moveSymbolsOps(this.app.doc, this.app.engine, d.symbols.map((s0) => ({ uid: s0.uid, position: { x: s0.at.x + delta.x, y: s0.at.y + delta.y } })), { orthogonal: false, skip: new Set(d.items.map((i) => i.uid)) }));
+          }
+          if (ops.length) this.app.apply('Move', ops, d.key);
         }
       }
       this.requestRender();
@@ -360,7 +441,15 @@ export class SchematicView {
     c.addEventListener('pointerup', (e) => {
       const d = this.drag;
       this.drag = null;
-      if (d?.kind === 'move' && d.moved) this.app.history?.seal();
+      if (d?.kind === 'move' && d.moved) {
+        // Bend wires that the move left slanted back into right angles, in the same undo step.
+        if (d.wires && this.app.doc && this.app.engine) {
+          const fix = d.nets !== null ? straightenSafelyOps(this.app.doc, this.app.engine, d.wires, d.nets) : [];
+          if (fix.length) this.app.apply('Move', fix, d.key);
+        }
+        this.app.history?.seal();
+        if (d.nets !== null && this.netPartition() !== d.nets) this.app.say('This move changed connections: a pin or wire now touches another net. Undo (Cmd/Ctrl+Z) if that was not intended.');
+      }
       if (!d || d.moved || e.button !== 0) return;
       const { sx, sy } = local(e);
       const p = this.toWorld(sx, sy);

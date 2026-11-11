@@ -97,6 +97,7 @@ How to work:
   - Every ground and supply connection uses a power symbol (add_power with GND, +3V3, +5V, +20V, …), never a plain label. Add a PWR_FLAG (add_power flag=true) on rails that are fed from a connector or other passive pin.
   - Use net labels only for signals that run between blocks or far across the sheet (for example SDA, SCL, LED_DATA), and give them clear names.
   - Keep blocks apart (power, MCU, LED driver, sensors, connectors) and leave room between them.
+  - To tidy a block after wiring, move_symbol keeps every connection; there is no need to rewire.
 - Be concise. When you finish, summarise what changed and what the user should look at next.`;
 
 export interface AgentOptions {

@@ -36,7 +36,14 @@ only when all of its criteria pass.
 
 ### Milestone M1 — editor comfortable for manual work
 
-- [ ] **S1. Wires follow moved symbols.**
+- [x] **S1. Wires follow moved symbols.** — done
+  - Delivered: drag, R, X / Y in the editor and the `move_symbol` tool (CLI, MCP, agent). The chain of
+    wires from a moved pin up to the next branch point is re-routed at right angles, avoiding symbol
+    bodies and other nets; pieces left dangling are removed. Every result is checked against the netlist
+    before it is used: a rotate / mirror / `move_symbol` that would still change connections is refused
+    with a message, and a drag that does so warns. A wire that cannot be routed cleanly stays slanted.
+  - Tests: `packages/tools/test/schematic-s1.test.ts` (netlist identity for moves, all 8 orientations of
+    each part, 60 random edits, undo, the tool). Browser check: drag, rotate, mirror and undo on a test sheet.
   - Adds a mirror command for symbols (X / Y keys; the model already stores mirroring, the editor has
     no command for it yet).
   - Moving, rotating or mirroring a symbol keeps every wire that ends on one of its pins attached:

@@ -527,6 +527,14 @@ window.addEventListener('keydown', (e) => {
       case 'R':
         sch.rotateSelection();
         break;
+      case 'x':
+      case 'X':
+        sch.mirrorSelection('h');
+        break;
+      case 'y':
+      case 'Y':
+        sch.mirrorSelection('v');
+        break;
       case 'Delete':
       case 'Backspace':
         sch.deleteSelection();

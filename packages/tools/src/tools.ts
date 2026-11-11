@@ -4,6 +4,9 @@
  * project is live, shared with collaborators).
  */
 import {
+  moveSymbolsOps,
+  toggleMirror,
+  type Mirror,
   boardOutline,
   parsePoints,
   addPowerPortOp,
@@ -507,6 +510,44 @@ export const TOOLS: ToolDef[] = [
           return { pin: `${sym.name}.${pin.props.number}`, name: pin.props.pinName, at: { x: +pt.x.toFixed(2), y: +pt.y.toFixed(2) } };
         }),
       };
+    },
+  },
+  {
+    name: 'move_symbol',
+    description: 'Move, rotate or mirror a schematic symbol; wires on its pins follow (bent to stay at right angles), and short stubs to power symbols / labels move along with their symbols, so connections never break. Positions in mm on the 1.27 mm grid. mirror: "h" flips left↔right, "v" flips top↔bottom (toggles). unit selects one unit of a multi-unit part (default: all units move by the same offset).',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, rotation: { type: 'number', description: 'degrees, counter-clockwise' }, mirror: { type: 'string', enum: ['h', 'v'] }, unit: { type: 'number' } }, required: ['ref'] },
+    run: (p, a) => {
+      const ref = str(a.ref, 'ref');
+      let syms = [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && String(n.props.ref ?? n.name) === ref);
+      if (a.unit !== undefined) syms = syms.filter((n) => Number(n.props.unit ?? 1) === num(a.unit, 'unit'));
+      if (!syms.length) throw new ToolError(`No schematic symbol ${ref}${a.unit !== undefined ? ` unit ${a.unit}` : ''}`);
+      const g = 1.27;
+      const first = vec(p.engine.get(syms[0]!.uid, 'position')?.value)!;
+      const tx = optNum(a.x, 'x');
+      const ty = optNum(a.y, 'y');
+      const dx = tx === undefined ? 0 : Math.round(tx / g) * g - first.x;
+      const dy = ty === undefined ? 0 : Math.round(ty / g) * g - first.y;
+      const moves = syms.map((s) => {
+        const at = vec(p.engine.get(s.uid, 'position')?.value)!;
+        let rotation = Number(p.engine.get(s.uid, 'rotation')?.value ?? 0) || 0;
+        let mirror = (p.engine.get(s.uid, 'mirror')?.value as Mirror) ?? 'none';
+        const rot = optNum(a.rotation, 'rotation');
+        if (rot !== undefined) rotation = ((rot % 360) + 360) % 360;
+        if (a.mirror === 'h' || a.mirror === 'v') ({ rotation, mirror } = toggleMirror(rotation, mirror, a.mirror));
+        return { uid: s.uid, position: { x: at.x + dx, y: at.y + dy }, rotation, mirror };
+      });
+      // Connections must stay exactly as they were: refuse a spot where pins or wires would land on other nets.
+      const partition = () => extractNetlist(p.doc, p.engine).nets.map((n) => n.pins.map((x) => `${x.ref}.${x.pin}`).sort().join(' ')).filter((g0) => g0.includes(' ')).sort();
+      const before = partition();
+      apply(p, `Move ${ref}`, moveSymbolsOps(p.doc, p.engine, moves));
+      const after = partition();
+      if (JSON.stringify(after) !== JSON.stringify(before)) {
+        p.history.undo();
+        const joined = after.filter((g0) => !before.includes(g0));
+        throw new ToolError(`Moving ${ref} there would change connections (${joined.map((g0) => `[${g0}]`).join(', ') || 'a net would split'}): its pins or wires would land on other wires or pins. Choose a spot with free space around it.`);
+      }
+      return { ref, units: syms.length, position: { x: +(first.x + dx).toFixed(3), y: +(first.y + dy).toFixed(3) }, connections: 'unchanged' };
     },
   },
   {

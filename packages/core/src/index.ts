@@ -24,3 +24,4 @@ export * from './autoroute.ts';
 export * from './autoplace.ts';
 export * from './stackup.ts';
 export * from './lengths.ts';
+export * from './schematicEdit.ts';
