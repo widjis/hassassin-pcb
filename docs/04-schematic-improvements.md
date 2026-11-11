@@ -120,7 +120,20 @@ only when all of its criteria pass.
 
 ### Milestone M2 — tidy, shareable schematics
 
-- [ ] **S7. Wires that avoid symbols and pins.**
+- [x] **S7. Wires that avoid symbols and pins.** — `93fd6ab`
+  - Delivered: `connect_pins` and the wire tool route at right angles around symbol bodies and never
+    touch pins, wires or labels of other nets (straight / one bend first, then two, then a grid search);
+    with no clean path, `connect_pins` fails and suggests labels, and the wire tool shows a red preview.
+    New ERC warning `wireOverPin` (a pin in the middle of a wire).
+  - Agent re-run (same prompt as v0.0.1, Claude Code, stopped after the schematic stage):
+    | | v0.0.1 | v0.0.2 + S7 |
+    |---|---|---|
+    | Parts / wires | 52 / 133 | 49 / 132 |
+    | Wire pieces through a part body | 5 (J1, F1 ×2, TP1, TP2) | **0** |
+    | Pins in the middle of a wire | 0 | 0 |
+    | ERC errors / warnings | 0 / 0 | 0 / 0 |
+  - Seen in the re-run, left to S8: wires still jog where the agent placed two connected pins slightly
+    off one line (for example the EN divider and the R8 pull-up), and some texts overlap.
   - `connect_pins` and the wire tool find an orthogonal path that does not pass through symbol bodies
     or over unrelated pins, with as few bends as practical; when no clean path exists they say so and
     suggest a label instead.
