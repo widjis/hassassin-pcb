@@ -1136,3 +1136,42 @@ export function wirePathOps(doc: Doc, sheetUid: string, path: Vec2[]): Op[] {
   }
   return ops;
 }
+
+/**
+ * Like routeWirePath, but a connection may also end on a wire that is already on the other
+ * end's net: when the path to the pin needs bends, a straight drop onto such a wire (it becomes
+ * a T with a junction) is used instead. This is how people draw a pull-up onto a signal line.
+ */
+export function routeConnection(doc: Doc, engine: StyleEngine, sheetUid: string, from: Vec2, to: Vec2, opts: { horizontalFirst?: boolean } = {}): Vec2[] | null {
+  const direct = routeWirePath(doc, engine, sheetUid, from, to, opts);
+  if (direct && direct.length <= 2) return direct;
+  const netOf = itemNets(doc, engine);
+  const all = obstacles(doc, engine, sheetUid, '');
+  const netAt = (p: Vec2): string | undefined => {
+    for (let i = 0; i < all.points.length; i++) if (same(all.points[i]!, p)) {
+      const n = netOf.get(all.pointOwners?.[i] ?? '');
+      if (n !== undefined) return n;
+    }
+    return undefined;
+  };
+  let best: Vec2[] | null = null;
+  // Drop from one end onto a wire of the other end's net (both directions).
+  for (const [start, other] of [[from, to], [to, from]] as const) {
+    const net = netAt(other);
+    if (net === undefined) continue;
+    all.segs.forEach(([a, b], i) => {
+      if (netOf.get(all.segOwners?.[i] ?? '') !== net) return;
+      // Perpendicular foot of `start` on this wire, if it lies on it.
+      const horiz = Math.abs(a.y - b.y) < EPS;
+      const vert = Math.abs(a.x - b.x) < EPS;
+      const foot = horiz ? { x: start.x, y: a.y } : vert ? { x: a.x, y: start.y } : null;
+      if (!foot || same(foot, start) || !onSeg(foot, a, b)) return;
+      const path = routeWirePath(doc, engine, sheetUid, start, foot, opts);
+      if (!path || path.length !== 2) return;
+      const len = Math.abs(foot.x - start.x) + Math.abs(foot.y - start.y);
+      const bestLen = best ? Math.abs(best[1]!.x - best[0]!.x) + Math.abs(best[1]!.y - best[0]!.y) : Infinity;
+      if (len < bestLen) best = start === from ? path : path.slice().reverse();
+    });
+  }
+  return best ?? direct;
+}

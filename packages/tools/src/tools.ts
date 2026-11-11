@@ -68,6 +68,7 @@ import {
   renameRefOps,
   annotateOps,
   routeWirePath,
+  routeConnection,
   wirePathOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
@@ -600,7 +601,7 @@ export const TOOLS: ToolDef[] = [
       const A = pinOf(p, str(a.from, 'from'));
       const B = pinOf(p, str(a.to, 'to'));
       if (A.sheet.uid !== B.sheet.uid) throw new ToolError('Pins are on different sheets; use add_label with the same net name on both.');
-      const path = routeWirePath(p.doc, p.engine, A.sheet.uid, A.at, B.at);
+      const path = routeConnection(p.doc, p.engine, A.sheet.uid, A.at, B.at);
       if (!path)
         throw new ToolError(
           `No clean wire path from ${a.from} to ${a.to}: every route would cross a part body or touch another net. Move the parts closer / clear the way (move_symbol), or connect them with net labels instead (add_label with the same name on both pins).`,

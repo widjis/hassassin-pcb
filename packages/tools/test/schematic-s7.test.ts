@@ -59,4 +59,23 @@ describe('S7: wires that avoid symbols and pins', () => {
       for (const w of wires(p)) expect(crossesBox(w, mid)).toBe(false);
     }
   });
+
+  it('a pull-up above a signal wire drops straight onto it (a T with a junction) instead of bending to the far pin', async () => {
+    const p = newProject('t');
+    // R1 (horizontal, rotated) from (0, 0) to (20.32, 0): a signal wire on y = 0.
+    await runTool(p, 'add_part', { kind: 'resistor', x: -3.81, y: 0 });
+    await runTool(p, 'move_symbol', { ref: 'R1', rotation: 90 });
+    await runTool(p, 'add_part', { kind: 'resistor', x: 24.13, y: 0 });
+    await runTool(p, 'move_symbol', { ref: 'R2', rotation: 90 });
+    await runTool(p, 'connect_pins', { from: 'R1.1', to: 'R2.2' });
+    // Pull-up R3 standing above the wire, not above either pin.
+    await runTool(p, 'add_part', { kind: 'resistor', x: 10.16, y: -10.16 });
+    const before = wires(p).length;
+    const out = (await runTool(p, 'connect_pins', { from: 'R3.2', to: 'R2.2' })) as { bends: number };
+    expect(out.bends).toBe(0);
+    expect(wires(p).length).toBe(before + 1);
+    const g = groups(p);
+    expect(g.some((x) => x.includes('R3.2') && x.includes('R2.2') && x.includes('R1.1'))).toBe(true);
+    expect([...p.doc.nodes.values()].filter((n) => n.type === 'junction').length).toBe(1);
+  });
 });
