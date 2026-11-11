@@ -103,7 +103,7 @@ only when all of its criteria pass.
   - Double-clicking a reference or value on the sheet edits it in place; Enter saves, Esc cancels.
   - The inspector shows and edits the part's properties (value, MPN, manufacturer, footprint, datasheet,
     DNP) for schematic symbols; changes reach the board on Update PCB as today.
-- [x] **S6. Annotation (renumbering references).** — done
+- [x] **S6. Annotation (renumbering references).** — `5731010`
   - Delivered: Annotate button in the schematic toolbar (whole design or this sheet; keep existing
     numbers or renumber from 1) and the `annotate` tool. Order: sheet by sheet, top to bottom, then
     left to right; units of a part share a reference; duplicates and unnumbered parts ("R?") get new
