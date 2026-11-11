@@ -36,3 +36,14 @@ Board contoh bisa ditaruh di `apps/web/public/samples/` (diabaikan git) lalu dib
 - `packages/sync` — protokol & klien kolaborasi.
 - `apps/cli` — CLI `hassassin` + MCP server.
 - `apps/server` — server kolaborasi (HTTP + WebSocket, penyimpanan di `.data/`).
+
+## Lisensi
+
+Kode di repo ini memakai lisensi ganda: [Apache License 2.0](LICENSE-APACHE) atau
+[MIT license](LICENSE-MIT), sesuai pilihan Anda. Kontribusi yang Anda kirim untuk digabungkan
+dianggap berlisensi ganda yang sama, tanpa syarat tambahan.
+
+Dependensi pihak ketiga tetap memakai lisensinya masing-masing dan tidak disalin ke repo ini;
+semuanya dipasang dari npm. Contohnya js-angusj-clipper, three.js dan ws (MIT), Codex CLI
+(Apache-2.0), serta Claude Code CLI (lisensi Anthropic sendiri, bukan open source). Library
+KiCad dibaca dari instalasi KiCad di mesin pengguna dan tidak dibundel.
