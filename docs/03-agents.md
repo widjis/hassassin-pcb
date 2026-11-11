@@ -80,6 +80,9 @@ between blocks.
 | set_property / set_spec | write | Part properties / project requirements |
 | add_part / connect_pins / add_label | write | Schematic editing |
 | add_power | write | Power symbol (GND, a rail) with a short wire, or a PWR_FLAG |
+| move_symbol | write | Move / rotate / mirror a symbol; wires follow; refused if connections would change |
+| duplicate | write | Copy parts with their wires, power symbols and labels to an offset; new references |
+| annotate | write | Renumber references in reading order (keep or reset, whole design or one sheet) |
 | update_pcb | write | Schematic → board sync |
 | move_part / route / refill_pours | write | Board editing |
 | search_parts / get_part | read | Find parts (project, generic, team library, installed KiCad libraries) |
@@ -87,7 +90,7 @@ between blocks.
 | bom | read | BOM and price for N boards; parts without MPN, price or stock |
 | place_part | write | Place a library part (every unit) on the schematic |
 | assign_footprint | write | Change a footprint; the board is updated in place |
-| set_part_info | write | MPN, manufacturer, datasheet, LCSC, value, DNP |
+| set_part_info | write | MPN, manufacturer, datasheet, LCSC, value, DNP; `rename` for a new reference |
 | import_offers / set_offer | write | Price and stock data (CSV / by hand) |
 | import_kicad_library | write | Copy `.kicad_sym` / `.kicad_mod` into the project |
 | auto_place / autoroute | write | Automatic placement and routing (vias never land on pads) |

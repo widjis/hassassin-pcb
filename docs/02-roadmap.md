@@ -290,6 +290,40 @@ netlist:
   outline could not be read back, part bodies outside the board went unnoticed, and the autorouter could
   put vias in pads.
 
+## Schematic improvements, milestone M1 (v0.0.2)
+
+Done under the work agreement [docs/04-schematic-improvements.md](04-schematic-improvements.md)
+(S1–S6), so the schematic editor is comfortable for manual work:
+
+- **Wires follow** moved, rotated (R) and mirrored (X / Y) symbols and stay at right angles; the wire
+  chain from a moved pin is re-routed around symbol bodies and other nets. Every result is checked
+  against the netlist: an edit that would still change connections is refused (rotate / mirror /
+  `move_symbol`) or warned about (drag).
+- **Box selection** (left→right: inside, right→left: touching; Shift adds). Panning moved to the middle
+  button, Space + drag and two-finger trackpad scroll. A selection moves, rotates, mirrors and deletes as
+  one undo step.
+- **Copy, paste, duplicate** (Cmd/Ctrl+C / V / D) with new references; the paste follows the mouse.
+  `duplicate` tool for agents.
+- **Wire editing and junctions:** drag a single segment and its neighbours stretch; wires can end on the
+  middle of another wire; junction dots are added and removed automatically by every edit and tool.
+- **In-place editing:** double-click a reference or value; a Part form in the inspector (reference,
+  value, MPN, manufacturer, datasheet, footprint, DNP). Renaming a reference renames the board
+  component too.
+- **Annotation:** renumber references in reading order (whole design or one sheet, keep or reset),
+  from the toolbar or the `annotate` tool; Update PCB then renames nets and routed copper follows.
+
+| Box selection (left → right) | Duplicate following the mouse | Annotate |
+|---|---|---|
+| ![Box selection around an LED and its ground symbol](media/m1-box-select.jpg) | ![A duplicated LED with its ground symbol following the mouse before it is dropped](media/m1-duplicate.jpg) | ![The Annotate dialog: scope and numbering options](media/m1-annotate.jpg) |
+
+Known limitations:
+- Telling a trackpad scroll from a mouse wheel is a heuristic; Ctrl / pinch always zooms.
+- When a symbol's pins have to swap sides (for example after flipping it), the re-routed wires go
+  around the part; tidier routing is item S7 of milestone M2.
+- Next: milestone M2 (wires that avoid symbols, compact layout, sheet frame, PDF / SVG export,
+  sub-sheets, multi-unit switching, symbol editor, footprint generator, pin ↔ pad check, KiCad libraries
+  on demand).
+
 ## Out of scope (for now)
 
 SPICE simulation, mechanical / enclosure design, firmware, wire harnesses, ordering from fabricators.

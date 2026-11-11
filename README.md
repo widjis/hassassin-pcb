@@ -19,7 +19,7 @@ Part of the [Hassassin Mechatronics](https://github.com/widjis/hassassin-mechatr
 ## What it does
 
 - **Whole project flow in one place:** requirements → schematic → components → layout → review → fabrication, with a visible gate for each stage.
-- **Schematic editor:** symbols, wires, labels, power symbols, hierarchical sheets, netlist, ERC, and schematic → PCB sync.
+- **Schematic editor:** symbols, wires, labels, power symbols, hierarchical sheets, netlist, ERC, and schematic → PCB sync. Wires follow moved, rotated and mirrored parts; box selection; copy / paste / duplicate; wire segment dragging with automatic junctions; in-place editing of references and values; annotation.
 - **Board editor:** WebGL2 layout, rules with CSS-like selectors and cascading, routing, copper pours, DRC, auto-place and autoroute, stackup and impedance, net lengths, differential pairs and length tuning, and a 3D view.
 - **Parts:** generic parametric footprints, the KiCad libraries installed on your machine, BOM with supplier prices and stock.
 - **Fabrication output:** Gerber (RS-274X with X2 attributes), Excellon drill, BOM and pick-and-place, as one ZIP.
@@ -40,6 +40,7 @@ Part of the [Hassassin Mechatronics](https://github.com/widjis/hassassin-mechatr
 - [docs/01-flux-behavior-spec.md](docs/01-flux-behavior-spec.md) — the reference behaviour specification.
 - [docs/02-roadmap.md](docs/02-roadmap.md) — development phases, what each one built, and known limitations.
 - [docs/03-agents.md](docs/03-agents.md) — the `hassassin` CLI, the MCP server for Claude Code / Codex, and the built-in agent.
+- [docs/04-schematic-improvements.md](docs/04-schematic-improvements.md) — the current work agreement for the schematic editor (milestones M1–M3) and its progress.
 
 ## Running it
 
