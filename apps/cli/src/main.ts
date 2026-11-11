@@ -29,6 +29,7 @@ const POSITIONAL: Record<string, string[]> = {
   add_label: ['pin', 'name'],
   add_power: ['pin', 'net'],
   move_symbol: ['ref', 'x', 'y'],
+  set_schematic_grid: ['pin', 'wire'],
   duplicate: ['refs', 'dx', 'dy'],
   set_board_outline: ['width', 'height'],
   move_part: ['ref', 'x', 'y', 'rotation'],

@@ -117,4 +117,23 @@ describe('S8: pin grid and jog removal', () => {
     expect(core.textClashes(p.doc, p.engine, s, laid)).toBe(0);
     expect(laid.filter((t) => t.crowded)).toEqual([]);
   });
+
+  it('the schematic grid is a project setting that placement follows', async () => {
+    const core = await import('@hassassin/core');
+    const p = newProject('t');
+    expect((await runTool(p, 'project_status', {}) as { schematicGrid: unknown }).schematicGrid).toEqual({ pin: 2.54, wire: 1.27 });
+    await expect(runTool(p, 'set_schematic_grid', { pin: 1 })).rejects.toThrow(/Pin grid must be/);
+    await expect(runTool(p, 'set_schematic_grid', { pin: 2.54, wire: 5.08 })).rejects.toThrow(/Wire grid must be/);
+    expect(await runTool(p, 'set_schematic_grid', { pin: 5.08, wire: 2.54 })).toEqual({ pin: 5.08, wire: 2.54 });
+    await runTool(p, 'add_part', { kind: 'resistor', x: 3.3, y: 1.9 });
+    await runTool(p, 'move_symbol', { ref: 'R1', rotation: 90 });
+    const on = (v: Vec2, g: number) => Math.abs(v.x / g - Math.round(v.x / g)) < 1e-6 && Math.abs(v.y / g - Math.round(v.y / g)) < 1e-6;
+    // The first pin takes the 5.08 mm step; every pin stays on the 2.54 mm lattice (pins of a
+    // resistor are 7.62 mm apart, so not all of them can be on 5.08).
+    expect(on(pin(p, 'R1.1'), 5.08) || on(pin(p, 'R1.2'), 5.08)).toBe(true);
+    for (const id of ['R1.1', 'R1.2']) expect(on(pin(p, id), 2.54), id).toBe(true);
+    // Saved with the project.
+    const again = (await import('@hassassin/tools')).openProject([{ name: 't.hpcb', text: (await import('@hassassin/tools')).saveProject(p) }]);
+    expect(core.schematicGrid(again.doc)).toEqual({ pin: 5.08, wire: 2.54 });
+  });
 });

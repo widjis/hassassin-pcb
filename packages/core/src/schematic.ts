@@ -3,6 +3,7 @@
  * A symbol's pins and drawing are stored in symbol-local coordinates and placed by the
  * symbol's position, rotation (counter-clockwise on screen) and mirror.
  */
+import type { Op } from './commands.ts';
 import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { place } from './geom.ts';
@@ -34,6 +35,36 @@ export function symToSheet(f: SymbolFrame, p: Vec2): Vec2 {
 
 /** Pins of placed symbols sit on this grid (mm), so wires between parts can run straight. */
 export const PIN_GRID = 2.54;
+
+/** Schematic grid choices (mm). Symbol pins are spaced in multiples of 2.54 mm, so only these line up. */
+export const PIN_GRIDS = [1.27, 2.54, 5.08] as const;
+export const WIRE_GRIDS = [1.27, 2.54] as const;
+
+export interface SchematicGrid {
+  /** Where part pins land. */
+  pin: number;
+  /** Where wire corners and free points snap; never coarser than the pin grid. */
+  wire: number;
+}
+
+/** The project's schematic grid (meta "schematicGrid"), with defaults 2.54 / 1.27 mm. */
+export function schematicGrid(doc: Doc | null | undefined): SchematicGrid {
+  const m = doc?.meta?.schematicGrid as Partial<SchematicGrid> | undefined;
+  const pin = PIN_GRIDS.find((g) => Math.abs(g - Number(m?.pin)) < 1e-6) ?? PIN_GRID;
+  let wire = WIRE_GRIDS.find((g) => Math.abs(g - Number(m?.wire)) < 1e-6) ?? 1.27;
+  if (wire > pin + 1e-6) wire = 1.27;
+  return { pin, wire };
+}
+
+/** Op that sets the schematic grid; throws on a value that would put pins off one another's grid. */
+export function setSchematicGridOp(pin: number, wire?: number): Op {
+  const p = PIN_GRIDS.find((g) => Math.abs(g - pin) < 1e-6);
+  if (!p) throw new Error(`Pin grid must be one of ${PIN_GRIDS.join(', ')} mm (symbol pins are 2.54 mm apart).`);
+  const w = wire === undefined ? Math.min(1.27, p) : WIRE_GRIDS.find((g) => Math.abs(g - wire) < 1e-6);
+  if (!w) throw new Error(`Wire grid must be one of ${WIRE_GRIDS.join(', ')} mm.`);
+  if (w > p + 1e-6) throw new Error('The wire grid cannot be coarser than the pin grid.');
+  return { op: 'setMeta', key: 'schematicGrid', value: { pin: p, wire: w } };
+}
 
 /**
  * The symbol origin nearest to `at` that puts its pins (symbol-local `pins`) on the pin grid,

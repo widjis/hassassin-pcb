@@ -14,7 +14,7 @@ import { applyOps, type Op } from './commands.ts';
 import type { Doc, DocNode, Vec2 } from './model.ts';
 import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
-import { pinGridOrigin, sheetOf, symbolFrame, symbolPinLocals, symToSheet, type Mirror, type SymbolFrame } from './schematic.ts';
+import { pinGridOrigin, schematicGrid, sheetOf, symbolFrame, symbolPinLocals, symToSheet, type Mirror, type SymbolFrame } from './schematic.ts';
 import { extractNetlist } from './netlist.ts';
 
 export interface SymbolMove {
@@ -72,7 +72,7 @@ export function moveSymbolsOps(
     const newF: SymbolFrame = { origin: m.position ?? oldF.origin, rot: m.rotation ?? oldF.rot, mirror: m.mirror ?? oldF.mirror };
     if (opts.pinGrid && !sym.props.power) {
       // Keep the pins on the 2.54 mm grid (also after a rotation moves them off it).
-      const snapped = pinGridOrigin(newF.origin, symbolPinLocals(doc, engine, sym.uid), newF.rot, newF.mirror);
+      const snapped = pinGridOrigin(newF.origin, symbolPinLocals(doc, engine, sym.uid), newF.rot, newF.mirror, schematicGrid(doc).pin);
       if (!same(snapped, newF.origin) || m.position) m = { ...m, position: snapped };
       newF.origin = m.position ?? newF.origin;
     }

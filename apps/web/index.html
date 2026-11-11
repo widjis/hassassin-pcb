@@ -80,6 +80,13 @@
             </select>
             <button id="libBtn" title="Search the part library (P)">Library</button>
             <button id="annotateBtn" title="Renumber references (R1, R2 …) in reading order">Annotate</button>
+            <select id="gridSelect" title="Schematic grid: where part pins land / where wires snap">
+              <option value="1.27/1.27">Grid 1.27</option>
+              <option value="2.54/1.27">Grid 2.54 · wire 1.27</option>
+              <option value="2.54/2.54">Grid 2.54</option>
+              <option value="5.08/1.27">Grid 5.08 · wire 1.27</option>
+              <option value="5.08/2.54">Grid 5.08 · wire 2.54</option>
+            </select>
             <button id="tidyBtn" title="Straighten wires: re-route bends and line up small parts (connections stay)">Tidy wires</button>
             <button id="syncBtn" class="primary-outline" title="Push schematic connections into the board">Update PCB</button>
           </div>

@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -285,6 +285,25 @@ const openAnnotate = () => {
   dlg.showModal();
 };
 $('annotateBtn').addEventListener('click', openAnnotate);
+
+// Schematic grid (S8, agreement 0.4): a project setting, shared with collaborators.
+const gridSelect = $('gridSelect') as HTMLSelectElement;
+const showGrid = () => {
+  const g = schematicGrid(app.doc);
+  gridSelect.value = `${g.pin}/${g.wire}`;
+};
+gridSelect.addEventListener('change', () => {
+  const [pin, wire] = gridSelect.value.split('/').map(Number);
+  try {
+    if (app.apply('Schematic grid', [setSchematicGridOp(pin!, wire)])) app.say(`Pins now land on a ${pin} mm grid, wires snap to ${wire} mm. Parts already placed keep their place; Tidy wires lines them up.`);
+  } catch (e) {
+    app.say((e as Error).message);
+  }
+  showGrid();
+  sch.requestRender();
+});
+for (const ev of ['doc', 'change'] as const) app.on(ev, showGrid);
+showGrid();
 
 // Tidy wires (S8): straighten bends on this sheet, as one undo step.
 $('tidyBtn').addEventListener('click', () => {

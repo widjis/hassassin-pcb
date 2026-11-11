@@ -10,7 +10,7 @@ import type { Op } from './commands.ts';
 import type { Doc, DocNode, Vec2 } from './model.ts';
 import { newUid } from './model.ts';
 import { genericAlias, genericFootprint, genericFootprintNames, type FootprintSpec } from './footprints.ts';
-import { pinGridOrigin } from './schematic.ts';
+import { pinGridOrigin, schematicGrid } from './schematic.ts';
 import { makeSymbol, nextRef, PART_KINDS, type PartKind, type PinSpec, type SymGraphicSpec } from './symbolGen.ts';
 
 export interface PriceBreak {
@@ -209,7 +209,7 @@ export function placePartOps(doc: Doc, sheetUid: string, part: PartDef, at: Vec2
       name: ref,
       props,
       rules: [
-        { name: 'position', value: pinGridOrigin({ x, y: at.y }, u.pins.map((q) => q.at)) },
+        { name: 'position', value: pinGridOrigin({ x, y: at.y }, u.pins.map((q) => q.at), 0, 'none', schematicGrid(doc).pin) },
         { name: 'rotation', value: 0 },
         { name: 'mirror', value: 'none' },
       ],

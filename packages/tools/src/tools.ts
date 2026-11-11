@@ -73,6 +73,10 @@ import {
   pinGridOrigin,
   symbolPinLocals,
   tidyWiresOps,
+  schematicGrid,
+  setSchematicGridOp,
+  PIN_GRIDS,
+  WIRE_GRIDS,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -300,6 +304,7 @@ export const TOOLS: ToolDef[] = [
         name: p.name,
         counts: { parts: count('element'), symbols: nodes.filter((n) => n.type === 'symbol' && !n.props.power).length, pads: count('pad'), nets: count('net'), traces: count('trace'), vias: count('via'), pours: count('fill'), sheets: count('sheet') },
         copperLayers: p.copper,
+        schematicGrid: schematicGrid(p.doc),
         board: (() => {
           const loop = boardOutline(p.doc, p.engine).loops[0];
           if (!loop) return 'no outline';
@@ -512,7 +517,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'add_part',
-    description: `Place a schematic symbol. kind: ${PART_KINDS.map((k) => k.kind).join(', ')}. Positions are in mm on the sheet (grid 1.27 mm). Returns the new reference; then connect it with connect_pins / add_label and call update_pcb.`,
+    description: `Place a schematic symbol. kind: ${PART_KINDS.map((k) => k.kind).join(', ')}. Positions are in mm on the sheet; the part snaps so its pins land on the pin grid (see project_status, default 2.54 mm). Returns the new reference; then connect it with connect_pins / add_label and call update_pcb.`,
     mutates: true,
     input: {
       type: 'object',
@@ -536,7 +541,7 @@ export const TOOLS: ToolDef[] = [
       const sheet = sheetByName(p, a.sheet);
       const spec = makeSymbol(kind, { ...(a.pins ? { pins: num(a.pins, 'pins') } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}), ...(Array.isArray(a.pin_names) ? { pinNames: a.pin_names.map(String) } : {}) });
       // Pins land on the 2.54 mm grid, so wires to other parts can run straight.
-      const at = pinGridOrigin({ x: num(a.x, 'x'), y: num(a.y, 'y') }, spec.pins.map((q) => q.at));
+      const at = pinGridOrigin({ x: num(a.x, 'x'), y: num(a.y, 'y') }, spec.pins.map((q) => q.at), 0, 'none', schematicGrid(p.doc).pin);
       const ref = typeof a.ref === 'string' && a.ref.trim() ? a.ref.trim() : undefined;
       if (ref && resolveTargets(p, ref).length) throw new ToolError(`Reference ${ref} is already used`);
       const { op, uid } = addSymbolOp(p.doc, sheet.uid, spec, at, ref);
@@ -559,7 +564,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'move_symbol',
-    description: 'Move, rotate or mirror a schematic symbol; wires on its pins follow (bent to stay at right angles), and short stubs to power symbols / labels move along with their symbols, so connections never break. Positions in mm; the part is snapped so its pins land on the 2.54 mm grid (line up connected pins on the same row / column for straight wires). mirror: "h" flips left↔right, "v" flips top↔bottom (toggles). unit selects one unit of a multi-unit part (default: all units move by the same offset).',
+    description: 'Move, rotate or mirror a schematic symbol; wires on its pins follow (bent to stay at right angles), and short stubs to power symbols / labels move along with their symbols, so connections never break. Positions in mm; the part is snapped so its pins land on the pin grid of the project (default 2.54 mm) (line up connected pins on the same row / column for straight wires). mirror: "h" flips left↔right, "v" flips top↔bottom (toggles). unit selects one unit of a multi-unit part (default: all units move by the same offset).',
     mutates: true,
     input: { type: 'object', properties: { ref: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, rotation: { type: 'number', description: 'degrees, counter-clockwise' }, mirror: { type: 'string', enum: ['h', 'v'] }, unit: { type: 'number' } }, required: ['ref'] },
     run: (p, a) => {
@@ -567,7 +572,7 @@ export const TOOLS: ToolDef[] = [
       let syms = [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && String(n.props.ref ?? n.name) === ref);
       if (a.unit !== undefined) syms = syms.filter((n) => Number(n.props.unit ?? 1) === num(a.unit, 'unit'));
       if (!syms.length) throw new ToolError(`No schematic symbol ${ref}${a.unit !== undefined ? ` unit ${a.unit}` : ''}`);
-      const g = 1.27;
+      const g = schematicGrid(p.doc).wire;
       const first = vec(p.engine.get(syms[0]!.uid, 'position')?.value)!;
       const tx = optNum(a.x, 'x');
       const ty = optNum(a.y, 'y');
@@ -686,6 +691,22 @@ export const TOOLS: ToolDef[] = [
     run: (p, _a, ctx) => syncPcb(p, ctx),
   },
   {
+    name: 'set_schematic_grid',
+    description: `Set the schematic grid of the project. pin: the step in which parts move (${PIN_GRIDS.join(' / ')} mm; default 2.54). The first pin of a part lands on it; since symbol pins are spaced in 2.54 mm steps, every pin stays on the 2.54 mm lattice either way, so wires can run straight. wire: where wire corners and free points snap (${WIRE_GRIDS.join(' / ')} mm, not coarser than pin). Parts already placed are not moved; run tidy_wires or move_symbol to line them up.`,
+    mutates: true,
+    input: { type: 'object', properties: { pin: { type: 'number' }, wire: { type: 'number' } }, required: ['pin'] },
+    run: (p, a) => {
+      let op;
+      try {
+        op = setSchematicGridOp(num(a.pin, 'pin'), optNum(a.wire, 'wire'));
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      apply(p, 'Schematic grid', [op]);
+      return schematicGrid(p.doc);
+    },
+  },
+  {
     name: 'tidy_wires',
     description: 'Straighten schematic wiring: wires that bend between two points are re-routed (for example sliding a T along the wire it joins), and where only a small part is off by a grid step or two (a divider, a pull-up), that part is moved so the pins line up. Connections never change. Run it after wiring a block. move_parts: false only re-routes.',
     mutates: true,
@@ -763,8 +784,8 @@ export const TOOLS: ToolDef[] = [
       }
       const clip = copyItems(p.doc, p.engine, items);
       if (!clip) throw new ToolError('Nothing to copy');
-      // Whole pin-grid steps, so copied pins stay on the 2.54 mm grid.
-      const g = 2.54;
+      // Whole pin-grid steps, so copied pins stay on the pin grid.
+      const g = schematicGrid(p.doc).pin;
       const dx = Math.round((optNum(a.dx, 'dx') ?? 25.4) / g) * g;
       const dy = Math.round((optNum(a.dy, 'dy') ?? 0) / g) * g;
       const before = groupsOf(p);
@@ -1188,7 +1209,7 @@ export const TOOLS: ToolDef[] = [
       const use = chosen ? { ...part, footprint: chosen } : part;
       const ref = typeof a.ref === 'string' && a.ref.trim() ? a.ref.trim() : undefined;
       if (ref && resolveTargets(p, ref).length) throw new ToolError(`Reference ${ref} is already used`);
-      const g = 1.27;
+      const g = schematicGrid(p.doc).wire;
       const sheet = sheetByName(p, a.sheet);
       const placed = placePartOps(p.doc, sheet.uid, use, { x: Math.round(num(a.x, 'x') / g) * g, y: Math.round(num(a.y, 'y') / g) * g }, { ...(ref ? { ref } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}) });
       apply(p, `Place ${part.name}`, [...storePartOps(p.doc, part, fp ? { ...fp, name: chosen! } : null), ...placed.ops]);

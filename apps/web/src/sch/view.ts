@@ -17,7 +17,8 @@ import {
   type PlacedText,
   pinGridOrigin,
   symbolPinLocals,
-  PIN_GRID,
+  schematicGrid,
+  type SchematicGrid,
   routeWirePath,
   wirePathOps,
   renameRefOps,
@@ -269,9 +270,14 @@ export class SchematicView {
     return (best as { n: DocNode } | null)?.n ?? null;
   }
 
+  /** The project's schematic grid (pin grid for parts, wire grid for everything else). */
+  grid(): SchematicGrid {
+    return schematicGrid(this.app.doc);
+  }
+
   // ---------- editing ----------
   private snap(p: Vec2): Vec2 {
-    return snapToGrid(p, SCH_GRID);
+    return snapToGrid(p, this.grid().wire);
   }
 
   addPart(kind: PartKind, opts: { pins?: number; value?: string } = {}): void {
@@ -348,7 +354,7 @@ export class SchematicView {
     const doc = this.app.doc;
     const e = this.app.engine;
     if (!doc || !e) return;
-    const ops = transformSelectionOps(doc, e, [...this.app.selection], 'rotate', PIN_GRID);
+    const ops = transformSelectionOps(doc, e, [...this.app.selection], 'rotate', this.grid().pin);
     if (ops.length) this.applyKeepingNets('Rotate', ops, 'Rotating');
   }
 
@@ -374,7 +380,7 @@ export class SchematicView {
     const doc = this.app.doc;
     const e = this.app.engine;
     if (!doc || !e) return;
-    const ops = transformSelectionOps(doc, e, [...this.app.selection], axis === 'h' ? 'mirror-h' : 'mirror-v', PIN_GRID);
+    const ops = transformSelectionOps(doc, e, [...this.app.selection], axis === 'h' ? 'mirror-h' : 'mirror-v', this.grid().pin);
     if (ops.length) this.applyKeepingNets(axis === 'h' ? 'Mirror left–right' : 'Mirror top–bottom', ops, 'Mirroring');
     else this.app.say('Select something to mirror.');
   }
@@ -477,7 +483,7 @@ export class SchematicView {
     const doc = this.app.doc;
     const e = this.app.engine;
     if (!doc || !e) return;
-    const clip = copyItems(doc, e, this.app.selection, SCH_GRID);
+    const clip = copyItems(doc, e, this.app.selection, this.grid().wire);
     if (!clip) return this.app.say('Select symbols, wires or labels to copy.');
     this.clip = clip;
     try {
@@ -505,7 +511,7 @@ export class SchematicView {
     const doc = this.app.doc;
     const e = this.app.engine;
     if (!doc || !e) return;
-    const clip = copyItems(doc, e, this.app.selection, SCH_GRID);
+    const clip = copyItems(doc, e, this.app.selection, this.grid().wire);
     if (!clip) return this.app.say('Select symbols, wires or labels to duplicate.');
     this.startPaste(clip, 'Duplicate');
   }
@@ -516,7 +522,7 @@ export class SchematicView {
     if (!doc || !s) return;
     this.finishPaste();
     const at = this.cursor;
-    const offset = snapToGrid({ x: at.x - clip.anchor.x, y: at.y - clip.anchor.y }, PIN_GRID);
+    const offset = snapToGrid({ x: at.x - clip.anchor.x, y: at.y - clip.anchor.y }, this.grid().pin);
     const res = pasteOps(doc, s.uid, clip, offset);
     const key = newUid('paste');
     if (!this.app.apply(label, res.ops, key)) return;
@@ -528,7 +534,7 @@ export class SchematicView {
   private followPaste(p: Vec2): void {
     const ps = this.pasting;
     if (!ps) return;
-    const d = snapToGrid({ x: p.x - ps.base.x, y: p.y - ps.base.y }, PIN_GRID);
+    const d = snapToGrid({ x: p.x - ps.base.x, y: p.y - ps.base.y }, this.grid().pin);
     const ops: Op[] = ps.positions.map((r) => ({ op: 'setRule', uid: r.uid, name: r.name, decl: { name: r.name, value: { x: r.value.x + d.x, y: r.value.y + d.y } } }));
     if (ops.length) this.app.apply('Paste', ops, ps.key);
   }
@@ -670,13 +676,13 @@ export class SchematicView {
           d.x = e.clientX;
           d.y = e.clientY;
         } else if (d.moved && d.kind === 'move') {
-          let delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, SCH_GRID);
+          let delta = snapToGrid({ x: p.x - d.start.x, y: p.y - d.start.y }, this.grid().wire);
           // With symbols in the move, step so the first one's pins land on the 2.54 mm grid;
           // everything else moves by the same offset, so the selection stays rigid.
           const lead = d.symbols[0];
           if (lead && this.app.doc && this.app.engine) {
             const f = symbolFrame(this.app.engine, lead.uid);
-            const to = pinGridOrigin({ x: lead.at.x + p.x - d.start.x, y: lead.at.y + p.y - d.start.y }, symbolPinLocals(this.app.doc, this.app.engine, lead.uid), f.rot, f.mirror);
+            const to = pinGridOrigin({ x: lead.at.x + p.x - d.start.x, y: lead.at.y + p.y - d.start.y }, symbolPinLocals(this.app.doc, this.app.engine, lead.uid), f.rot, f.mirror, this.grid().pin);
             delta = { x: to.x - lead.at.x, y: to.y - lead.at.y };
           }
           if (d.wireOnly && this.app.doc && this.app.engine) {
@@ -853,8 +859,9 @@ export class SchematicView {
     const lw = (mm: number) => Math.max(1, mm * s);
 
     // Grid dots
-    if (s * SCH_GRID * 2 >= 8) {
-      const step = SCH_GRID * (s * SCH_GRID >= 8 ? 1 : 2);
+    const gw = this.grid().wire;
+    if (s * gw * 2 >= 8) {
+      const step = gw * (s * gw >= 8 ? 1 : 2);
       const tl = this.toWorld(0, 0);
       const br = this.toWorld(w, h);
       ctx.fillStyle = C.grid;
