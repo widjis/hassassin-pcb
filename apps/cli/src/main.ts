@@ -10,11 +10,11 @@
  * Output is JSON on stdout. Exit codes: 0 ok, 1 error, 2 checks found errors (--fail-on-error).
  */
 import { newProject, ToolError, TOOL_MAP, TOOLS, runTool, saveProject, type ToolDef } from '@hassassin/tools';
-import { isHpcb, loadGeometry, readProject, writeAny, writeProject } from './io.ts';
+import { isHpcb, loadGeometry, readProject, toolContext, writeAny, writeProject } from './io.ts';
 import { serveMcp } from './mcp.ts';
 import { openLive, parseLiveLink, runLive } from './live.ts';
 
-const VERSION = '0.3.5';
+const VERSION = '0.5.0';
 
 /** Positional arguments after the project, per tool. */
 const POSITIONAL: Record<string, string[]> = {
@@ -29,6 +29,15 @@ const POSITIONAL: Record<string, string[]> = {
   move_part: ['ref', 'x', 'y', 'rotation'],
   route: ['from', 'to'],
   export_fab: ['out'],
+  search_parts: ['query'],
+  get_part: ['id'],
+  search_footprints: ['query'],
+  place_part: ['id', 'x', 'y'],
+  assign_footprint: ['ref', 'footprint'],
+  set_part_info: ['ref'],
+  import_offers: ['file'],
+  set_offer: ['mpn', 'supplier', 'prices'],
+  import_kicad_library: ['files'],
 };
 
 function print(v: unknown): void {
@@ -96,6 +105,10 @@ function usage(): string {
     '  hassassin set-rule board.hpcb "net#GND" pourLayers "F.Cu B.Cu"',
     '  hassassin add-part board.hpcb resistor 20 10 --value 4k7',
     '  hassassin run-drc board.hpcb --fail-on-error',
+    '  hassassin search-parts board.hpcb "ldo 3.3"',
+    '  hassassin place-part board.hpcb kicad:Regulator_Linear:AMS1117-3.3 40 20',
+    '  hassassin assign-footprint board.hpcb R1 chip-0805',
+    '  hassassin bom board.hpcb --boards 50',
     '',
     `Tools: ${TOOLS.map((t) => t.name.replace(/_/g, '-')).join(', ')}`,
   ].join('\n');
@@ -159,7 +172,7 @@ export async function main(argv: string[]): Promise<void> {
     const s = await openLive(link);
     if (tool.name === 'refill_pours') await loadGeometry();
     try {
-      print(await runLive(s, () => runTool(s.project, tool.name, args, { writeFile: writeAny }), tool.mutates));
+      print(await runLive(s, () => runTool(s.project, tool.name, args, toolContext()), tool.mutates));
     } finally {
       s.client.close();
     }
@@ -167,7 +180,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   const p = await readProject([projectPath]);
   if (tool.name === 'refill_pours') await loadGeometry();
-  const result = await runTool(p, tool.name, args, { writeFile: writeAny });
+  const result = await runTool(p, tool.name, args, toolContext());
   if (tool.mutates && p.dirty) {
     const target = typeof flags.out === 'string' && tool.name !== 'export_fab' ? flags.out : projectPath;
     if (!isHpcb(target)) fail(`"${tool.name}" changes the project; write it as .hpcb with -o project.hpcb (KiCad files are read-only here).`);

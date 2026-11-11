@@ -75,5 +75,13 @@ CLI juga menerima link yang sama: `pnpm hassassin run-drc "http://…?p=…&t=�
 | add_part / connect_pins / add_label | tulis | Edit schematic |
 | update_pcb | tulis | Sinkron schematic → board |
 | move_part / route / refill_pours | tulis | Edit board |
+| search_parts / get_part | baca | Cari part (proyek, generik, team, library KiCad terpasang) |
+| search_footprints | baca | Cari footprint (generik, proyek, KiCad) |
+| bom | baca | BOM + harga untuk N board, part tanpa MPN/harga/stok |
+| place_part | tulis | Pasang part library (semua unit) di schematic |
+| assign_footprint | tulis | Ganti footprint; board diperbarui di tempat |
+| set_part_info | tulis | MPN, pabrikan, datasheet, LCSC, nilai, DNP |
+| import_offers / set_offer | tulis | Data harga & stok (CSV / manual) |
+| import_kicad_library | tulis | Salin `.kicad_sym` / `.kicad_mod` ke proyek |
 | export_fab | tulis file | ZIP Gerber, drill, BOM, pick-and-place |
 | undo / redo / apply_ops | tulis | Riwayat, operasi mentah |

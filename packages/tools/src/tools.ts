@@ -5,6 +5,16 @@
  */
 import {
   addSymbolOp,
+  applyOffersOps,
+  buildBom,
+  fpKey,
+  genericPart,
+  parseOffersCsv,
+  placePartOps,
+  setPartPropsOps,
+  storePartOps,
+  type FootprintSpec,
+  type Offer,
   computeRatsnest,
   dist,
   extractNetlist,
@@ -34,9 +44,43 @@ import {
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
 import type { Project } from './project.ts';
+import { Library } from './library.ts';
+import { parseKicadFootprint, parseKicadSymbolLib } from '@hassassin/kicad-import';
 
 export interface ToolContext {
   writeFile?: (path: string, data: Uint8Array | string) => Promise<void> | void;
+  readFile?: (path: string) => Promise<string>;
+  /** Extra part/footprint sources (installed KiCad libraries, team library…). */
+  library?: Library;
+}
+
+const DEFAULT_LIBRARY = new Library();
+const libOf = (ctx: ToolContext) => ctx.library ?? DEFAULT_LIBRARY;
+
+/** Schematic → PCB update with footprints resolved through the library. */
+export async function syncPcb(p: Project, ctx: ToolContext) {
+  const names = [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && !n.props.power && n.props.Footprint).map((n) => String(n.props.Footprint));
+  const resolveFootprint = await libOf(ctx).resolver(p.doc, names);
+  const { ops, report } = planSync(p.doc, p.engine, extractNetlist(p.doc, p.engine), { resolveFootprint, copper: p.copper });
+  // Keep a copy of every library footprint the board now uses, so the project stays self-contained.
+  const keep: Op[] = [];
+  for (const n of new Set(names)) {
+    const fp = resolveFootprint(n);
+    if (fp && fp.source !== 'generic' && !p.doc.meta[fpKey(n)]) keep.push({ op: 'setMeta', key: fpKey(n), value: { ...fp, name: n } });
+  }
+  apply(p, 'Update PCB from schematic', [...keep, ...ops]);
+  return { changed: ops.length > 0, ...report, netsRenamed: report.netsRenamed.map(([a, b]) => `${a} → ${b}`) };
+}
+
+function parsePrices(v: unknown): { qty: number; price: number }[] {
+  if (Array.isArray(v)) return v.map((x) => ({ qty: num((x as { qty: unknown }).qty, 'qty'), price: num((x as { price: unknown }).price, 'price') }));
+  return String(v ?? '')
+    .split(/[,;\s]+/)
+    .filter(Boolean)
+    .map((pair) => {
+      const [q, pr] = pair.split(/[:@=]/);
+      return { qty: num(q, 'qty'), price: num(pr, 'price') };
+    });
 }
 
 type Schema = { type: string; description?: string; enum?: readonly string[]; items?: Schema; properties?: Record<string, Schema>; required?: string[] };
@@ -392,6 +436,7 @@ export const TOOLS: ToolDef[] = [
         sheet: { type: 'string', description: 'Sheet name or path (default: root)' },
         ref: { type: 'string', description: 'Reference to use (default: next free)' },
         mpn: { type: 'string' },
+        package: { type: 'string', description: 'Footprint (default per kind, e.g. chip-0603, soic-8; any name search_footprints returns)' },
       },
       required: ['kind', 'x', 'y'],
     },
@@ -407,6 +452,8 @@ export const TOOLS: ToolDef[] = [
       const { op, uid } = addSymbolOp(p.doc, sheet.uid, spec, at, ref);
       const ops: Op[] = [op];
       if (typeof a.mpn === 'string') ops.push({ op: 'setProp', uid, key: 'MPN', value: a.mpn });
+      const gp = genericPart(kind, { ...(a.pins ? { pins: num(a.pins, 'pins') } : {}) });
+      ops.push({ op: 'setProp', uid, key: 'Footprint', value: typeof a.package === 'string' && a.package.trim() ? a.package.trim() : gp.footprint! });
       apply(p, `Add ${spec.prefix}`, ops);
       const sym = p.doc.nodes.get(uid)!;
       return {
@@ -467,14 +514,10 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'update_pcb',
-    description: 'Push schematic connectivity into the board: pad nets, net renames (routed copper follows), new parts get placeholder footprints next to the board. Board-only parts are kept.',
+    description: 'Push the schematic into the board: pad nets, net renames (routed copper follows), new parts placed next to the board with their footprint from the library (placeholder if unknown), changed footprints rebuilt in place, part properties (Value, MPN…) copied. Board-only parts are kept.',
     mutates: true,
     input: { type: 'object', properties: {} },
-    run: (p) => {
-      const { ops, report } = planSync(p.doc, p.engine, extractNetlist(p.doc, p.engine));
-      apply(p, 'Update PCB from schematic', ops);
-      return { changed: ops.length > 0, ...report, netsRenamed: report.netsRenamed.map(([a, b]) => `${a} → ${b}`) };
-    },
+    run: (p, _a, ctx) => syncPcb(p, ctx),
   },
   {
     name: 'move_part',
@@ -561,6 +604,191 @@ export const TOOLS: ToolDef[] = [
       const zip = fabZip(r);
       await ctx.writeFile(str(a.out, 'out'), zip);
       return { written: a.out, bytes: zip.length, files: r.files.map((f) => ({ name: f.name, bytes: f.data.length })), notes: r.notes };
+    },
+  },
+  // ---------------------------------------------------------------- library & parts
+  {
+    name: 'search_parts',
+    description: 'Search the part library: this project\'s parts, generic parametric parts (generic:resistor, generic:ic?pins=16…), and the installed KiCad symbol libraries when available. Returns ids for get_part / place_part.',
+    mutates: false,
+    input: { type: 'object', properties: { query: { type: 'string', description: 'Words to match, e.g. "ldo 3.3", "esp32-c3", "mosfet n-channel sot-23"' }, limit: { type: 'number' } }, required: ['query'] },
+    run: async (p, a, ctx) => libOf(ctx).searchParts(p.doc, String(a.query ?? ''), optNum(a.limit, 'limit') ?? 20),
+  },
+  {
+    name: 'get_part',
+    description: 'Details of a library part: pins per unit, default footprint, properties (MPN, datasheet) and supplier offers.',
+    mutates: false,
+    input: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    run: async (p, a, ctx) => {
+      const part = await libOf(ctx).getPart(p.doc, str(a.id, 'id'));
+      if (!part) throw new ToolError(`No part "${a.id}". Use search_parts.`);
+      return {
+        id: part.id, name: part.name, description: part.description, prefix: part.prefix, value: part.value, footprint: part.footprint, footprints: part.footprints, properties: part.properties, offers: part.offers,
+        units: part.units.map((u, i) => ({ unit: i + 1, pins: u.pins.map((x) => `${x.number}${x.name && x.name !== '~' ? ` ${x.name}` : ''} (${x.type})`) })),
+      };
+    },
+  },
+  {
+    name: 'search_footprints',
+    description: 'Search footprints: generic parametric ones (chip-0603, sot-23-5, soic-8, tssop-20, qfn-32-5x5-p0.5-ep3.5, dip-8, header-1x04-p2.54, terminal-1x02-p5.08, hole-m3…), project footprints, and installed KiCad footprint libraries ("Lib:Name").',
+    mutates: false,
+    input: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] },
+    run: async (p, a, ctx) => libOf(ctx).searchFootprints(p.doc, String(a.query ?? ''), optNum(a.limit, 'limit') ?? 30),
+  },
+  {
+    name: 'place_part',
+    description: 'Place a library part (id from search_parts) on a schematic sheet. Multi-unit parts get every unit, side by side. The part (and its footprint) is copied into the project. Then wire it and call update_pcb.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Part id, e.g. "kicad:Regulator_Linear:AMS1117-3.3" or "generic:capacitor?value=10u&package=chip-0805"' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        value: { type: 'string' },
+        ref: { type: 'string' },
+        footprint: { type: 'string', description: 'Override the part\'s default footprint' },
+        sheet: { type: 'string' },
+      },
+      required: ['id', 'x', 'y'],
+    },
+    run: async (p, a, ctx) => {
+      const lib = libOf(ctx);
+      const part = await lib.getPart(p.doc, str(a.id, 'id'));
+      if (!part) throw new ToolError(`No part "${a.id}". Use search_parts.`);
+      const chosen = typeof a.footprint === 'string' && a.footprint.trim() ? a.footprint.trim() : part.footprint;
+      const fp = chosen ? await lib.getFootprint(p.doc, chosen) : null;
+      const use = chosen ? { ...part, footprint: chosen } : part;
+      const ref = typeof a.ref === 'string' && a.ref.trim() ? a.ref.trim() : undefined;
+      if (ref && resolveTargets(p, ref).length) throw new ToolError(`Reference ${ref} is already used`);
+      const g = 1.27;
+      const sheet = sheetByName(p, a.sheet);
+      const placed = placePartOps(p.doc, sheet.uid, use, { x: Math.round(num(a.x, 'x') / g) * g, y: Math.round(num(a.y, 'y') / g) * g }, { ...(ref ? { ref } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}) });
+      apply(p, `Place ${part.name}`, [...storePartOps(p.doc, part, fp ? { ...fp, name: chosen! } : null), ...placed.ops]);
+      const pins: { pin: string; name: unknown; at: Vec2 }[] = [];
+      for (const uid of placed.uids) {
+        for (const c of p.doc.nodes.get(uid)!.children) {
+          const pin = p.doc.nodes.get(c)!;
+          const pt = pinPoint(p.doc, p.engine, pin)!;
+          pins.push({ pin: `${placed.ref}.${pin.props.number}`, name: pin.props.pinName, at: { x: +pt.x.toFixed(2), y: +pt.y.toFixed(2) } });
+        }
+      }
+      return { ref: placed.ref, units: placed.uids.length, footprint: chosen ?? null, footprintFound: !!fp, pins };
+    },
+  },
+  {
+    name: 'assign_footprint',
+    description: 'Choose the footprint of a part (generic name like "chip-0805", a project footprint, or an installed KiCad "Lib:Name"). Updates the schematic and, unless update=false, rebuilds the board component in place.',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, footprint: { type: 'string' }, update: { type: 'boolean' } }, required: ['ref', 'footprint'] },
+    run: async (p, a, ctx) => {
+      const ref = str(a.ref, 'ref');
+      const name = str(a.footprint, 'footprint');
+      const fp = await libOf(ctx).getFootprint(p.doc, name);
+      if (!fp) throw new ToolError(`Footprint "${name}" not found. Use search_footprints.`);
+      const ops = setPartPropsOps(p.doc, ref, { Footprint: name });
+      if (!ops.length && !resolveTargets(p, ref).length) throw new ToolError(`No part ${ref}`);
+      if (fp.source !== 'generic' && !p.doc.meta[fpKey(name)]) ops.unshift({ op: 'setMeta', key: fpKey(name), value: { ...fp, name } });
+      const hasSymbol = [...p.doc.nodes.values()].some((n) => n.type === 'symbol' && String(n.props.ref ?? n.name) === ref);
+      apply(p, `Footprint ${ref} → ${name}`, ops.filter((o) => !(o.op === 'setProp' && p.doc.nodes.get(o.uid)?.type === 'element' && hasSymbol)));
+      const out: Record<string, unknown> = { ref, footprint: name, pads: fp.pads.length };
+      if (a.update !== false && hasSymbol) out.update = await syncPcb(p, ctx);
+      return out;
+    },
+  },
+  {
+    name: 'set_part_info',
+    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet, lcsc, value, dnp (do not populate).',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, lcsc: { type: 'string' }, value: { type: 'string' }, dnp: { type: 'boolean' } }, required: ['ref'] },
+    run: (p, a) => {
+      const ref = str(a.ref, 'ref');
+      const map: Record<string, string> = { mpn: 'MPN', manufacturer: 'Manufacturer', datasheet: 'Datasheet', lcsc: 'LCSC', value: 'Value' };
+      const props: Record<string, string | null> = {};
+      for (const [k, key] of Object.entries(map)) if (typeof a[k] === 'string') props[key] = (a[k] as string).trim() || null;
+      const ops = setPartPropsOps(p.doc, ref, props);
+      if (typeof a.dnp === 'boolean') for (const n of p.doc.nodes.values()) if ((n.type === 'symbol' && String(n.props.ref ?? n.name) === ref) || (n.type === 'element' && n.name === ref)) ops.push({ op: 'setProp', uid: n.uid, key: 'dnp', value: a.dnp || null });
+      if (!resolveTargets(p, ref).length) throw new ToolError(`No part ${ref}`);
+      apply(p, `Part info ${ref}`, ops);
+      return { ref, set: props, ...(typeof a.dnp === 'boolean' ? { dnp: a.dnp } : {}) };
+    },
+  },
+  {
+    name: 'bom',
+    description: 'Bill of materials grouped by MPN/value/footprint, priced for `boards` boards from the supplier offers stored in the project (cheapest offer with enough stock). Lists parts without MPN, without price data, or short on stock.',
+    mutates: false,
+    input: { type: 'object', properties: { boards: { type: 'number', description: 'How many boards to build (default 1)' } } },
+    run: (p, a) => buildBom(p.doc, optNum(a.boards, 'boards') ?? 1),
+  },
+  {
+    name: 'import_offers',
+    description: 'Load supplier price/stock data from CSV (columns: MPN, Supplier, SKU, Stock, MOQ, Currency, URL and price columns like "Price@1", "Price@100", or a single "Price"). Matched by MPN to the project\'s parts. Give `file` (path) or `csv` (text).',
+    mutates: true,
+    input: { type: 'object', properties: { file: { type: 'string' }, csv: { type: 'string' } } },
+    run: async (p, a, ctx) => {
+      let text = typeof a.csv === 'string' ? a.csv : '';
+      if (!text && typeof a.file === 'string') {
+        if (!ctx.readFile) throw new ToolError('This host cannot read files; pass the CSV text as `csv`.');
+        text = await ctx.readFile(a.file);
+      }
+      if (!text) throw new ToolError('Give `file` or `csv`.');
+      const { ops, matched, unmatched } = applyOffersOps(p.doc, parseOffersCsv(text));
+      apply(p, 'Import supplier offers', ops);
+      return { matched, unmatched };
+    },
+  },
+  {
+    name: 'set_offer',
+    description: 'Record one supplier offer for an MPN by hand: supplier, sku, stock, currency, prices as "qty:price" pairs, e.g. "1:0.12 100:0.05 1000:0.021".',
+    mutates: true,
+    input: { type: 'object', properties: { mpn: { type: 'string' }, supplier: { type: 'string' }, sku: { type: 'string' }, stock: { type: 'number' }, moq: { type: 'number' }, currency: { type: 'string' }, prices: { type: 'string' }, url: { type: 'string' } }, required: ['mpn', 'supplier', 'prices'] },
+    run: (p, a) => {
+      const offer: Offer = { supplier: str(a.supplier, 'supplier'), currency: typeof a.currency === 'string' && a.currency ? a.currency : 'USD', breaks: parsePrices(a.prices), updatedAt: new Date().toISOString().slice(0, 10) };
+      if (typeof a.sku === 'string') offer.sku = a.sku;
+      if (a.stock !== undefined) offer.stock = num(a.stock, 'stock');
+      if (a.moq !== undefined) offer.moq = num(a.moq, 'moq');
+      if (typeof a.url === 'string') offer.url = a.url;
+      const mpn = str(a.mpn, 'mpn');
+      const { ops, matched } = applyOffersOps(p.doc, new Map([[mpn, [offer]]]));
+      if (!matched.length) throw new ToolError(`No part in the project has MPN ${mpn}; set it first with set_part_info.`);
+      apply(p, `Offer ${mpn}`, ops);
+      return { mpn, offer };
+    },
+  },
+  {
+    name: 'import_kicad_library',
+    description: 'Copy parts from a KiCad symbol library (.kicad_sym) and/or footprints (.kicad_mod) into this project, so they can be placed with place_part / assign_footprint. `names` limits which symbols are taken.',
+    mutates: true,
+    input: { type: 'object', properties: { files: { type: 'array', items: { type: 'string' } }, names: { type: 'array', items: { type: 'string' } }, library: { type: 'string', description: 'Library name used in ids (default: file name)' } }, required: ['files'] },
+    run: async (p, a, ctx) => {
+      if (!ctx.readFile) throw new ToolError('This host cannot read files.');
+      const files = (Array.isArray(a.files) ? a.files : [a.files]).map(String);
+      const only = Array.isArray(a.names) && a.names.length ? new Set(a.names.map(String)) : undefined;
+      const ops: Op[] = [];
+      const parts: string[] = [];
+      const footprints: string[] = [];
+      const warnings: string[] = [];
+      for (const f of files) {
+        const text = await ctx.readFile(f);
+        const base = f.split(/[\\/]/).pop()!;
+        if (/\.kicad_sym$/i.test(f)) {
+          const lib = typeof a.library === 'string' && a.library ? a.library : base.replace(/\.kicad_sym$/i, '');
+          const r = parseKicadSymbolLib(text, lib, only);
+          warnings.push(...r.warnings);
+          for (const part of r.parts) {
+            ops.push({ op: 'setMeta', key: `part:${part.id}`, value: { ...part, source: 'project' } });
+            parts.push(part.id);
+          }
+        } else if (/\.kicad_mod$/i.test(f)) {
+          const dir = f.split(/[\\/]/).slice(-2, -1)[0] ?? '';
+          const lib = typeof a.library === 'string' && a.library ? a.library : dir.replace(/\.pretty$/i, '');
+          const fp: FootprintSpec = parseKicadFootprint(text, lib);
+          ops.push({ op: 'setMeta', key: fpKey(fp.name), value: { ...fp, source: 'project' } });
+          footprints.push(fp.name);
+        } else warnings.push(`Skipped ${base}: not a .kicad_sym or .kicad_mod file`);
+      }
+      apply(p, 'Import KiCad library', ops);
+      return { parts, footprints, warnings };
     },
   },
   {

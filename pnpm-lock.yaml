@@ -50,9 +50,15 @@ importers:
       '@hassassin/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@hassassin/kicad-import':
+        specifier: workspace:*
+        version: link:../../packages/kicad-import
       '@hassassin/sync':
         specifier: workspace:*
         version: link:../../packages/sync
+      '@hassassin/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       ws:
         specifier: ^8.18.3
         version: 8.22.2

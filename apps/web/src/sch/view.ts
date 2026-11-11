@@ -4,11 +4,12 @@
  * delete (Del), enter sub-sheet (double-click a sheet block), up (Backspace on empty / U).
  */
 import {
-  addSymbolOp,
+  genericPart,
+  placePartOps,
+  type PartDef,
   arcPoints,
   dist,
   distToSegment,
-  makeSymbol,
   newUid,
   sheetItems,
   sheetPath,
@@ -219,15 +220,22 @@ export class SchematicView {
   }
 
   addPart(kind: PartKind, opts: { pins?: number; value?: string } = {}): void {
+    this.placePart(genericPart(kind, opts));
+  }
+
+  /** Place every unit of a library part at the view centre (part + footprint copied into the project). */
+  placePart(part: PartDef, extra: Op[] = []): void {
     const s = this.sheet();
     const doc = this.app.doc;
     if (!s || !doc) return this.app.say('Open or create a schematic first.');
-    const spec = makeSymbol(kind, opts);
     const at = this.snap({ x: this.view.cx, y: this.view.cy });
-    const { op, uid } = addSymbolOp(doc, s.uid, spec, at);
-    if (this.app.apply(`Add ${spec.prefix}`, [op])) {
-      this.app.select([uid]);
-      this.app.say(`Placed ${doc.nodes.get(uid)?.name}. Drag it into place; R rotates.`);
+    // Step right past symbols already sitting at the view centre.
+    const taken = s.children.map((c) => doc.nodes.get(c)).filter((n) => n?.type === 'symbol').map((n) => this.app.engine?.get(n!.uid, 'position')?.value as Vec2 | undefined);
+    for (let i = 0; i < 40 && taken.some((q) => q && Math.abs(q.x - at.x) < 7 && Math.abs(q.y - at.y) < 7); i++) at.x += 12.7;
+    const { ops, ref, uids } = placePartOps(doc, s.uid, part, at);
+    if (this.app.apply(`Place ${part.name}`, [...extra, ...ops])) {
+      this.app.select(uids);
+      this.app.say(`Placed ${ref}${uids.length > 1 ? ` (${uids.length} units)` : ''}. Drag it into place; R rotates.`);
     }
   }
 

@@ -16,7 +16,7 @@ export type SymGraphic =
   | { t: 'arc'; s: Vec2; m: Vec2; e: Vec2; w: number }
   | { t: 'text'; at: Vec2; text: string; size: number };
 
-interface LibPin {
+export interface LibPin {
   unit: number;
   at: Vec2;
   angle: number;
@@ -27,7 +27,7 @@ interface LibPin {
   hidden: boolean;
 }
 
-interface LibSymbol {
+export interface LibSymbol {
   name: string;
   power: boolean;
   pins: LibPin[];
@@ -56,9 +56,14 @@ const at = (l: SList | undefined): Vec2 | undefined => {
 const rule = (name: string, value: RuleDecl['value']): RuleDecl => ({ name, value });
 
 function parseLibSymbols(root: SList, warnings: string[]): Map<string, LibSymbol> {
+  return parseSymbolDefs(children(child(root, 'lib_symbols') ?? [], 'symbol'), warnings);
+}
+
+/** Symbol definitions (from a schematic's lib_symbols or a .kicad_sym library), with `extends` resolved. */
+export function parseSymbolDefs(defs: SList[], warnings: string[]): Map<string, LibSymbol> {
   const libs = new Map<string, LibSymbol>();
   const raw = new Map<string, SList>();
-  for (const s of children(child(root, 'lib_symbols') ?? [], 'symbol')) {
+  for (const s of defs) {
     const name = str(s[1]);
     if (name) raw.set(name, s);
   }

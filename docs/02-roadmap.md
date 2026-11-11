@@ -12,7 +12,7 @@ paling awal karena renderer, DRC, kolaborasi, dan AI semuanya bergantung padanya
 | **3** ✅ | Schematic + alur proyek | Editor schematic, netlist, ERC, sinkron schematic → PCB (satu sumber data), dokumen spesifikasi proyek, tahap & gerbang pemeriksaan |
 | **3.5** ✅ | Akses untuk agent | CLI `hassassin` + MCP server (stdio) di atas file `.hpcb`/KiCad: query, inspect, ubah rule, tambah part, kabel, update PCB, DRC/ERC, refill pour, ekspor fab — dipakai Claude Code, Codex, atau klien MCP lain |
 | **4** ✅ | Kolaborasi | Edit multi-user real-time, kursor kolaborator, komentar ber-pin, riwayat versi & restore, fork/clone, izin Edit/Comment/View; **MCP live** (agent mengedit proyek yang sedang terbuka) |
-| **5** | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
+| **5** ✅ | Library & part | Part sebagai dokumen yang bisa dipakai ulang, part generik parametrik, impor library KiCad, harga & stok |
 | **6** | AI agent | Chat + mode agent dengan task list, AI pemandu per tahap proyek, memakai definisi tool yang sama dengan CLI/MCP (Fase 3.5), DRC/ERC-fix, placement & routing berbantuan AI |
 | **7** | Lanjutan | Autorouter, 3D view, stackup & impedansi, diff-pair/length tuning, flex/rigid-flex |
 
@@ -173,6 +173,36 @@ Batasan yang diketahui:
   karakter-per-karakter untuk teks.
 - Undo setelah edit orang lain bisa ditolak bila objeknya sudah berubah (pesan ditampilkan).
 - Server tunggal tanpa skala horizontal; penyimpanan berbasis file.
+
+## Fase 5 — yang sudah dibangun
+
+- **Footprint sebagai data** (`core/footprints.ts`): `FootprintSpec` + generator parametrik milik sendiri
+  (chip 0201–2512, SOD/SMA/SMB/SMC, SOT-23/-5/-6, SOIC, TSSOP, MSOP, QFN dengan EP, DIP, header 1×N/2×N,
+  terminal 5.08, lubang M2–M3). Nama KiCad umum dipetakan ke padanan generik bila library tidak tersedia.
+- **Part** (`core/parts.ts`): symbol (multi-unit), footprint + alternatif, properti (MPN, pabrikan,
+  datasheet, LCSC), penawaran pemasok (stok, MOQ, harga bertingkat, tanggal). Part generik parametrik
+  (`generic:resistor?value=4k7&package=chip-0402`). Proyek menyimpan salinan tiap part/footprint yang dipakai
+  (`meta["part:…"]`, `meta["fp:…"]`) jadi file proyek mandiri dan aman untuk edit bersamaan.
+- **Impor library KiCad**: `.kicad_sym` (unit, `extends`, simbol power dilewati) dan `.kicad_mod`.
+  CLI/server otomatis membaca library KiCad yang terpasang (±22.800 simbol, ±15.400 footprint di Mac ini),
+  dengan indeks ter-cache (~0,6 s dibangun sekali). Library tidak dibundel.
+- **Sinkron schematic → PCB**: part baru langsung mendapat footprint dari library; footprint yang diganti
+  atau placeholder dibangun ulang di tempat (posisi/rotasi tetap, net ikut); properti part disalin.
+- **BOM & sourcing**: pengelompokan per MPN/nilai/footprint, harga untuk N board (penawaran termurah dengan
+  stok cukup), impor CSV dari ekspor alat BOM distributor, input manual. Gerbang "3 · Komponen" memakai ini.
+- **Team library** di server (`/api/library/*`): cari (team + KiCad terpasang), ambil part/footprint,
+  publikasi part dari proyek (butuh link edit), berversi.
+- **Tool baru** untuk CLI/MCP/agent: `search_parts`, `get_part`, `search_footprints`, `place_part`,
+  `assign_footprint`, `set_part_info`, `bom`, `import_offers`, `set_offer`, `import_kicad_library`.
+- **Web**: tab *Parts* (cari, pratinjau symbol + footprint, pasang, publikasi ke team), daftar part proyek
+  dengan footprint/MPN yang bisa diedit, biaya untuk N board, impor CSV & library KiCad; tombol *Library* (P).
+
+Batasan yang diketahui:
+- Harga & stok **tidak diambil langsung** dari distributor: API mereka butuh kunci akun. Data masuk lewat
+  CSV/manual dan diberi tanggal. Konektor API distributor menyusul bila ada kunci.
+- Dimensi land pattern generik adalah nilai nominal kami sendiri; untuk produksi, pilih footprint dari
+  datasheet/library pabrikan.
+- Belum ada model 3D, dan belum ada pemetaan pin ↔ pad selain nomor yang sama.
 
 ## Di luar cakupan (untuk sekarang)
 Simulasi SPICE, mekanik/enclosure, firmware, wire harness, pemesanan pabrikasi.

@@ -7,7 +7,7 @@
 import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
 import { newProject, saveProject, ToolError, TOOLS, runTool, type Project } from '@hassassin/tools';
-import { isHpcb, loadGeometry, mtime, readProject, writeAny, writeProject } from './io.ts';
+import { isHpcb, loadGeometry, mtime, readProject, toolContext, writeAny, writeProject } from './io.ts';
 import { openLive, parseLiveLink, runLive, type LiveSession } from './live.ts';
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -80,7 +80,7 @@ export async function serveMcp(version: string): Promise<void> {
       delete rest.project;
       if (name === 'refill_pours') await loadGeometry();
       const session = s;
-      return runLive(session, () => runTool(session.project, name, rest, { writeFile: writeAny }), TOOLS.find((t) => t.name === name)?.mutates ?? false);
+      return runLive(session, () => runTool(session.project, name, rest, toolContext()), TOOLS.find((t) => t.name === name)?.mutates ?? false);
     }
     const p = await getProject(path);
     const rest = { ...args };
@@ -88,7 +88,7 @@ export async function serveMcp(version: string): Promise<void> {
     if (name === 'refill_pours') await loadGeometry();
     const tool = TOOLS.find((t) => t.name === name);
     if (tool?.mutates && !isHpcb(path)) throw new ToolError(`"${name}" changes the project; import it first with import_kicad (KiCad files are read-only).`);
-    const result = await runTool(p, name, rest, { writeFile: writeAny });
+    const result = await runTool(p, name, rest, toolContext());
     if (p.dirty) {
       await writeProject(p, path);
       cache.set(resolve(path), { project: p, mtime: await mtime(resolve(path)) });

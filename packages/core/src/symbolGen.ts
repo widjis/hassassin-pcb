@@ -10,6 +10,7 @@ export type SymGraphicSpec =
   | { t: 'poly'; pts: Vec2[]; fill: boolean; w: number }
   | { t: 'rect'; a: Vec2; b: Vec2; fill: boolean; w: number }
   | { t: 'circle'; c: Vec2; r: number; fill: boolean; w: number }
+  | { t: 'arc'; s: Vec2; m: Vec2; e: Vec2; w: number }
   | { t: 'text'; at: Vec2; text: string; size: number };
 
 export interface PinSpec {
@@ -21,6 +22,7 @@ export interface PinSpec {
   /** Direction from the connection point toward the body, degrees (0 = +X, 90 = up). */
   angle: number;
   length: number;
+  hidden?: boolean;
 }
 
 export interface SymbolSpec {

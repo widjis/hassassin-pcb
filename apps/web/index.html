@@ -36,6 +36,7 @@
       <aside class="sidebar left">
         <nav class="tabs" id="leftTabs">
           <button data-tab="project">Project</button>
+          <button data-tab="parts">Parts</button>
           <button data-tab="layers" class="active">Layers</button>
           <button data-tab="objects">Objects</button>
           <button data-tab="rules">Rules</button>
@@ -44,6 +45,7 @@
           <button data-tab="history">History</button>
         </nav>
         <section class="tab-body hidden" data-body="project" id="projectPanel"></section>
+        <section class="tab-body hidden" data-body="parts" id="partsPanel"></section>
         <section class="tab-body" data-body="layers" id="layersPanel"></section>
         <section class="tab-body hidden" data-body="objects">
           <input id="treeFilter" class="filter" placeholder="Filter by name" spellcheck="false" />
@@ -70,6 +72,7 @@
             <select id="partSelect" title="Add a part at the view centre (A)">
               <option value="">+ Part…</option>
             </select>
+            <button id="libBtn" title="Search the part library (P)">Library</button>
             <button id="syncBtn" class="primary-outline" title="Push schematic connections into the board">Update PCB</button>
           </div>
         </div>

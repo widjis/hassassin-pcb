@@ -3,7 +3,11 @@
  *   - every pad of a component that is in the schematic takes its net from the netlist,
  *   - PCB nets are renamed when their pads all moved to a new name (so routed copper
  *     follows), created when missing, and removed when empty,
- *   - components only in the schematic get a placeholder footprint next to the board,
+ *   - components only in the schematic get their footprint (from the library) next to the
+ *     board, or a placeholder when the footprint is not known,
+ *   - a component whose footprint changed in the schematic (or that still has a
+ *     placeholder) is rebuilt in place with the new footprint, keeping position/rotation,
+ *   - part properties (value, MPN, manufacturer…) are copied onto the component,
  *   - components only on the PCB are reported, never deleted.
  */
 import type { Op } from './commands.ts';
@@ -13,6 +17,10 @@ import type { StyleEngine } from './style.ts';
 import type { Netlist } from './netlist.ts';
 import { emptyBox, growBox } from './geom.ts';
 import { boardOutline } from './copper.ts';
+import { footprintNodes, type FootprintSpec } from './footprints.ts';
+
+/** Properties copied from schematic symbols onto PCB components. */
+export const SYNCED_PROPS = ['Value', 'MPN', 'Manufacturer', 'LCSC', 'Datasheet', 'partId'] as const;
 
 export interface SyncReport {
   padChanges: number;
@@ -23,6 +31,15 @@ export interface SyncReport {
   componentsAdded: string[];
   onlyOnPcb: string[];
   missingPads: string[];
+  footprintsChanged: string[];
+  /** Footprint names that could not be found (those parts keep or get a placeholder). */
+  footprintsMissing: string[];
+  propChanges: number;
+}
+
+export interface SyncOptions {
+  resolveFootprint?: (name: string) => FootprintSpec | null;
+  copper?: string[];
 }
 
 function netClassOf(name: string): string | undefined {
@@ -36,6 +53,7 @@ interface SymInfo {
   ref: string;
   value: string;
   footprint: string;
+  props: Record<string, string>;
   pins: { number: string; name: string }[];
 }
 
@@ -44,7 +62,8 @@ function symbolsByRef(doc: Doc): Map<string, SymInfo> {
   for (const n of doc.nodes.values()) {
     if (n.type !== 'symbol' || n.props.power) continue;
     const ref = String(n.props.ref ?? n.name);
-    const info = out.get(ref) ?? { ref, value: String(n.props.Value ?? ''), footprint: String(n.props.Footprint ?? ''), pins: [] };
+    const info = out.get(ref) ?? { ref, value: String(n.props.Value ?? ''), footprint: String(n.props.Footprint ?? ''), props: {}, pins: [] };
+    for (const k of SYNCED_PROPS) if (n.props[k] !== undefined && n.props[k] !== '' && info.props[k] === undefined) info.props[k] = String(n.props[k]);
     for (const c of n.children) {
       const p = doc.nodes.get(c);
       if (p?.type === 'pin') info.pins.push({ number: String(p.props.number ?? p.name), name: String(p.props.pinName ?? '') });
@@ -140,8 +159,20 @@ function placeholderFootprint(info: SymInfo, origin: Vec2, netOf: (pin: string) 
   return nodes;
 }
 
-export function planSync(doc: Doc, engine: StyleEngine, netlist: Netlist): { ops: Op[]; report: SyncReport } {
-  const report: SyncReport = { padChanges: 0, netsCreated: [], netsRenamed: [], netsRemoved: [], orphanNets: [], componentsAdded: [], onlyOnPcb: [], missingPads: [] };
+const fpBase = (s: string) => s.split(':').pop() ?? s;
+
+export function planSync(doc: Doc, engine: StyleEngine, netlist: Netlist, opts: SyncOptions = {}): { ops: Op[]; report: SyncReport } {
+  const report: SyncReport = { padChanges: 0, netsCreated: [], netsRenamed: [], netsRemoved: [], orphanNets: [], componentsAdded: [], onlyOnPcb: [], missingPads: [], footprintsChanged: [], footprintsMissing: [], propChanges: 0 };
+  const resolved = new Map<string, FootprintSpec | null>();
+  const resolve = (name: string): FootprintSpec | null => {
+    if (!name || !opts.resolveFootprint) return null;
+    if (!resolved.has(name)) {
+      const fp = opts.resolveFootprint(name);
+      resolved.set(name, fp);
+      if (!fp && !report.footprintsMissing.includes(name)) report.footprintsMissing.push(name);
+    }
+    return resolved.get(name)!;
+  };
   const ops: Op[] = [];
   const layout = [...doc.nodes.values()].find((n) => n.type === 'layout');
   if (!layout) return { ops, report };
@@ -171,6 +202,47 @@ export function planSync(doc: Doc, engine: StyleEngine, netlist: Netlist): { ops
       continue;
     }
     const sym = syms.get(ref)!;
+    // Properties from the schematic.
+    for (const [k, v] of Object.entries(sym.props)) {
+      if (String(el.props[k] ?? '') !== v) {
+        ops.push({ op: 'setProp', uid: el.uid, key: k, value: v });
+        report.propChanges++;
+      }
+    }
+    // Footprint swap: placeholder, or the schematic names a different footprint.
+    const differs = sym.footprint && fpBase(String(el.props.Footprint ?? '')) !== fpBase(sym.footprint);
+    if (el.props.placeholder || differs) {
+      const fp = resolve(sym.footprint);
+      if (fp) {
+        const parent = el.parent ? doc.nodes.get(el.parent) : undefined;
+        const nodes = footprintNodes(fp, { uid: el.uid, ref, value: sym.value, copper: opts.copper, netOf: (pin) => want(ref, pin) });
+        const root = nodes[0]!;
+        root.rules = el.rules.filter((r) => ['position', 'rotation', 'side'].includes(r.name) || !root.rules.some((x) => x.name === r.name)).concat(root.rules.filter((r) => !el.rules.some((x) => x.name === r.name)));
+        const { placeholder: _ph, ...keep } = el.props;
+        root.props = { ...keep, ...sym.props, Footprint: sym.footprint };
+        ops.push({ op: 'remove', uid: el.uid }, { op: 'add', parent: el.parent!, index: parent ? parent.children.indexOf(el.uid) : 0, tree: { nodes } });
+        report.footprintsChanged.push(ref);
+        const pads = new Set<string>();
+        for (const n of nodes) {
+          if (n.type !== 'pad') continue;
+          pads.add(String(n.props.number));
+          if (n.props.net) padsOnNet.set(String(n.props.net), (padsOnNet.get(String(n.props.net)) ?? 0) + 1);
+        }
+        // Old pads' nets still vote, so routed copper is renamed rather than orphaned.
+        for (const c of el.children) {
+          const p = doc.nodes.get(c);
+          const cur = p?.type === 'pad' && typeof p.props.net === 'string' ? p.props.net : null;
+          const next = p ? want(ref, String(p.props.number ?? p.name)) : null;
+          if (cur && next) {
+            const v = votes.get(cur) ?? new Map<string, number>();
+            v.set(next, (v.get(next) ?? 0) + 1);
+            votes.set(cur, v);
+          }
+        }
+        for (const pin of sym.pins) if (!pads.has(pin.number)) report.missingPads.push(`${ref}.${pin.number}`);
+        continue;
+      }
+    }
     const padNumbers = new Set<string>();
     for (const c of el.children) {
       const p = doc.nodes.get(c);
@@ -208,7 +280,15 @@ export function planSync(doc: Doc, engine: StyleEngine, netlist: Netlist): { ops
     if (elements.has(ref)) continue;
     const origin = { x: left - Math.floor(slot / 12) * 12, y: top + (slot % 12) * 8 };
     slot++;
-    const nodes = placeholderFootprint(info, origin, (pin) => want(ref, pin));
+    const fp = resolve(info.footprint);
+    const nodes = fp
+      ? footprintNodes(fp, { ref, value: info.value, copper: opts.copper, props: { ...info.props, Footprint: info.footprint }, position: origin, netOf: (pin) => want(ref, pin) })
+      : placeholderFootprint(info, origin, (pin) => want(ref, pin));
+    if (!fp) for (const [k, v] of Object.entries(info.props)) nodes[0]!.props[k] = v;
+    if (fp) {
+      const pads = new Set(nodes.filter((n) => n.type === 'pad').map((n) => String(n.props.number)));
+      for (const pin of info.pins) if (!pads.has(pin.number)) report.missingPads.push(`${ref}.${pin.number}`);
+    }
     nodes[0]!.parent = comps.uid;
     ops.push({ op: 'add', parent: comps.uid, index: comps.children.length + slot, tree: { nodes } });
     for (const n of nodes) if (n.type === 'pad' && n.props.net) padsOnNet.set(String(n.props.net), (padsOnNet.get(String(n.props.net)) ?? 0) + 1);

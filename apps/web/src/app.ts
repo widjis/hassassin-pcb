@@ -6,6 +6,7 @@ import {
   computeRatsnest,
   createDoc,
   extractNetlist,
+  fpKey,
   hasClipper,
   newProjectOps,
   planSync,
@@ -41,10 +42,11 @@ import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './r
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
 import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
 import { RouteTool } from './tools/route.ts';
+import { library } from './library.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
 export type Mode = 'select' | 'route';
-type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet' | 'collab' | 'presence' | 'comments';
+type Event = 'parts' | 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet' | 'collab' | 'presence' | 'comments';
 export type Space = 'layout' | 'schematic';
 
 const DEFAULT_HIDDEN = new Set(['paste', 'mask', 'adhesive', 'courtyard', 'fab', 'user']);
@@ -184,16 +186,29 @@ export class App {
     this.requestRender();
   }
 
-  /** Push schematic connectivity into the board as one undo step. */
-  syncToPcb(): void {
+  /** Push the schematic into the board as one undo step (footprints come from the library). */
+  async syncToPcb(): Promise<void> {
     if (!this.doc || !this.engine) return;
-    if (![...this.doc.nodes.values()].some((n) => n.type === 'sheet')) return this.say('There is no schematic to update from.');
-    const nl = extractNetlist(this.doc, this.engine);
-    const { ops, report } = planSync(this.doc, this.engine, nl);
+    const doc = this.doc;
+    if (![...doc.nodes.values()].some((n) => n.type === 'sheet')) return this.say('There is no schematic to update from.');
+    const names = [...doc.nodes.values()].filter((n) => n.type === 'symbol' && !n.props.power && n.props.Footprint).map((n) => String(n.props.Footprint));
+    this.say('Updating board…');
+    const resolveFootprint = await library.resolver(doc, names);
+    if (this.doc !== doc || !this.engine) return;
+    const nl = extractNetlist(doc, this.engine);
+    const { ops, report } = planSync(doc, this.engine, nl, { resolveFootprint, copper: this.copper });
     if (!ops.length) return this.say('The board already matches the schematic.');
-    this.apply('Update PCB from schematic', ops);
+    const keep: Op[] = [];
+    for (const n of new Set(names)) {
+      const fp = resolveFootprint(n);
+      if (fp && fp.source !== 'generic' && !doc.meta[fpKey(n)]) keep.push({ op: 'setMeta', key: fpKey(n), value: { ...fp, name: n } });
+    }
+    this.apply('Update PCB from schematic', [...keep, ...ops]);
     const parts = [
       report.componentsAdded.length && `${report.componentsAdded.length} part(s) added`,
+      report.footprintsChanged.length && `${report.footprintsChanged.length} footprint(s) replaced`,
+      report.footprintsMissing.length && `${report.footprintsMissing.length} footprint(s) not found (placeholders)`,
+      report.propChanges && `${report.propChanges} propert${report.propChanges === 1 ? 'y' : 'ies'} copied`,
       report.padChanges && `${report.padChanges} pad net(s) changed`,
       report.netsRenamed.length && `${report.netsRenamed.length} net(s) renamed`,
       report.netsCreated.length && `${report.netsCreated.length} net(s) created`,

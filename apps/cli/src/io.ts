@@ -2,7 +2,8 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper';
-import { ensureGeometry, openProject, saveProject, type InputFile, type Project } from '@hassassin/tools';
+import { ensureGeometry, Library, openProject, saveProject, type InputFile, type Project, type ToolContext } from '@hassassin/tools';
+import { kicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
 
 export const loadGeometry = () => ensureGeometry(() => loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmOnly));
 
@@ -45,4 +46,13 @@ export async function writeAny(path: string, data: Uint8Array | string): Promise
 
 export async function mtime(path: string): Promise<number> {
   return (await stat(path)).mtimeMs;
+}
+
+let ctx: ToolContext | null = null;
+/** Tool context for this machine: file access and the installed KiCad libraries (if any). */
+export function toolContext(): ToolContext {
+  if (ctx) return ctx;
+  const kicad = kicadSystemLibrary();
+  ctx = { writeFile: writeAny, readFile: (p: string) => readFile(resolve(p), 'utf8'), library: new Library(kicad ? [kicad] : []) };
+  return ctx;
 }

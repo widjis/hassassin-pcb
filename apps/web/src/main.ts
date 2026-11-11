@@ -6,6 +6,7 @@ import { Collab } from './collab.ts';
 import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
 import type { DocNode, Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
+import { mountParts } from './ui/parts.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -231,7 +232,12 @@ const placeLabel = () => {
   sch.addLabel(sch.cursorPoint, global ? name.trim().slice(1) : name.trim(), global ? 'global' : 'local');
 };
 $('labelBtn').addEventListener('click', placeLabel);
-$('syncBtn').addEventListener('click', () => app.syncToPcb());
+$('syncBtn').addEventListener('click', () => void app.syncToPcb());
+const openLibrary = () => {
+  showTab('parts');
+  app.emit('parts');
+};
+$('libBtn').addEventListener('click', openLibrary);
 $('newBtn').addEventListener('click', () => {
   if (app.dirty && !confirm('Discard unsaved changes and start a new project?')) return;
   app.newProject();
@@ -263,6 +269,14 @@ const focusComment = (c: DocNode) => {
 };
 mountComments(app, collab, $('commentsPanel'), focusComment);
 mountHistory(app, collab, $('historyPanel'));
+mountParts(app, $('partsPanel'), {
+  place: (part, extra) => {
+    if (!app.doc) return app.say('Open or create a project first.');
+    app.setSpace('schematic');
+    sch.placePart(part, extra);
+  },
+  shareAuth: () => (app.collab && collab.session && app.collab.role === 'edit' ? { project: collab.session.id, token: collab.session.token, author: collab.user.name } : null),
+});
 app.on('comments', () => {
   const open = app.comments().filter((c) => !c.props.resolved).length;
   $('commentBadge').textContent = open ? String(open) : '';
@@ -471,6 +485,10 @@ window.addEventListener('keydown', (e) => {
       case 'l':
       case 'L':
         placeLabel();
+        break;
+      case 'p':
+      case 'P':
+        openLibrary();
         break;
       case 'a':
       case 'A':

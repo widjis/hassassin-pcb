@@ -9,6 +9,11 @@
  *   POST /api/projects/:id/restore?token=  {versionId}         → ok             (edit)
  *   POST /api/projects/:id/fork?token=     {name, history}     → {id, tokens}   (any role)
  *   POST /api/projects/:id/public?token=   {role}              → ok             (edit)
+ *   GET  /api/library/parts?q=             search (team library + installed KiCad libraries)
+ *   GET  /api/library/part?id=              → part
+ *   GET  /api/library/footprints?q=         search
+ *   GET  /api/library/footprint?name=       → footprint
+ *   POST /api/library/parts  {part, footprint?, author, project, token}  publish (needs an edit link)
  * WebSocket: /ws  (messages in @hassassin/sync/protocol)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -18,6 +23,9 @@ import { fromFile, toFile, type DocFile } from '@hassassin/core';
 import { opsAllowed, type ClientMsg, type Presence, type Role, type ServerMsg, type User } from '@hassassin/sync';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { Store, type LiveProject } from './store.ts';
+import { Library, type LibrarySource } from '@hassassin/tools';
+import { kicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
+import { TeamLibrary } from './teamLib.ts';
 
 interface Client {
   id: string;
@@ -34,6 +42,8 @@ export interface ServerOptions {
   dataDir: string;
   staticDir?: string;
   log?: (msg: string) => void;
+  /** Serve the KiCad libraries installed on this machine (default true). */
+  kicad?: boolean;
 }
 
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.wasm': 'application/wasm', '.png': 'image/png', '.ico': 'image/x-icon' };
@@ -43,6 +53,46 @@ export async function startServer(opts: ServerOptions) {
   const log = opts.log ?? (() => {});
   const rooms = new Map<string, Set<Client>>();
   let nextClient = 1;
+  const team = new TeamLibrary(opts.dataDir);
+  const kicad = opts.kicad === false ? null : kicadSystemLibrary();
+  const library = new Library([team, ...(kicad ? [kicad] : [])] as LibrarySource[]);
+
+  const libraryApi = async (req: IncomingMessage, res: ServerResponse, url: URL) => {
+    const what = url.pathname.split('/')[3];
+    const q = url.searchParams.get('q') ?? '';
+    const limit = Math.min(200, Number(url.searchParams.get('limit') ?? 40) || 40);
+    if (req.method === 'GET' && what === 'info') return json(res, 200, { sources: library.sources.map((s) => s.name) });
+    if (req.method === 'GET' && what === 'parts') {
+      const out = [];
+      for (const s of library.sources) if (out.length < limit) out.push(...(await s.searchParts(q, limit - out.length)));
+      return json(res, 200, out);
+    }
+    if (req.method === 'GET' && what === 'footprints') {
+      const out = [];
+      for (const s of library.sources) if (out.length < limit) out.push(...(await s.searchFootprints(q, limit - out.length)));
+      return json(res, 200, out);
+    }
+    if (req.method === 'GET' && what === 'part') {
+      const p = await library.getPart(null, url.searchParams.get('id') ?? '');
+      return p ? json(res, 200, p) : json(res, 404, { error: 'No such part' });
+    }
+    if (req.method === 'GET' && what === 'footprint') {
+      const f = await library.getFootprint(null, url.searchParams.get('name') ?? '');
+      return f ? json(res, 200, f) : json(res, 404, { error: 'No such footprint' });
+    }
+    if (req.method === 'POST' && what === 'parts') {
+      const b = await body(req);
+      // Publishing needs an edit link of some project on this server (there are no accounts yet).
+      const pid = String(b.project ?? '');
+      if (!pid || !store.exists(pid) || store.roleFor(await store.get(pid), String(b.token ?? '')) !== 'edit') return json(res, 403, { error: 'Publishing to the team library needs an edit link of a shared project.' });
+      const author = String(b.author ?? 'someone').slice(0, 40);
+      const fp = b.footprint ? await team.publishFootprint(b.footprint as never) : null;
+      const part = await team.publishPart(b.part as never, author);
+      log(`${author} published part ${part.id} v${part.version}`);
+      return json(res, 201, { part, ...(fp ? { footprint: fp.name } : {}) });
+    }
+    return json(res, 404, { error: 'Unknown endpoint' });
+  };
 
   const body = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
     const chunks: Buffer[] = [];
@@ -148,6 +198,7 @@ export async function startServer(opts: ServerOptions) {
   const http = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     try {
+      if (url.pathname.startsWith('/api/library/')) return await libraryApi(req, res, url);
       if (url.pathname.startsWith('/api/')) return await api(req, res, url);
       if (url.pathname === '/health') return json(res, 200, { ok: true });
       return await serveStatic(res, url.pathname);

@@ -3,11 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node src/main.ts" },
+  "scripts": {
+    "start": "node src/main.ts"
+  },
   "dependencies": {
     "@hassassin/core": "workspace:*",
     "@hassassin/sync": "workspace:*",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "@hassassin/tools": "workspace:*",
+    "@hassassin/kicad-import": "workspace:*"
   },
-  "devDependencies": { "@types/ws": "^8.18.1" }
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
 }
