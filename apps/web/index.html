@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hassassin PCB</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="mark">◆</span> Hassassin <span class="dim">PCB</span></div>
+      <div class="doc-title" id="docTitle">No board</div>
+      <div class="query">
+        <input id="query" spellcheck="false" placeholder="Selector, e.g. net[netClass=power] > trace" />
+        <span id="queryInfo" class="query-info"></span>
+      </div>
+      <div class="actions">
+        <button id="flipBtn" title="View from the other side (F)">Top</button>
+        <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
+        <label class="btn primary">Open .kicad_pcb<input id="fileInput" type="file" accept=".kicad_pcb" hidden /></label>
+      </div>
+    </header>
+    <main class="workspace">
+      <aside class="sidebar left">
+        <nav class="tabs" id="leftTabs">
+          <button data-tab="layers" class="active">Layers</button>
+          <button data-tab="objects">Objects</button>
+          <button data-tab="rules">Rules</button>
+        </nav>
+        <section class="tab-body" data-body="layers" id="layersPanel"></section>
+        <section class="tab-body hidden" data-body="objects">
+          <input id="treeFilter" class="filter" placeholder="Filter by name" spellcheck="false" />
+          <div id="treePanel" class="tree"></div>
+        </section>
+        <section class="tab-body hidden" data-body="rules" id="rulesPanel"></section>
+      </aside>
+      <div class="canvas-wrap" id="canvasWrap">
+        <canvas id="gl"></canvas>
+        <canvas id="overlay"></canvas>
+        <div class="drop-hint" id="dropHint">Drop a <b>.kicad_pcb</b> file here, or use <b>Open</b>.</div>
+        <div class="statusbar" id="status"></div>
+      </div>
+      <aside class="sidebar right" id="inspector"></aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

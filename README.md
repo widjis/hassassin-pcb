@@ -10,3 +10,20 @@ Editor PCB berbasis browser (schematic, layout, kolaborasi real-time, AI agent),
 
 ## Dokumen
 - [docs/01-flux-behavior-spec.md](docs/01-flux-behavior-spec.md) — spesifikasi perilaku referensi.
+- [docs/02-roadmap.md](docs/02-roadmap.md) — 8 fase pengembangan.
+
+## Menjalankan
+```sh
+pnpm install
+pnpm dev        # http://localhost:5178 — buka file .kicad_pcb lewat tombol Open atau drag-and-drop
+pnpm test       # unit test (set KICAD_SAMPLE=/path/board.kicad_pcb untuk uji board nyata)
+pnpm typecheck
+pnpm build
+```
+Board contoh bisa ditaruh di `apps/web/public/samples/` (diabaikan git) lalu dibuka dengan
+`http://localhost:5178/?board=samples/<nama>.kicad_pcb`.
+
+## Struktur
+- `packages/core` — pohon dokumen, satuan, selector ala CSS, mesin cascade rules, default per tipe.
+- `packages/kicad-import` — parser S-expression dan impor `.kicad_pcb`.
+- `apps/web` — viewer WebGL2, panel Layers/Objects/Rules, inspector Computed/Specified.
