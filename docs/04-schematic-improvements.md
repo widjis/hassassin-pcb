@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Document | `docs/04-schematic-improvements.md` |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | **Approved on 2026-11-11 — in progress** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
@@ -108,6 +108,42 @@ only when all of its criteria pass.
   - A placed unit can be changed (A, B, power unit …); placing one unit offers the remaining units.
   - ERC reports units that were never placed when their pins matter (for example the power unit).
 
+- [ ] **S16. Symbol editor** (moved from M3 in version 0.2).
+  - Create or edit a symbol: body, pins (number, name, type, side), from a pin table that can be pasted
+    (for example from a datasheet); the result is stored with the project and can be published to the
+    team library.
+  - Pin side and order can be set when pasting a pin table; pins can be split into units (for example
+    A, B and a power unit); `add_part` gets the same pin-side option for agents.
+- [ ] **S19. Footprint generator.**
+  - Makes a footprint from datasheet dimensions when no library footprint exists: rows / grids of pads
+    (count, pitch, pad size and shape, row spacing), an exposed / thermal pad, castellated edge pads,
+    through-hole pins with drill, and mounting holes. It also adds the courtyard, silkscreen outline,
+    fabrication outline, pin-1 mark and reference / value text.
+  - Package families generated from parameters: two-row (SOIC / SOP / TSSOP / DIP / headers),
+    four-side (QFP / QFN), grid (BGA / LGA), castellated module (ESP-12F style) and free pad lists.
+  - Pad sizes come from the datasheet's recommended land pattern; when a datasheet only gives lead
+    dimensions, they are derived with documented toe / heel / side margins.
+  - Shows a live preview with the dimensions; the result is stored with the project and can be published
+    to the team library. Available as the tool `create_footprint` for agents.
+  - Written from scratch on the existing generator in `packages/core/src/footprints.ts`; no KiCad
+    code is ported (KiCad's footprint generators are GPL).
+  - Acceptance: an ESP-12F-style module, a QFN-24 with an exposed pad and a 2×20 header are generated
+    from their datasheet numbers. Each pad's position and size matches the datasheet within 0.01 mm,
+    and a board using them passes DRC.
+  - Reference check: for standard packages (for example SOIC-8, TSSOP-20, QFN-24), a test compares the
+    generated pads with the matching footprint in the KiCad libraries installed on the machine. The
+    libraries are read only while the test runs and never copied into the repository; the test is
+    skipped when KiCad is not installed.
+- [ ] **S20. Pin ↔ pad check.**
+  - ERC (and Update PCB) reports symbol pins with no matching footprint pad, pads with no pin (unless
+    marked mechanical / no-connect), and pin counts that differ.
+  - The agent runs it after `assign_footprint`; Review lists the findings.
+- [ ] **S21. Official KiCad libraries on demand.**
+  - Without KiCad installed, the app can download the official symbol and footprint libraries from
+    KiCad's public repository into a local cache, after the user agrees.
+  - They are never stored in this repository. The UI shows where each part came from and its license
+    (CC BY-SA 4.0 with KiCad's exception for designs that use the libraries).
+
 **M2 done when:** every item above is checked; release `v0.0.3`.
 
 ### Milestone M3 — compatibility and advanced features
@@ -121,10 +157,6 @@ only when all of its criteria pass.
   - Round trip: import → export → import gives the same netlist.
 - [ ] **S15. Buses.**
   - Bus wires and bus labels such as `DATA[0..7]`, with bus entries; the netlist connects the members.
-- [ ] **S16. Symbol editor.**
-  - Create or edit a symbol: body, pins (number, name, type, side), from a pin table that can be pasted
-    (for example from a datasheet); the result is stored with the project and can be published to the
-    team library.
 - [ ] **S17. Configurable ERC.**
   - A pin-type matrix that can be changed per project, and the ability to waive a specific violation
     with a recorded reason (shown in Review and kept in the project).
@@ -145,7 +177,11 @@ only when all of its criteria pass.
 ## 5. Working rules (binding for the implementer)
 
 1. **Clean room:** no code, assets, UI text or branding from KiCad, Flux or other products. File formats
-   are implemented from public documentation and example files only.
+   are implemented from public documentation and example files only. *Exception:* published component
+   libraries (symbols, footprints, 3D models) may be read or downloaded at run time as data, under their
+   own licenses. They are never copied into this repository, and their source and license are shown to
+   the user. Code under a copyleft license (such as KiCad's GPL) is only used, if ever, as a separate
+   program with its own license, never inside the MIT / Apache code.
 2. Third-party libraries must be permissively licensed (MIT, BSD, Apache, BSL).
 3. Repository content (code, comments, docs, commit messages) is in English.
 4. Every change goes through the command layer, so it is undoable and works for collaborators and agents.
@@ -189,6 +225,7 @@ one issue per item, if the owner asks for it.
 |---|---|---|---|
 | 0.1 | 2026-11-11 | First draft | — |
 | 0.1 | 2026-11-11 | Approved as written | Owner (widjis), in chat: "Setuju, tanda tangani" |
+| 0.2 | 2026-11-11 | Added S19 footprint generator (with a KiCad reference check in tests), S20 pin ↔ pad check and S21 KiCad libraries on demand to M2; moved S16 symbol editor from M3 to M2 and extended it; exception for component libraries and copyleft code added to working rule 1. Reason: parts missing from every library were the weakest link for real boards. | Owner (widjis), in chat: "oke setuju v0.2 semua, tambahkan catatannya" |
 
 ## Approval
 
@@ -197,6 +234,8 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 | Role | Name | Date | Version approved |
 |---|---|---|---|
 | Owner | widjis | 2026-11-11 | 0.1 |
+| Owner | widjis | 2026-11-11 | 0.2 |
 
-Approval was given by the owner in the working chat ("Setuju, tanda tangani" — "Agreed, sign it") and
-recorded here by the implementer.
+Approval was given by the owner in the working chat ("Setuju, tanda tangani" — "Agreed, sign it" for
+0.1; "oke setuju v0.2 semua, tambahkan catatannya" — "OK, agree to all of v0.2, add the notes" for 0.2)
+and recorded here by the implementer.
