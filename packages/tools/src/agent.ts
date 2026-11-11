@@ -31,7 +31,7 @@ export type AgentEvent =
   | { type: 'text'; text: string }
   | { type: 'note'; text: string }
   | { type: 'tool'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; id: string; name: string; ok: boolean; summary: string }
+  | { type: 'tool_result'; id: string; name: string; ok: boolean; summary: string; detail?: string }
   | { type: 'tasks'; tasks: AgentTask[] }
   | { type: 'usage'; input: number; output: number; cacheRead: number }
   | { type: 'done'; reason: string }
@@ -202,8 +202,9 @@ export class AgentSession {
               if (def.mutates && this.mode !== 'agent') throw new ToolError('Ask mode is read-only; the user can switch to Agent mode to allow edits.');
               out = await this.opts.runTool(u.name, input);
             }
-            results.push({ type: 'tool_result', tool_use_id: u.id, content: clip(JSON.stringify(out ?? null), 16000) });
-            emit({ type: 'tool_result', id: u.id, name: u.name, ok: true, summary: summarise(u.name, out) });
+            const text = JSON.stringify(out ?? null);
+            results.push({ type: 'tool_result', tool_use_id: u.id, content: clip(text, 16000) });
+            emit({ type: 'tool_result', id: u.id, name: u.name, ok: true, summary: summarise(u.name, out), detail: clip(JSON.stringify(out ?? null, null, 2), 6000) });
           } catch (e) {
             const message = (e as Error).message ?? String(e);
             results.push({ type: 'tool_result', tool_use_id: u.id, is_error: true, content: message });

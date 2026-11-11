@@ -9,6 +9,7 @@ import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
 import { mountBoard } from './ui/board.ts';
+import { initResizers } from './ui/resize.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -43,6 +44,8 @@ mountReview(app, $('reviewPanel'), $('reviewBadge'), (v) => {
 loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmWithAsmJsFallback)
   .then((lib) => setClipper(lib as unknown as Parameters<typeof setClipper>[0]))
   .catch((e) => console.error('Geometry engine failed to load', e));
+
+initResizers(document.querySelector<HTMLElement>('.workspace')!);
 
 // ---- left tabs ----
 const tabs = $('leftTabs');

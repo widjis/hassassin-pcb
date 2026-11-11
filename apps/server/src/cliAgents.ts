@@ -292,7 +292,13 @@ export class CliAgentSession {
 
   private result(id: string, ok: boolean, content: unknown, emit: (e: AgentEvent) => void, names: Map<string, string>) {
     const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((c) => (c as { text?: string }).text ?? '').join('') : JSON.stringify(content ?? '');
-    emit({ type: 'tool_result', id, name: names.get(id) ?? '', ok, summary: ok ? summarize(text) : text.slice(0, 200) });
+    let pretty = text;
+    try {
+      pretty = JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      /* not JSON */
+    }
+    emit({ type: 'tool_result', id, name: names.get(id) ?? '', ok, summary: ok ? summarize(text) : text.slice(0, 200), detail: pretty.length > 6000 ? `${pretty.slice(0, 6000)}…` : pretty });
   }
 }
 

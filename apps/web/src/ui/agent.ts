@@ -1,24 +1,50 @@
 /**
- * Agent panel: chat with the AI design assistant. The agent runs on the collaboration
- * server (the API key stays there) and joins the shared project as a collaborator, so its
- * edits arrive like anyone else's: live, undoable, in the history.
+ * Agent panel: chat with the AI design assistant, laid out like a chat app: your messages
+ * as bubbles, replies as formatted text (Markdown), tool steps folded into one expandable
+ * row per run, a task card, and a composer that grows as you type.
+ *
+ * The agent runs on the collaboration server (Claude Code / Codex on your subscription, or
+ * the Claude API) and joins the shared project as a collaborator, so its edits are live,
+ * undoable and in the history. The conversation is kept per project in this browser.
  */
 import { computeGates } from '@hassassin/tools';
 import type { App } from '../app.ts';
 import type { Collab } from '../collab.ts';
 import { clear, h } from './dom.ts';
+import { renderMarkdown } from './markdown.ts';
+import { toggleRight, toggleWideLeft } from './resize.ts';
 
-interface Line {
-  kind: 'user' | 'agent' | 'tool' | 'note' | 'error';
-  text: string;
+interface Step {
+  id: string;
+  name: string;
+  input: unknown;
   ok?: boolean;
+  summary?: string;
+  detail?: string;
 }
+
+type Item =
+  | { kind: 'user'; text: string }
+  | { kind: 'agent'; text: string }
+  | { kind: 'steps'; steps: Step[] }
+  | { kind: 'note'; text: string }
+  | { kind: 'error'; text: string };
 
 interface Task {
   title: string;
   status: string;
   stage?: string;
 }
+
+interface Cli {
+  id: 'claude' | 'codex';
+  label: string;
+  installed: boolean;
+  loggedIn: boolean;
+  detail: string;
+}
+
+type Backend = 'api' | 'claude' | 'codex';
 
 const STAGE_PROMPTS: Record<string, string> = {
   requirements: 'Help me complete the requirements: ask me what is missing, one question at a time, and record my answers.',
@@ -29,76 +55,216 @@ const STAGE_PROMPTS: Record<string, string> = {
   fabrication: 'Is this design ready to order? Check every stage and tell me what is left.',
 };
 
+const STEP_LABEL: Record<string, string> = {
+  project_status: 'Read project status',
+  query: 'Search objects',
+  inspect: 'Inspect',
+  list_parts: 'List parts',
+  netlist: 'Read netlist',
+  run_erc: 'Run ERC',
+  run_drc: 'Run DRC',
+  list_rules: 'Read rules',
+  set_rule: 'Set rule',
+  set_property: 'Set property',
+  set_spec: 'Update requirements',
+  add_part: 'Add part',
+  place_part: 'Place part',
+  connect_pins: 'Wire pins',
+  add_label: 'Add net label',
+  update_pcb: 'Update PCB from schematic',
+  move_part: 'Move part',
+  route: 'Route',
+  autoroute: 'Autoroute',
+  auto_place: 'Auto-place',
+  refill_pours: 'Refill pours',
+  search_parts: 'Search library',
+  get_part: 'Read part',
+  search_footprints: 'Search footprints',
+  assign_footprint: 'Assign footprint',
+  set_part_info: 'Set part info',
+  bom: 'Price BOM',
+  net_lengths: 'Measure lengths',
+  tune_length: 'Tune length',
+  impedance: 'Impedance',
+  get_stackup: 'Read stackup',
+  set_stackup: 'Set stackup',
+  undo: 'Undo',
+  redo: 'Redo',
+  update_tasks: 'Update tasks',
+};
+const stepLabel = (n: string) => STEP_LABEL[n] ?? n.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+
+/** Short argument hint shown next to a step ("R1 → chip-0805"). */
+function argHint(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const o = input as Record<string, unknown>;
+  const vals = ['ref', 'target', 'selector', 'id', 'query', 'kind', 'from', 'to', 'net', 'footprint', 'pin', 'name']
+    .map((k) => o[k])
+    .filter((v) => typeof v === 'string' || typeof v === 'number')
+    .slice(0, 2)
+    .map(String);
+  return vals.join(' → ').slice(0, 60);
+}
+
+const store = {
+  key: (p: string) => `hassassin:agent:chat:${p}`,
+  load(p: string): { items: Item[]; chat: string | null; tasks: Task[]; backend?: Backend } | null {
+    try {
+      return JSON.parse(localStorage.getItem(this.key(p)) ?? 'null');
+    } catch {
+      return null;
+    }
+  },
+  save(p: string, v: { items: Item[]; chat: string | null; tasks: Task[]; backend: Backend }) {
+    try {
+      localStorage.setItem(this.key(p), JSON.stringify({ ...v, items: v.items.slice(-200) }));
+    } catch {
+      /* full or blocked */
+    }
+  },
+};
+
 export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
-  const lines: Line[] = [];
+  let items: Item[] = [];
   let tasks: Task[] = [];
   let chat: string | null = null;
   let mode: 'agent' | 'ask' = 'agent';
   let busy = false;
-  interface Cli {
-    id: 'claude' | 'codex';
-    label: string;
-    installed: boolean;
-    loggedIn: boolean;
-    detail: string;
-  }
   let status: { available: boolean; clis: Cli[] } | null = null;
-  let backend: 'api' | 'claude' | 'codex' = 'claude';
+  let backend: Backend = 'claude';
+  let loadedFor = '';
+  let tasksOpen = true;
   try {
-    backend = (localStorage.getItem('hassassin:agent:backend') as typeof backend) ?? 'claude';
+    backend = (localStorage.getItem('hassassin:agent:backend') as Backend) ?? 'claude';
   } catch {
     /* storage blocked */
   }
-  const loginBox = h('div', { class: 'agent-login' });
   let loginTimer = 0;
   let usage = { input: 0, output: 0, cacheRead: 0 };
 
-  const log = h('div', { class: 'agent-log' });
+  root.classList.add('agent-panel');
+  const header = h('div', { class: 'agent-head' });
+  const loginBox = h('div', { class: 'agent-login' });
   const taskBox = h('div', { class: 'agent-tasks' });
-  const input = h('textarea', { rows: '3', placeholder: 'Ask about the design, or tell the agent what to do…' });
-  const sendBtn = h('button', { class: 'btn primary' }, 'Send');
-  const stopBtn = h('button', { class: 'btn' }, 'Stop');
-  const modeSel = h('select', { title: 'Agent: may edit the project. Ask: read-only answers.' }, h('option', { value: 'agent' }, 'Agent (can edit)'), h('option', { value: 'ask' }, 'Ask (read-only)'));
-  const suggest = h('div', { class: 'agent-suggest' });
-  const footer = h('div', { class: 'dim', style: 'font-size:10.5px' });
-  modeSel.addEventListener('change', () => (mode = modeSel.value as 'agent' | 'ask'));
+  const log = h('div', { class: 'agent-log' });
+  const input = h('textarea', { rows: '1', placeholder: 'Ask about the design, or tell the agent what to do…' });
+  const sendBtn = h('button', { class: 'send', title: 'Send (Enter) · new line: Shift+Enter' }, '↑');
+  const stopBtn = h('button', { class: 'stop', title: 'Stop' }, '■');
+  const hintRow = h('div', { class: 'agent-hints' });
+  const composer = h('div', { class: 'agent-composer' }, input, h('div', { class: 'composer-actions' }, stopBtn, sendBtn));
+  const bottom = h('div', { class: 'agent-bottom' }, hintRow, composer);
+  let renderSeq = 0;
+  const nodes = new Map<Item, HTMLElement>();
+  let stickToBottom = true;
+  log.addEventListener('scroll', () => (stickToBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40));
 
-  const draw = () => {
+  const autoGrow = () => {
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(220, input.scrollHeight)}px`;
+  };
+  input.addEventListener('input', autoGrow);
+
+  const persist = () => collab.session && store.save(collab.session.id, { items, chat, tasks, backend });
+
+  // ---------------------------------------------------------------- rendering
+  const renderItem = (it: Item): HTMLElement => {
+    if (it.kind === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, it.text));
+    if (it.kind === 'error') return h('div', { class: 'msg error' }, it.text);
+    if (it.kind === 'note') {
+      const d = h('details', { class: 'msg note' }, h('summary', {}, 'Thinking'), h('div', { class: 'note-body' }, it.text));
+      return d;
+    }
+    if (it.kind === 'agent') {
+      const body = h('div', { class: 'md' });
+      body.append(renderMarkdown(it.text));
+      const copy = h('button', { class: 'msg-copy', title: 'Copy reply' }, 'Copy');
+      copy.addEventListener('click', () => void navigator.clipboard?.writeText(it.text).then(() => ((copy.textContent = 'Copied'), setTimeout(() => (copy.textContent = 'Copy'), 1200))));
+      return h('div', { class: 'msg agent' }, body, h('div', { class: 'msg-tools' }, copy));
+    }
+    // Steps: one foldable row per run of tool calls.
+    const visible = it.steps.filter((s) => s.name !== 'update_tasks');
+    const running = visible.some((s) => s.ok === undefined);
+    const failed = visible.filter((s) => s.ok === false).length;
+    const last = visible[visible.length - 1];
+    const title = visible.length === 1 && last ? `${stepLabel(last.name)}${argHint(last.input) ? ` · ${argHint(last.input)}` : ''}` : `${visible.length} steps${last ? ` · ${stepLabel(last.name)}` : ''}`;
+    const d = h('details', { class: `steps${running ? ' running' : ''}${failed ? ' failed' : ''}` });
+    d.append(h('summary', {}, h('span', { class: 'steps-icon' }, running ? '◌' : failed ? '!' : '✓'), h('span', { class: 'steps-title' }, title), failed ? h('span', { class: 'steps-fail' }, `${failed} failed`) : null));
+    for (const s of visible) {
+      const row = h('details', { class: `step${s.ok === false ? ' bad' : s.ok ? ' good' : ''}` });
+      row.append(h('summary', {}, h('span', { class: 'step-name' }, stepLabel(s.name)), h('span', { class: 'step-hint' }, argHint(s.input)), h('span', { class: 'step-sum' }, s.ok === undefined ? '…' : (s.summary ?? ''))));
+      row.append(h('div', { class: 'step-label' }, 'Input'), h('pre', {}, JSON.stringify(s.input ?? {}, null, 2)));
+      if (s.detail !== undefined) row.append(h('div', { class: 'step-label' }, s.ok === false ? 'Error' : 'Result'), h('pre', {}, s.detail));
+      d.append(row);
+    }
+    return d;
+  };
+
+  const updateItem = (it: Item) => {
+    const old = nodes.get(it);
+    const open = old instanceof HTMLDetailsElement ? old.open : false;
+    const openRows = old ? [...old.querySelectorAll<HTMLDetailsElement>('details.step')].map((x) => x.open) : [];
+    const fresh = renderItem(it);
+    if (fresh instanceof HTMLDetailsElement && open) fresh.open = true;
+    fresh.querySelectorAll<HTMLDetailsElement>('details.step').forEach((x, k) => (x.open = !!openRows[k]));
+    if (old) old.replaceWith(fresh);
+    else log.insertBefore(fresh, typing);
+    nodes.set(it, fresh);
+    if (stickToBottom) log.scrollTop = log.scrollHeight;
+  };
+
+  const typing = h('div', { class: 'typing' }, h('span', {}), h('span', {}), h('span', {}));
+  const drawLog = () => {
     clear(log);
-    for (const l of lines) {
-      if (l.kind === 'tool') log.append(h('div', { class: `agent-tool ${l.ok === false ? 'bad' : l.ok ? 'good' : ''}` }, l.text));
-      else if (l.kind === 'note') log.append(h('div', { class: 'agent-note' }, l.text));
-      else log.append(h('div', { class: `agent-msg ${l.kind}` }, l.text));
+    nodes.clear();
+    if (!items.length) {
+      log.append(
+        h(
+          'div',
+          { class: 'agent-empty' },
+          h('div', { class: 'agent-empty-title' }, 'What should we work on?'),
+          h('div', { class: 'dim' }, 'The agent can read the whole project and, in Agent mode, edit it. Every change is live and undoable.'),
+        ),
+      );
     }
-    if (busy) log.append(h('div', { class: 'agent-note' }, 'Working…'));
+    log.append(typing);
+    for (const it of items) updateItem(it);
+    typing.style.display = busy ? '' : 'none';
     log.scrollTop = log.scrollHeight;
+  };
+
+  const drawTasks = () => {
     clear(taskBox);
-    if (tasks.length) {
-      taskBox.append(h('div', { class: 'section-title' }, h('span', {}, 'Tasks')));
-      for (const t of tasks) taskBox.append(h('div', { class: `agent-task ${t.status}` }, h('span', {}, t.status === 'done' ? '✓' : t.status === 'doing' ? '▸' : t.status === 'blocked' ? '!' : '○'), t.title));
+    if (!tasks.length) return;
+    const done = tasks.filter((t) => t.status === 'done').length;
+    const head = h('button', { class: 'tasks-head', onclick: () => ((tasksOpen = !tasksOpen), drawTasks()) }, h('span', {}, tasksOpen ? '▾' : '▸'), h('span', {}, 'Tasks'), h('span', { class: 'dim' }, `${done}/${tasks.length}`), h('span', { class: 'tasks-bar' }, h('span', { style: `width:${(done / tasks.length) * 100}%` })));
+    taskBox.append(head);
+    if (tasksOpen) for (const t of tasks) taskBox.append(h('div', { class: `agent-task ${t.status}` }, h('span', { class: 'tick' }, t.status === 'done' ? '✓' : t.status === 'doing' ? '' : t.status === 'blocked' ? '!' : ''), h('span', {}, t.title)));
+  };
+
+  const drawHints = () => {
+    clear(hintRow);
+    if (app.doc && !busy) {
+      const gates = computeGates({ doc: app.doc, erc: app.erc, drc: app.drc, ratsnest: app.ratsnest });
+      const next = gates.find((g) => g.state === 'todo');
+      const id = next?.id ?? 'fabrication';
+      hintRow.append(h('button', { class: 'chip', title: STAGE_PROMPTS[id], onclick: () => ((input.value = STAGE_PROMPTS[id] ?? ''), autoGrow(), input.focus()) }, `✦ ${next ? `Next: ${next.title.replace(/^\d+ · /, '')}` : 'Ready to order?'}`));
     }
-    sendBtn.disabled = busy;
-    stopBtn.style.display = busy ? '' : 'none';
-    footer.textContent = usage.input || usage.output ? `This chat: ${usage.input + usage.cacheRead} input tokens (${usage.cacheRead} cached), ${usage.output} output tokens${backend === 'api' ? '' : ' · on your subscription'}` : '';
+    if (usage.input || usage.output) hintRow.append(h('span', { class: 'usage', title: `${usage.input + usage.cacheRead} input tokens (${usage.cacheRead} cached), ${usage.output} output tokens` }, `${Math.round((usage.input + usage.cacheRead) / 1000)}k in · ${usage.output} out${backend === 'api' ? '' : ' · subscription'}`));
   };
 
-  const drawSuggest = () => {
-    clear(suggest);
-    if (!app.doc) return;
-    const gates = computeGates({ doc: app.doc, erc: app.erc, drc: app.drc, ratsnest: app.ratsnest });
-    const next = gates.find((g) => g.state === 'todo');
-    const id = next?.id ?? 'fabrication';
-    suggest.append(
-      h('span', { class: 'dim', style: 'font-size:11px' }, next ? `Next stage: ${next.title}` : 'All stages done'),
-      h('button', { onclick: () => ((input.value = STAGE_PROMPTS[id] ?? ''), input.focus()) }, `Suggest: ${id}`),
-    );
+  const setBusy = (b: boolean) => {
+    busy = b;
+    typing.style.display = b ? '' : 'none';
+    sendBtn.style.display = b ? 'none' : '';
+    stopBtn.style.display = b ? '' : 'none';
+    drawHints();
   };
 
+  // ---------------------------------------------------------------- backend & sign-in
   const loadStatus = async () => {
     status = await fetch('/api/agent/status').then((r) => (r.ok ? r.json() : null)).catch(() => null);
   };
 
-  /** Sign a CLI in: the server starts its sign-in, which opens the provider's page in the browser. */
   const signIn = async (cli: Cli['id']) => {
     clear(loginBox);
     loginBox.append(h('div', { class: 'dim' }, 'Starting sign-in… a browser page should open; finish signing in there.'));
@@ -124,14 +290,61 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
         await loadStatus();
         clear(loginBox);
         if (!j.ok) loginBox.append(h('div', { class: 'err-text' }, 'Sign-in did not finish. Try again.'));
-        void render();
+        drawHeader();
       }
     }, 1500);
   };
 
+  const options = () => {
+    const clis = status?.clis ?? [];
+    return [
+      ...clis.map((c) => ({ id: c.id as Backend, label: c.id === 'claude' ? 'Claude Code' : 'Codex', sub: c.id === 'claude' ? 'Claude subscription' : 'ChatGPT subscription', ready: c.installed && c.loggedIn, note: c.installed ? c.detail : 'not installed', installed: c.installed })),
+      { id: 'api' as Backend, label: 'Claude API', sub: 'pay per use', ready: !!status?.available, note: status?.available ? 'API key set on the server' : 'no API key on the server', installed: true },
+    ];
+  };
+
+  const drawHeader = () => {
+    clear(header);
+    const opts = options();
+    if (!opts.some((o) => o.id === backend)) backend = opts[0]!.id;
+    const cur = opts.find((o) => o.id === backend)!;
+    const pick = h('select', { class: 'backend', title: 'Which AI does the work' });
+    for (const o of opts) pick.append(h('option', { value: o.id, ...(o.id === backend ? { selected: true } : {}) }, `${o.label} — ${o.sub}${o.ready ? '' : ' (not ready)'}`));
+    pick.addEventListener('change', () => {
+      backend = pick.value as Backend;
+      chat = null;
+      try {
+        localStorage.setItem('hassassin:agent:backend', backend);
+      } catch {
+        /* ignore */
+      }
+      drawHeader();
+      persist();
+    });
+    const modeSeg = h('div', { class: 'seg mode' });
+    for (const [m, label, tip] of [['agent', 'Agent', 'Can edit the project'], ['ask', 'Ask', 'Read-only answers']] as const) {
+      modeSeg.append(h('button', { class: mode === m ? 'on' : '', title: tip, onclick: () => ((mode = m), drawHeader()) }, label));
+    }
+    const menu = h(
+      'div',
+      { class: 'head-actions' },
+      h('button', { title: 'New chat', onclick: () => ((chat = null), (items = []), (tasks = []), (usage = { input: 0, output: 0, cacheRead: 0 }), persist(), drawLog(), drawTasks(), drawHints()) }, '＋'),
+      h('button', { title: 'Wider panel for the chat (toggle)', onclick: () => toggleWideLeft() }, '⇔'),
+      h('button', { title: 'Hide / show the inspector on the right', onclick: () => toggleRight() }, '◨'),
+    );
+    const state = h('div', { class: 'agent-backend' }, h('span', { class: `live-dot ${cur.ready ? 'online' : 'offline'}` }), h('span', { class: 'dim ellipsis' }, cur.note));
+    if (!cur.ready && backend !== 'api' && cur.installed) state.append(h('button', { class: 'btn primary', onclick: () => void signIn(backend as Cli['id']) }, 'Sign in'));
+    if (cur.ready && backend !== 'api') state.append(h('button', { class: 'link', title: 'Sign in with another account', onclick: () => void signIn(backend as Cli['id']) }, 'Switch account'));
+    header.append(h('div', { class: 'head-row' }, pick, menu), h('div', { class: 'head-row' }, modeSeg, state));
+    sendBtn.disabled = !cur.ready;
+    input.placeholder = cur.ready ? (mode === 'ask' ? 'Ask about the design (read-only)…' : 'Ask about the design, or tell the agent what to do…') : 'Choose an AI above and sign in first';
+  };
+
   const render = async () => {
-    clear(root);
+    const seq = ++renderSeq;
     if (!status) await loadStatus();
+    if (seq !== renderSeq) return; // a newer render started while this one waited
+    clear(root);
     if (!app.collab || !collab.session) {
       root.append(h('div', { class: 'empty' }, 'The AI agent works on shared projects: it joins as a collaborator so its edits are live and undoable. Click Share in the top bar first.'));
       return;
@@ -140,54 +353,36 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
       root.append(h('div', { class: 'empty' }, 'The collaboration server is not reachable (pnpm run server).'));
       return;
     }
-    const clis = status.clis ?? [];
-    const options: { id: typeof backend; label: string; ready: boolean; note: string }[] = [
-      ...clis.map((c) => ({ id: c.id, label: c.label, ready: c.installed && c.loggedIn, note: c.installed ? c.detail : 'not installed' })),
-      { id: 'api' as const, label: 'Claude API (credits)', ready: status.available, note: status.available ? 'API key set on the server' : 'no API key on the server' },
-    ];
-    if (!options.some((o) => o.id === backend)) backend = options[0]!.id;
-    const pick = h('select', { title: 'Which AI does the work' });
-    for (const o of options) pick.append(h('option', { value: o.id, ...(o.id === backend ? { selected: true } : {}) }, `${o.label}${o.ready ? '' : ' — not ready'}`));
-    pick.addEventListener('change', () => {
-      backend = pick.value as typeof backend;
-      chat = null;
-      try {
-        localStorage.setItem('hassassin:agent:backend', backend);
-      } catch {
-        /* ignore */
-      }
-      void render();
-    });
-    const cur = options.find((o) => o.id === backend)!;
-    const state = h('div', { class: 'agent-backend' }, h('span', { class: `live-dot ${cur.ready ? 'online' : 'offline'}` }), h('span', { class: 'dim' }, cur.note));
-    if (!cur.ready && backend !== 'api' && clis.find((c) => c.id === backend)?.installed) state.append(h('button', { class: 'btn primary', onclick: () => void signIn(backend as Cli['id']) }, 'Sign in'));
-    if (cur.ready && backend !== 'api') state.append(h('button', { title: 'Sign in with another account', onclick: () => void signIn(backend as Cli['id']) }, 'Switch account'));
-    root.append(
-      h('div', { style: 'display:flex;gap:6px;align-items:center;margin-bottom:4px' }, pick),
-      state,
-      loginBox,
-      h('div', { style: 'display:flex;gap:6px;align-items:center;margin:6px 0' }, modeSel, h('button', { onclick: () => ((chat = null), (lines.length = 0), (tasks = []), (usage = { input: 0, output: 0, cacheRead: 0 }), draw()) }, 'New chat')),
-      taskBox,
-      log,
-      suggest,
-      input,
-      h('div', { style: 'display:flex;gap:6px;margin-top:6px' }, sendBtn, stopBtn),
-      footer,
-    );
-    sendBtn.disabled = busy || !cur.ready;
-    drawSuggest();
-    draw();
-    sendBtn.disabled = busy || !cur.ready;
+    if (loadedFor !== collab.session.id) {
+      loadedFor = collab.session.id;
+      const saved = store.load(loadedFor);
+      items = saved?.items ?? [];
+      tasks = saved?.tasks ?? [];
+      chat = saved?.chat ?? null;
+      if (saved?.backend) backend = saved.backend;
+    }
+    root.append(header, loginBox, taskBox, log, bottom);
+    drawHeader();
+    drawTasks();
+    drawLog();
+    setBusy(busy);
   };
 
+  // ---------------------------------------------------------------- sending
   const send = async () => {
     const prompt = input.value.trim();
-    if (!prompt || busy || !collab.session) return;
+    if (!prompt || busy || !collab.session || sendBtn.disabled) return;
     input.value = '';
-    lines.push({ kind: 'user', text: prompt });
-    busy = true;
-    draw();
-    let agentLine: Line | null = null;
+    autoGrow();
+    if (!items.length) clear(log), log.append(typing);
+    const user: Item = { kind: 'user', text: prompt };
+    items.push(user);
+    updateItem(user);
+    stickToBottom = true;
+    setBusy(true);
+    let agentItem: Extract<Item, { kind: 'agent' }> | null = null;
+    let stepsItem: Extract<Item, { kind: 'steps' }> | null = null;
+    const push = (it: Item) => (items.push(it), updateItem(it));
     try {
       const r = await fetch(`/api/agent/${collab.session.id}?token=${encodeURIComponent(collab.session.token)}`, {
         method: 'POST',
@@ -211,38 +406,52 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
           const e = JSON.parse(raw);
           if (e.type === 'chat') chat = e.chat;
           else if (e.type === 'text') {
-            if (!agentLine) lines.push((agentLine = { kind: 'agent', text: '' }));
-            agentLine.text += e.text;
-          } else if (e.type === 'note') lines.push({ kind: 'note', text: e.text });
-          else if (e.type === 'tool') {
-            agentLine = null;
-            if (e.name !== 'update_tasks') lines.push({ kind: 'tool', text: `${e.name.replace(/_/g, ' ')} ${JSON.stringify(e.input).slice(0, 120)}` });
+            stepsItem = null;
+            if (!agentItem) push((agentItem = { kind: 'agent', text: '' }));
+            agentItem.text += e.text;
+            updateItem(agentItem);
+          } else if (e.type === 'note') {
+            push({ kind: 'note', text: e.text });
+          } else if (e.type === 'tool') {
+            agentItem = null;
+            if (!stepsItem) push((stepsItem = { kind: 'steps', steps: [] }));
+            stepsItem.steps.push({ id: e.id, name: e.name, input: e.input });
+            updateItem(stepsItem);
           } else if (e.type === 'tool_result') {
-            const l = [...lines].reverse().find((x) => x.kind === 'tool' && x.ok === undefined);
-            if (l) (l.ok = e.ok), (l.text += ` → ${e.summary}`);
-          } else if (e.type === 'tasks') tasks = e.tasks;
-          else if (e.type === 'usage') (usage.input += e.input), (usage.output += e.output), (usage.cacheRead += e.cacheRead);
-          else if (e.type === 'error') lines.push({ kind: 'error', text: e.message });
-          draw();
+            const owner = [...items].reverse().find((x): x is Extract<Item, { kind: 'steps' }> => x.kind === 'steps' && x.steps.some((s) => s.id === e.id));
+            const s = owner?.steps.find((x) => x.id === e.id);
+            if (s && owner) {
+              s.ok = e.ok;
+              s.summary = e.summary;
+              if (e.detail !== undefined) s.detail = e.detail;
+              updateItem(owner);
+            }
+          } else if (e.type === 'tasks') {
+            tasks = e.tasks;
+            drawTasks();
+          } else if (e.type === 'usage') {
+            usage.input += e.input;
+            usage.output += e.output;
+            usage.cacheRead += e.cacheRead;
+          } else if (e.type === 'error') push({ kind: 'error', text: e.message });
         }
       }
     } catch (e) {
-      lines.push({ kind: 'error', text: (e as Error).message });
+      push({ kind: 'error', text: (e as Error).message });
     } finally {
-      busy = false;
-      draw();
-      drawSuggest();
+      setBusy(false);
+      persist();
     }
   };
-  sendBtn.addEventListener('click', send);
+  sendBtn.addEventListener('click', () => void send());
   stopBtn.addEventListener('click', () => collab.session && chat && fetch(`/api/agent/${collab.session.id}/stop?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', body: JSON.stringify({ chat }) }));
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      send();
+      void send();
     }
   });
   app.on('collab', () => void render());
-  app.on('drc', drawSuggest);
+  app.on('drc', drawHints);
   void render();
 }
