@@ -20,3 +20,7 @@ export * from './sync.ts';
 export * from './symbolGen.ts';
 export * from './footprints.ts';
 export * from './parts.ts';
+export * from './autoroute.ts';
+export * from './autoplace.ts';
+export * from './stackup.ts';
+export * from './lengths.ts';

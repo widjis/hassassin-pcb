@@ -4,6 +4,19 @@
  * project is live, shared with collaborators).
  */
 import {
+  defaultStackup,
+  diffImpedance,
+  diffPairs,
+  impedance,
+  lengthGroups,
+  lineGeometry,
+  netLengths,
+  planMeander,
+  stackupOf,
+  widthForImpedance,
+  type Stackup,
+  planAutoplace,
+  planAutoroute,
   addSymbolOp,
   applyOffersOps,
   buildBom,
@@ -578,6 +591,110 @@ export const TOOLS: ToolDef[] = [
       apply(p, 'Route', ops);
       const st = computeRatsnest(p.doc, p.engine, p.copper).nets.find((n) => n.net === net);
       return { net, segments: ops.length, layer, netFullyConnected: st ? st.islands <= 1 : true };
+    },
+  },
+  {
+    name: 'auto_place',
+    description: 'Move parts onto the board automatically: connected parts end up near each other, courtyards do not overlap. By default only parts that are not on the board yet (e.g. new parts parked beside it); `refs` to choose, `all` to re-place everything not locked. A starting point to refine.',
+    mutates: true,
+    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, spacing: { type: 'number', description: 'mm between parts (default 0.5)' } } },
+    run: (p, a) => {
+      const { ops, report } = planAutoplace(p.doc, p.engine, p.copper, { ...(Array.isArray(a.refs) ? { refs: a.refs.map(String) } : {}), ...(a.all ? { all: true } : {}), ...(a.spacing !== undefined ? { spacing: num(a.spacing, 'spacing') } : {}) });
+      apply(p, 'Auto-place parts', ops);
+      return report;
+    },
+  },
+  {
+    name: 'autoroute',
+    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, net clearances kept). `nets` limits it to some nets. Connections it cannot finish are listed; it never forces a route. Run refill_pours and run_drc afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
+    mutates: true,
+    input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number' } } },
+    run: (p, a) => {
+      const { ops, report } = planAutoroute(p.doc, p.engine, p.copper, { ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}) });
+      apply(p, 'Autoroute', ops);
+      return { routed: report.routed.length, failed: report.failed, grid: report.grid, ms: report.ms, totalLength: +report.routed.reduce((s, r) => s + r.length, 0).toFixed(2), vias: report.routed.reduce((s, r) => s + r.vias, 0) };
+    },
+  },
+  {
+    name: 'get_stackup',
+    description: 'The board stackup (copper, dielectric and mask layers with thickness, material, Er), and for each copper layer whether traces are microstrip or stripline.',
+    mutates: false,
+    input: { type: 'object', properties: {} },
+    run: (p) => {
+      const st = stackupOf(p.doc, p.copper);
+      return { ...st, custom: !!p.doc.meta.stackup, traces: p.copper.map((l) => ({ layer: l, ...lineGeometry(st, l) })) };
+    },
+  },
+  {
+    name: 'set_stackup',
+    description: 'Set the stackup: either a preset (thickness in mm, flex=true for a polyimide flex build) for the current copper layers, or the full `layers` list [{name, kind: copper|dielectric|mask, thickness (mm), material, er, flex}]. Copper names must match the board layers.',
+    mutates: true,
+    input: { type: 'object', properties: { thickness: { type: 'number' }, flex: { type: 'boolean' }, layers: { type: 'array', items: { type: 'object' } } } },
+    run: (p, a) => {
+      let st: Stackup;
+      if (Array.isArray(a.layers) && a.layers.length) {
+        const layers = (a.layers as Record<string, unknown>[]).map((l) => ({ name: String(l.name), kind: (['copper', 'dielectric', 'mask'].includes(String(l.kind)) ? l.kind : 'dielectric') as 'copper', thickness: num(l.thickness, 'thickness'), ...(l.material ? { material: String(l.material) } : {}), ...(l.er !== undefined ? { er: num(l.er, 'er') } : {}), ...(l.flex ? { flex: true } : {}) }));
+        const cuNames = layers.filter((l) => l.kind === 'copper').map((l) => l.name);
+        const missing = p.copper.filter((c) => !cuNames.includes(c));
+        if (missing.length) throw new ToolError(`The stackup is missing copper layers: ${missing.join(', ')}`);
+        st = { layers, thickness: +layers.reduce((s, l) => s + l.thickness, 0).toFixed(3) };
+      } else st = defaultStackup(p.copper, optNum(a.thickness, 'thickness') ?? 1.6, { flex: !!a.flex });
+      apply(p, 'Set stackup', [{ op: 'setMeta', key: 'stackup', value: st }]);
+      return st;
+    },
+  },
+  {
+    name: 'impedance',
+    description: 'Controlled impedance from the stackup: give `width` (and `gap` for a differential pair) to get the impedance, or `target` ohms (and `gap`) to get the width. Closed-form estimates (±5–10 %); confirm with the fabricator for production.',
+    mutates: false,
+    input: { type: 'object', properties: { layer: { type: 'string', description: 'Copper layer, default F.Cu' }, width: { type: 'number' }, gap: { type: 'number' }, target: { type: 'number' } } },
+    run: (p, a) => {
+      const layer = typeof a.layer === 'string' && a.layer ? a.layer : p.copper[0]!;
+      const g = lineGeometry(stackupOf(p.doc, p.copper), layer);
+      if (!g) throw new ToolError(`No copper layer ${layer} in the stackup`);
+      const gap = optNum(a.gap, 'gap');
+      const target = optNum(a.target, 'target');
+      if (target !== undefined) {
+        const w = widthForImpedance(g, target, gap);
+        return { layer, geometry: g, target, ...(gap !== undefined ? { gap } : {}), width: w, ...(w === null ? { note: 'Target is out of reach on this layer with this stackup' } : {}) };
+      }
+      const w = optNum(a.width, 'width') ?? 0.25;
+      return { layer, geometry: g, width: w, z0: +impedance(g, w).toFixed(1), ...(gap !== undefined ? { gap, zdiff: +diffImpedance(g, w, gap).toFixed(1) } : {}) };
+    },
+  },
+  {
+    name: 'net_lengths',
+    description: 'Routed length per net, differential pairs found by name (X_P/X_N, X+/X-, DP/DM) with their skew, and length-match groups (net property lengthGroup) with their spread.',
+    mutates: false,
+    input: { type: 'object', properties: { filter: { type: 'string' } } },
+    run: (p, a) => {
+      const all = netLengths(p.doc, p.engine);
+      const f = typeof a.filter === 'string' ? a.filter.toLowerCase() : '';
+      return { nets: all.filter((l) => !f || l.net.toLowerCase().includes(f)).filter((l) => l.segments), pairs: diffPairs(all), groups: lengthGroups(all) };
+    },
+  },
+  {
+    name: 'tune_length',
+    description: 'Lengthen a net with a serpentine on its longest straight trace: to `target` mm, or to match the net `match` (e.g. the other half of a differential pair). The change is undone automatically if it causes DRC errors.',
+    mutates: true,
+    input: { type: 'object', properties: { net: { type: 'string' }, target: { type: 'number' }, match: { type: 'string' }, amplitude: { type: 'number', description: 'Max bump height mm (default 1.5)' } }, required: ['net'] },
+    run: (p, a) => {
+      const net = str(a.net, 'net');
+      const lens = netLengths(p.doc, p.engine);
+      const cur = lens.find((l) => l.net === net);
+      if (!cur) throw new ToolError(`No net ${net}`);
+      const target = optNum(a.target, 'target') ?? (typeof a.match === 'string' ? lens.find((l) => l.net === a.match)?.length : undefined);
+      if (target === undefined) throw new ToolError('Give `target` (mm) or `match` (a net name).');
+      const before = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
+      for (const side of [1, -1] as const) {
+        const plan = planMeander(p.doc, p.engine, net, target - cur.length, { side, ...(a.amplitude !== undefined ? { amplitude: num(a.amplitude, 'amplitude') } : {}) });
+        if (plan.error) throw new ToolError(plan.error);
+        apply(p, `Tune length ${net}`, plan.ops);
+        const after = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
+        if (after <= before) return { net, before: cur.length, after: netLengths(p.doc, p.engine).find((l) => l.net === net)!.length, target };
+        p.history.undo();
+      }
+      throw new ToolError('A serpentine here would break clearance on both sides; move nearby copper or tune a different segment by hand.');
     },
   },
   {
