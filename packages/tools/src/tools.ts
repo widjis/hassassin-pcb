@@ -66,6 +66,7 @@ import {
   pasteOps,
   withJunctionsOps,
   renameRefOps,
+  annotateOps,
 } from '@hassassin/core';
 import { buildFab, fabZip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
@@ -696,6 +697,25 @@ export const TOOLS: ToolDef[] = [
     mutates: true,
     input: { type: 'object', properties: {} },
     run: (p, _a, ctx) => syncPcb(p, ctx),
+  },
+  {
+    name: 'annotate',
+    description: 'Renumber part references per prefix in reading order (sheet by sheet, top to bottom, then left to right). mode "keep" (default) only numbers parts without a number ("R?") or with a duplicate reference; "reset" renumbers every part in scope from 1. sheet limits it to one sheet (name or path). Board components are renamed with their symbols; run update_pcb afterwards to rename the nets (routed copper follows).',
+    mutates: true,
+    input: { type: 'object', properties: { mode: { type: 'string', enum: ['keep', 'reset'] }, sheet: { type: 'string' }, power: { type: 'boolean', description: 'Also renumber power symbols (#PWR); default true' } } },
+    run: (p, a) => {
+      let sheet: string | undefined;
+      if (typeof a.sheet === 'string' && a.sheet.trim()) {
+        const want = a.sheet.trim();
+        const sh = [...p.doc.nodes.values()].find((n) => n.type === 'sheet' && (n.name === want || n.uid === want || sheetPath(p.doc, n) === want));
+        if (!sh) throw new ToolError(`No sheet ${want}`);
+        sheet = sh.uid;
+      }
+      const mode = a.mode === 'reset' ? 'reset' : 'keep';
+      const res = annotateOps(p.doc, p.engine, { mode, ...(sheet ? { sheet } : {}), ...(a.power === false ? { power: false } : {}) });
+      apply(p, `Annotate (${mode})`, res.ops);
+      return { mode, renamed: res.renames.length, renames: Object.fromEntries(res.renames), next: res.renames.length ? 'Run update_pcb so the board nets follow the new names.' : 'Nothing to renumber.' };
+    },
   },
   {
     name: 'duplicate',

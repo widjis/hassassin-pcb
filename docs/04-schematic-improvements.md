@@ -103,7 +103,14 @@ only when all of its criteria pass.
   - Double-clicking a reference or value on the sheet edits it in place; Enter saves, Esc cancels.
   - The inspector shows and edits the part's properties (value, MPN, manufacturer, footprint, datasheet,
     DNP) for schematic symbols; changes reach the board on Update PCB as today.
-- [ ] **S6. Annotation (renumbering references).**
+- [x] **S6. Annotation (renumbering references).** — done
+  - Delivered: Annotate button in the schematic toolbar (whole design or this sheet; keep existing
+    numbers or renumber from 1) and the `annotate` tool. Order: sheet by sheet, top to bottom, then
+    left to right; units of a part share a reference; duplicates and unnumbered parts ("R?") get new
+    numbers; numbers used by board-only components are skipped. Board components are renamed with
+    their symbols; Update PCB then renames the nets and routed copper follows (tested on an
+    autorouted board: 0 unrouted, same DRC result).
+  - Tests: `packages/tools/test/schematic-s6.test.ts`. Browser check: Annotate dialog, renumber from 1.
   - A command renumbers references per prefix, ordered by sheet then position (top-to-bottom,
     left-to-right), with options: whole design or one sheet, keep existing numbers or reset.
   - The board's components are renamed to match, and routed copper keeps its nets.

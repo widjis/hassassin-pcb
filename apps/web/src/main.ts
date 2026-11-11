@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -244,6 +244,47 @@ const openLibrary = () => {
   app.emit('parts');
 };
 $('libBtn').addEventListener('click', openLibrary);
+
+// Annotate: renumber references per prefix in reading order (S6).
+const openAnnotate = () => {
+  const doc = app.doc;
+  const engine = app.engine;
+  if (!doc || !engine) return;
+  const dlg = document.createElement('dialog');
+  dlg.className = 'annotate-dialog';
+  const sheetName = sch.sheet()?.name || 'this sheet';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <h3>Annotate references</h3>
+      <fieldset><legend>Scope</legend>
+        <label><input type="radio" name="scope" value="all" checked> Whole design</label>
+        <label><input type="radio" name="scope" value="sheet"> Only <span class="sheet-name"></span></label>
+      </fieldset>
+      <fieldset><legend>Numbers</legend>
+        <label><input type="radio" name="mode" value="keep" checked> Keep existing; number new and duplicate parts</label>
+        <label><input type="radio" name="mode" value="reset"> Renumber everything from 1</label>
+      </fieldset>
+      <p class="dim">Order: sheet by sheet, top to bottom, then left to right. Board components are renamed too; run Update PCB afterwards so the nets follow.</p>
+      <div class="row"><button value="cancel">Cancel</button><button value="ok" class="primary">Annotate</button></div>
+    </form>`;
+  dlg.querySelector('.sheet-name')!.textContent = sheetName;
+  document.body.append(dlg);
+  dlg.addEventListener('close', () => {
+    const form = dlg.querySelector('form')!;
+    const data = new FormData(form);
+    dlg.remove();
+    if (dlg.returnValue !== 'ok') return;
+    const sheet = data.get('scope') === 'sheet' ? sch.sheet()?.uid : undefined;
+    const mode = data.get('mode') === 'reset' ? 'reset' : 'keep';
+    const res = annotateOps(doc, engine, { mode, ...(sheet ? { sheet } : {}) });
+    if (!res.ops.length) return app.say('Nothing to renumber.');
+    app.apply(`Annotate (${mode})`, res.ops);
+    const hasBoard = [...doc.nodes.values()].some((n) => n.type === 'element');
+    app.say(`Renumbered ${res.renames.length} part${res.renames.length > 1 ? 's' : ''}${hasBoard ? '. Run Update PCB so the board nets follow.' : '.'}`);
+  });
+  dlg.showModal();
+};
+$('annotateBtn').addEventListener('click', openAnnotate);
 $('newBtn').addEventListener('click', () => {
   if (app.dirty && !confirm('Discard unsaved changes and start a new project?')) return;
   app.newProject();

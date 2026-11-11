@@ -350,3 +350,11 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .part-form { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; align-items: center; margin: 6px 0 10px; font-size: 12px; }
 .part-form input[type=text] { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; font-size: 12px; min-width: 0; }
 .part-form .k { color: var(--dim, #8b91a0); }
+.annotate-dialog { background: var(--panel, #16181d); color: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; max-width: 420px; }
+.annotate-dialog::backdrop { background: rgba(0,0,0,.45); }
+.annotate-dialog h3 { margin: 0 0 10px; font-size: 15px; }
+.annotate-dialog fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0 0 10px; padding: 6px 10px; display: grid; gap: 4px; font-size: 13px; }
+.annotate-dialog legend { font-size: 12px; color: var(--dim, #8b91a0); padding: 0 4px; }
+.annotate-dialog .dim { font-size: 12px; margin: 4px 0 12px; }
+.annotate-dialog .row { display: flex; justify-content: flex-end; gap: 8px; }
+.annotate-dialog button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
