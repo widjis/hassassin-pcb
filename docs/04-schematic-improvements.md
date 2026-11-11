@@ -174,7 +174,14 @@ only when all of its criteria pass.
   - Finding in re-run 2, fixed: two wires crossed a part body (R1, C4) without shorting it. Router, ERC
     (`wireThroughPart`) and `tidy_wires` were fixed; on that sheet `tidy_wires` now leaves 0 wires through
     bodies and 0 ERC warnings (jogs 5, still −83 %). Not yet confirmed by a new agent run.
-- [ ] **S9. Sheet frame, title block, notes and group boxes.**
+- [x] **S9. Sheet frame, title block, notes and group boxes.** — `7a0fcdb`
+  - Delivered: frame A4…A0 landscape (or the smallest that fits), centred on the drawing, title block with
+    title, project, revision, date, author and sheet n / m (project name and date filled in automatically);
+    notes (T, double-click to edit) and titled group boxes (G around the selection); tools
+    `set_sheet_frame`, `add_note`, `add_group_box` (sized from the parts of a block). Boxes and notes move
+    with their block in `compact_blocks`, and part texts keep clear of them and the title block.
+  - Tests: `packages/tools/test/schematic-s8.test.ts` (S9 section). Browser check: frame dialog, A3 frame
+    and title block, group box around the power block, note with T.
   - Each sheet can have a frame with a title block (title, revision, date, author, sheet number), filled
     from project data where possible.
   - Free text notes and rectangles for grouping blocks ("Power", "MCU", "Sensors"), also available as tools.
