@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Document | `docs/04-schematic-improvements.md` |
-| Version | 0.3 |
+| Version | 0.4 |
 | Status | **Approved on 2026-11-11 — in progress** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
@@ -154,6 +154,12 @@ only when all of its criteria pass.
     PWR_FLAG texts are placed so they do not overlap each other, symbol bodies or wires; when a text
     cannot fit next to its owner it moves to a free spot nearby. On the RGB sleep lamp re-run: no two
     texts overlap.
+  - *(added in 0.4)* **Configurable schematic grid:** the pin grid (where part pins land: 1.27, 2.54 or
+    5.08 mm, default 2.54) and the wire grid (1.27 or 2.54 mm, never coarser than the pin grid) are
+    project settings, saved in the project and shared with collaborators. A picker in the schematic
+    toolbar and a `set_schematic_grid` tool change them; placing, dragging, rotating, pasting,
+    `add_part`, `move_symbol`, `duplicate` and `tidy_wires` all follow them; `project_status` reports
+    them.
 - [ ] **S9. Sheet frame, title block, notes and group boxes.**
   - Each sheet can have a frame with a title block (title, revision, date, author, sheet number), filled
     from project data where possible.
@@ -287,6 +293,7 @@ one issue per item, if the owner asks for it.
 | 0.1 | 2026-11-11 | Approved as written | Owner (widjis), in chat: "Setuju, tanda tangani" |
 | 0.2 | 2026-11-11 | Added S19 footprint generator (with a KiCad reference check in tests), S20 pin ↔ pad check and S21 KiCad libraries on demand to M2; moved S16 symbol editor from M3 to M2 and extended it; exception for component libraries and copyleft code added to working rule 1. Reason: parts missing from every library were the weakest link for real boards. | Owner (widjis), in chat: "oke setuju v0.2 semua, tambahkan catatannya" |
 | 0.3 | 2026-11-11 | S8 extended with jog removal (`tidy_wires`) and non-overlapping texts, each with a check on the RGB sleep lamp re-run. Reason: the S7 re-run showed wires that jog because connected pins were placed slightly off one line, and texts that overlap. | Owner (widjis), in chat: "Yes, add to v0.3" |
+| 0.4 | 2026-11-11 | S8 extended with a configurable schematic grid (pin grid 1.27 / 2.54 / 5.08 mm, wire grid), as a project setting with a toolbar picker and a tool. Reason: the owner asked whether the grid can be changed. | Owner (widjis), in chat: "oke masukkan ke S8 sebagai v0.4" |
 
 ## Approval
 
@@ -297,7 +304,8 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 | Owner | widjis | 2026-11-11 | 0.1 |
 | Owner | widjis | 2026-11-11 | 0.2 |
 | Owner | widjis | 2026-11-11 | 0.3 |
+| Owner | widjis | 2026-11-11 | 0.4 |
 
 Approval was given by the owner in the working chat ("Setuju, tanda tangani" — "Agreed, sign it" for
-0.1; "oke setuju v0.2 semua, tambahkan catatannya" — "OK, agree to all of v0.2, add the notes" for 0.2; "Yes, add to v0.3" for 0.3)
+0.1; "oke setuju v0.2 semua, tambahkan catatannya" — "OK, agree to all of v0.2, add the notes" for 0.2; "Yes, add to v0.3" for 0.3; "oke masukkan ke S8 sebagai v0.4" for 0.4)
 and recorded here by the implementer.
