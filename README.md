@@ -1,4 +1,4 @@
-# pcb-web-cleanroom
+# Hassassin AI PCB Designer
 
 Editor PCB berbasis browser (schematic, layout, kolaborasi real-time, AI agent), dibangun secara clean room.
 
