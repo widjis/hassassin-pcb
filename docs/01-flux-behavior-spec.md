@@ -1,327 +1,311 @@
-# Spesifikasi Perilaku — Referensi: Flux (flux.ai)
+# Behaviour specification — reference: Flux (flux.ai)
 
-> **Status clean room:** dokumen ini disusun **hanya** dari materi publik yang terlihat
-> oleh pengunjung — landing page `flux.ai` dan dokumentasi publik `docs.flux.ai` —
-> diamati pada 2026-11-11 lewat browser biasa. Tidak ada kode, bundle JavaScript,
-> API privat, atau aset Flux yang dibaca/disalin. Semua kalimat ditulis ulang dengan
-> kata-kata kita sendiri. Implementasi kita **hanya boleh** merujuk dokumen ini,
-> bukan produk Flux.
+> **Clean-room status:** this document is written **only** from public material visible to a
+> visitor — the `flux.ai` landing page and the public documentation at `docs.flux.ai` —
+> observed on 2026-11-11 with an ordinary browser. No Flux code, JavaScript bundles, private
+> APIs or assets were read or copied. Every sentence is in our own words. Our implementation
+> **may only** refer to this document, not to the Flux product.
 >
-> Nama, logo, warna, teks UI, dan istilah merek Flux **tidak** boleh dipakai di produk kita.
+> Flux's name, logo, colours, UI text and brand terms must **not** be used in our product.
 
 ---
 
-## 1. Gambaran produk (yang terlihat dari luar)
+## 1. The product (as seen from outside)
 
-- Aplikasi ECAD lengkap yang berjalan **sepenuhnya di browser**, tanpa instalasi.
-- Rendering kanvas memakai **WebGL2 dengan akselerasi hardware** (docs menyuruh
-  pengguna memastikan WebGL2 aktif). Ini wajib untuk performa board besar multi-layer.
-- **Kolaborasi real-time**: semua perubahan langsung tersimpan ke cloud; indikator
-  "sedang menyimpan" muncul sebentar setiap perubahan di-commit ke riwayat.
-- Cakupan: schematic → PCB (hingga ~8 layer, termasuk flex/rigid-flex) → 3D →
-  ekspor manufaktur. Versi terbaru meluas ke mekanik, firmware, wire harness, simulasi.
-- **AI agent** sebagai pusat: pengguna menjelaskan tujuan perangkat, agent bertanya,
-  merencanakan, memilih part, membuat schematic, menempatkan komponen, me-routing,
-  menjalankan pengecekan, dan menyiapkan file pabrikasi. Agent selalu meminta izin
-  sebelum mengubah copper atau rules.
+- A complete ECAD application that runs **entirely in the browser**, with nothing to install.
+- The canvas renders with **hardware-accelerated WebGL2** (the docs ask users to make sure
+  WebGL2 is enabled). This is a must for the performance of large multi-layer boards.
+- **Real-time collaboration**: every change is saved to the cloud straight away; a short
+  "saving" indicator appears each time a change is committed to the history.
+- Scope: schematic → PCB (up to about 8 layers, including flex / rigid-flex) → 3D →
+  manufacturing export. Newer versions extend to mechanical design, firmware, wire harnesses and simulation.
+- An **AI agent** at the centre: the user describes the device's purpose, and the agent asks
+  questions, plans, picks parts, draws the schematic, places components, routes, runs checks and
+  prepares the fabrication files. The agent always asks permission before changing copper or rules.
 
-## 2. Tata letak UI (konseptual)
+## 2. UI layout (conceptual)
 
-| Area | Fungsi |
+| Area | Purpose |
 |---|---|
-| Panel kiri | Chat dengan AI agent · Library part · Object Tree · daftar Rulesets |
-| Kanvas tengah | Schematic editor / PCB editor / 3D view (tersinkron satu sama lain) |
-| Panel kanan | Inspector kontekstual: properti, harga & stok (dari MPN), layout rules objek |
-| Kiri-bawah kanvas | Panel layer: tampil/sembunyi tiap layer dan fill copper |
-| Menu proyek | Undo/Redo, Change History, Fork, Clone, Export |
-| Tabel proyek | Nets, Components, BOM, Pins, Knowledge — tampilan tabular data proyek |
+| Left panel | Chat with the AI agent · part library · Object Tree · list of rulesets |
+| Centre canvas | Schematic editor / PCB editor / 3D view (kept in sync with each other) |
+| Right panel | Contextual inspector: properties, price & stock (from the MPN), the object's layout rules |
+| Bottom-left of the canvas | Layer panel: show / hide each layer and copper fills |
+| Project menu | Undo/Redo, Change History, Fork, Clone, Export |
+| Project tables | Nets, Components, BOM, Pins, Knowledge — tabular views of project data |
 
-Interaksi seleksi: klik = pilih objek; drag kotak = multi-select; Shift+klik = tambah
-ke seleksi; Cmd/Ctrl+klik = *deep select* (memilih sub-elemen dalam objek). Seleksi
-di kanvas dan Object Tree saling sinkron.
+Selection: click = select an object; drag a box = multi-select; Shift+click = add to the
+selection; Cmd/Ctrl+click = *deep select* (pick a sub-element inside an object). Selection on the
+canvas and in the Object Tree stays in sync.
 
-## 3. Model data — pohon objek
+## 3. Data model — the object tree
 
-Seluruh dokumen layout adalah **pohon** (tree). Setiap node punya `uid` internal,
-`type`, nama/designator, dan properti.
+The whole layout document is a **tree**. Every node has an internal `uid`, a `type`, a
+name / designator, and properties.
 
-| Kategori | Tipe |
+| Category | Types |
 |---|---|
-| Puncak | `root`, `layout` (sebuah board), `element` (komponen, tertaut ke padanannya di schematic) |
-| Kontainer | `container` (folder sistem, mis. "Components", "Nets"), `group` (folder buatan pengguna), `footprint`, `model` (2D/3D), `net` |
+| Top | `root`, `layout` (a board), `element` (a component, linked to its counterpart in the schematic) |
+| Containers | `container` (system folders such as "Components", "Nets"), `group` (user folders), `footprint`, `model` (2D/3D), `net` |
 | Copper | `pad`, `via`, `trace`, `fill` |
 | Silkscreen | `text`, `line`, `circle`, `rectangle` |
-| Utilitas | `zone` (keep-out copper) |
+| Utility | `zone` (copper keep-out) |
 
-Model schematic (API publik) memakai node: `element` (part, punya `terminals`),
-`route` (kabel antar terminal), `elementTerminal`, `routeTerminal`, `property`,
+The schematic model (public API) uses the nodes `element` (a part, with `terminals`),
+`route` (a wire between terminals), `elementTerminal`, `routeTerminal`, `property`,
 `asset`, `control`.
 
-**Catatan desain untuk kita:** schematic dan PCB berbagi identitas komponen
-(`element`) dan net; satu sumber kebenaran, dua tampilan.
+**Design note for us:** schematic and PCB share the component identity (`element`) and the
+nets; one source of truth, two views.
 
-## 4. Sistem Layout Rules — fitur pembeda utama
+## 4. The layout rule system — the main distinguishing feature
 
-Nilai-nilai layout (lebar trace, clearance, posisi, rotasi, bentuk pad, dll.) **tidak
-disimpan langsung** sebagai atribut mentah; mereka hasil **resolusi rules**,
-mirip CSS.
+Layout values (trace width, clearance, position, rotation, pad shape and so on) are **not stored
+directly** as raw attributes; they are the result of **resolving rules**, much like CSS.
 
-### 4.1 Dua jenis rule
-- **Object-specific**: menempel pada satu objek (seperti `style=""` inline).
-- **Selector-based (Ruleset)**: berlaku untuk semua objek yang cocok dengan selector.
+### 4.1 Two kinds of rules
+- **Object-specific**: attached to one object (like an inline `style=""`).
+- **Selector-based (rulesets)**: apply to every object that matches a selector.
 
-### 4.2 Sintaks selector (meniru konsep CSS selector)
-- Tipe: `trace`, `pad`, `element`, … (case-sensitive)
+### 4.2 Selector syntax (modelled on the CSS selector concept)
+- Type: `trace`, `pad`, `element`, … (case-sensitive)
 - Designator: `#R2`
-- Properti: `[prop]`, `[prop=value]`, plus varian partial match (kata, prefix,
-  suffix, substring), dengan opsi case sensitivity
+- Properties: `[prop]`, `[prop=value]`, plus partial-match variants (word, prefix, suffix,
+  substring), with a case-sensitivity option
 - UID: `[uid=...]`
-- Kombinator & pseudo-class: universal `*`, descendant, child `>`, sibling `+ ~`,
-  `:not()`
-- Saat mengetik selector, objek yang cocok **di-highlight** di kanvas dan Object Tree.
+- Combinators and pseudo-classes: universal `*`, descendant, child `>`, siblings `+ ~`, `:not()`
+- While a selector is being typed, matching objects are **highlighted** on the canvas and in the Object Tree.
 
-### 4.3 Resolusi nilai
-1. Rule langsung pada objek > rule warisan (inherited).
-2. Object-specific > selector-based.
-3. Specificity: tipe < atribut < ID. (`*`, kombinator, `:not()` tidak menambah bobot.)
-4. Specificity sama → rule yang **lebih bawah** di daftar menang (cascade).
-5. Sebagian rule **inheritable** (mis. bentuk pad diturunkan ke pad anak),
-   sebagian tidak (mis. ukuran).
-6. Flag `!important` memaksa override, termasuk ke dalam part/modul/sub-layout yang
-   dipakai ulang; memicu peringatan DRC "override komponen".
-7. Ada **System Defaults** (rule set dasar board & net: arus, impedansi,
-   diff-pair) di bawah semua rule proyek.
+### 4.3 Resolving a value
+1. A rule directly on the object beats an inherited rule.
+2. Object-specific beats selector-based.
+3. Specificity: type < attribute < ID. (`*`, combinators and `:not()` add no weight.)
+4. With equal specificity, the rule **further down** the list wins (the cascade).
+5. Some rules are **inheritable** (for example the pad shape passes down to child pads), others
+   are not (for example the size).
+6. An `!important` flag forces an override, including into reused parts / modules / sub-layouts;
+   it raises a DRC warning about overriding a component.
+7. **System Defaults** (base rule sets for the board and nets: current, impedance, differential
+   pairs) sit below every project rule.
 
-### 4.4 Nilai bisa berupa ekspresi
-Properti dan rule menerima **ekspresi seperti spreadsheet** (`= 22mm + 1`) dengan
-satuan & konversi satuan, fungsi matematika, string, dan referensi ke properti/rule
-objek lain. Dievaluasi ulang otomatis saat input berubah.
+### 4.4 Values can be expressions
+Properties and rules accept **spreadsheet-like expressions** (`= 22mm + 1`) with units and unit
+conversion, maths functions, strings, and references to other objects' properties or rules. They
+are re-evaluated automatically when their inputs change.
 
-### 4.5 Contoh rule yang ada
-Keep Out (clearance, dua arah, bisa per-tipe target mis. hanya terhadap fill),
-Board Inset Margin, Auto Layout Gravity (0–1), Asset (mis. logo SVG ke silkscreen),
-Trace Width, Preferred Trace Widths, Trace Shape (lurus/lengkung), Connected Layers
-(mengaktifkan pour per layer untuk net), Fill Stitching Density/Offset, Position X/Y,
+### 4.5 Examples of existing rules
+Keep Out (clearance, both ways, can be per target type, for example only against fills),
+Board Inset Margin, Auto Layout Gravity (0–1), Asset (for example an SVG logo on the silkscreen),
+Trace Width, Preferred Trace Widths, Trace Shape (straight / curved), Connected Layers
+(turns on pours per layer for a net), Fill Stitching Density / Offset, Position X/Y,
 Rotation, Pad Shape, Size, Enable.
 
-## 5. Fitur editor PCB
+## 5. PCB editor features
 
-- **Net vs trace**: net = koneksi logis (dari schematic), trace = jalur copper fisik.
-  Lebar trace diatur di level net atau via ruleset.
-- **Copper fill / pour**: pour dinamis per net per layer. GND fill aktif di semua
-  layer secara default (tapi disembunyikan), power fill nonaktif default. Stitching
-  via tidak otomatis — dikonfigurasi via rule.
-- **Via**, smart via, curved traces, polygons, custom pad shapes, silkscreen,
-  pengukuran jarak, manajemen satuan, locking objek, stackup editor, impedance control,
-  length/skew tuning, diff-pair.
-- **Auto Layout**: menempatkan dan me-routing otomatis.
-- **DRC real-time**: berjalan terus saat mengedit; hasil tampil di panel pesan.
-  Contoh: trace overlap, net belum ter-routing, footprint hilang, copper mengambang,
-  clearance. Ada review EMC (trace melintasi split plane, via tanpa return via, dll.).
-- **3D view** tersinkron.
+- **Net vs trace**: a net is a logical connection (from the schematic); a trace is a physical copper
+  path. Trace width is set at the net level or through a ruleset.
+- **Copper fills / pours**: dynamic pours per net per layer. A GND fill is on for every layer by
+  default (but hidden); power fills are off by default. Stitching vias are not automatic — they are
+  configured through a rule.
+- **Vias**, smart vias, curved traces, polygons, custom pad shapes, silkscreen, distance measurement,
+  unit management, object locking, stackup editor, impedance control, length / skew tuning,
+  differential pairs.
+- **Auto Layout**: automatic placement and routing.
+- **Real-time DRC**: runs continuously while editing; results appear in a messages panel.
+  Examples: overlapping traces, unrouted nets, missing footprints, floating copper, clearance.
+  There is an EMC review (traces crossing a split plane, vias without a return via, and so on).
+- A synchronised **3D view**.
 
-## 6. Kolaborasi & versi
+## 6. Collaboration and versions
 
-- **Autosave + Change History**: setiap perubahan jadi versi; bisa dilihat dan
-  di-*restore*. Undo/Redo standar.
-- **Fork** (salinan dengan riwayat) dan **Clone** (salinan bersih). Agent bisa
-  mencoba alternatif di fork lalu **merge** hasil yang lebih baik kembali, dengan
-  catatan keputusan merge.
-- **Komentar** dipin ke titik di kanvas, bisa dibalas, di-resolve, di-pin, disembunyikan;
-  ada daftar semua komentar.
-- **Izin bertingkat**: Edit / Comment / View / None, ditumpuk di empat lapisan
-  (anonim/publik, …, organisasi, enterprise). Default privat.
+- **Autosave + Change History**: every change becomes a version that can be viewed and *restored*.
+  Standard undo/redo.
+- **Fork** (a copy with history) and **Clone** (a clean copy). The agent can try alternatives in a
+  fork and then **merge** the better result back, with notes on the merge decision.
+- **Comments** pinned to a point on the canvas; they can be replied to, resolved, pinned and hidden;
+  there is a list of all comments.
+- **Layered permissions**: Edit / Comment / View / None, stacked over four levels
+  (anonymous / public, …, organisation, enterprise). Private by default.
 
-## 7. Library & part
+## 7. Library and parts
 
-- Library publik (part komunitas) + library pribadi/organisasi.
-- Part membawa simbol, footprint, model 3D, properti (MPN, nilai), dan
-  harga/ketersediaan live dari distributor.
-- AI bisa membuat part dari datasheet, memverifikasi, dan memperkaya data part.
+- A public library (community parts) + personal / organisation libraries.
+- A part carries a symbol, a footprint, a 3D model, properties (MPN, value), and live price /
+  availability from distributors.
+- The AI can create a part from a datasheet, verify it, and enrich its data.
 
-## 8. Impor / ekspor
+## 8. Import / export
 
-- Impor: KiCad, Altium, Eagle, EasyEDA, OrCAD/Allegro, PADS, DipTrace, IPC-2581, IDF, dll.
-- Ekspor: Gerber, drill, BOM, pick-and-place, netlist standar.
+- Import: KiCad, Altium, Eagle, EasyEDA, OrCAD/Allegro, PADS, DipTrace, IPC-2581, IDF and more.
+- Export: Gerber, drill, BOM, pick-and-place, standard netlists.
 
-## 9. AI agent (perilaku yang diamati)
+## 9. AI agent (observed behaviour)
 
-- Mode chat dan mode agent; bisa beberapa thread paralel; pilihan model.
-- Bekerja di atas konteks proyek + seleksi saat ini di kanvas.
-- Alur: tanya kebutuhan → rencana → eksekusi bertahap → cek ulang setelah tiap
-  langkah → laporkan. Meminta konfirmasi sebelum perubahan besar.
-- Semua operasi editor (rule, rename net, route, DRC fix, restore versi, fork) juga
-  bisa dipicu lewat bahasa alami → artinya **setiap aksi editor adalah operasi
-  terstruktur yang bisa dipanggil sebagai tool**.
+- Chat mode and agent mode; several parallel threads; a choice of model.
+- Works on the project context + the current selection on the canvas.
+- Flow: ask about requirements → plan → carry out step by step → re-check after each step →
+  report. Asks for confirmation before large changes.
+- Every editor operation (rules, renaming a net, routing, DRC fixes, restoring a version, forking)
+  can also be triggered in natural language → this means **every editor action is a structured
+  operation that can be called as a tool**.
 
 ---
 
-## 9b. Pengamatan langsung di editor (2026-11-11)
+## 9b. Direct observation in the editor (2026-11-11)
 
-Diamati dengan login pengguna sendiri, pada proyek publik contoh ("ESP32 BMS", milik
-akun demo Flux) dan proyek kosong milik pengguna. Hanya UI yang terlihat yang dicatat;
-tidak ada desain yang diubah.
+Observed while signed in as the user, on a public example project ("ESP32 BMS", owned by a Flux demo
+account) and on the user's own empty project. Only the visible UI was noted; no design was changed.
 
-### Struktur aplikasi & URL
-- Satu halaman per proyek: `/<pemilik>/<slug-proyek>~<id>/<tab>`; tab =
-  `files`, `schematic`, `pcb/2d`, `pcb/3d`, ditambah `?thread=<uuid>` untuk thread
-  chat aktif. Tab tambahan bisa dibuka lewat tombol "+".
-- Tata letak tiga kolom: **chat agent** (bisa disembunyikan / full width) ·
-  **area kerja** (tab Files/Schematic/Layout/3D) · panel kanan (onboarding/inspector).
-- Proyek baru dimulai *chat-first*: area kerja kosong ("belum ada schematic") sampai
-  agent atau pengguna menambah komponen. Mode **Chat** (hanya menjawab) vs **Agent**
-  (bekerja otonom, memakai kuota "ACU"); di input chat ada pilihan kemampuan,
-  upload file, pemilih MCP server, markup, dan input suara; agent bisa dihentikan.
+### App structure and URLs
+- One page per project: `/<owner>/<project-slug>~<id>/<tab>`; tabs are `files`, `schematic`,
+  `pcb/2d`, `pcb/3d`, plus `?thread=<uuid>` for the active chat thread. More tabs can be opened with
+  a "+" button.
+- Three-column layout: **agent chat** (can be hidden / full width) · **work area** (Files / Schematic /
+  Layout / 3D tabs) · right panel (onboarding / inspector).
+- A new project starts *chat-first*: the work area is empty ("no schematic yet") until the agent or the
+  user adds components. **Chat** mode (answers only) vs **Agent** mode (works autonomously, using an
+  "ACU" quota); the chat input has a capability picker, file upload, an MCP server picker, markup and
+  voice input; the agent can be stopped.
 
-### Editor layout (PCB 2D)
-- Rail ikon vertikal kiri membuka panel yang **ditumpuk (docked)**, bisa dibuka bersamaan:
-  **Profile**, **Library**, **Objects**, **View**, **Review** (badge jumlah error & warning).
-- Bawah kanvas: pilih sisi papan (**Top**/Bottom), Zoom to Fit, Zoom to Actual Size,
-  tombol **Auto-Layout** + opsi lanjutan.
-- Warna: copper top merah, bottom biru, outline board hijau, objek terpilih di-highlight
-  hijau terang; latar gelap dengan grid.
-- **Klik komponen** → muncul *toolbar mengambang* di dekat objek (designator, posisi,
-  rotasi, layer, visibilitas, kunci) dan inspector kanan; Object Tree otomatis
-  membuka cabang ke objek itu.
+### Layout editor (PCB 2D)
+- A vertical icon rail on the left opens **docked, stacked** panels that can be open at the same time:
+  **Profile**, **Library**, **Objects**, **View**, **Review** (badge with the number of errors and warnings).
+- Below the canvas: choose the board side (**Top** / Bottom), Zoom to Fit, Zoom to Actual Size,
+  an **Auto-Layout** button + advanced options.
+- Colours: top copper red, bottom blue, board outline green, the selected object highlighted bright
+  green; dark background with a grid.
+- **Clicking a component** → a *floating toolbar* appears near it (designator, position, rotation,
+  layer, visibility, lock) together with the right-hand inspector; the Object Tree opens the branch
+  down to that object.
 
-### Panel Profile
-- Manufacturing Profile (preset, bisa "Save As"), Description, **Stackup** (mis.
-  "Standard 2 Layer"), **Rulesets** (milik proyek), **Overrides** (rule ber-`!important`),
-  **System Defaults**.
-- **System Defaults = satu ruleset read-only per tipe objek**, seperti stylesheet
-  bawaan browser: Circle, Container, Cutout, Component, Fill, Flex Joint, Footprint,
-  Group, Layout, Line, Model, Nets (dengan sub-kelas: High/Medium/Low Speed Nets,
-  Power Nets, Net), Pad, Polygon, Rectangle, Root, Trace, Silk, Smart Via,
-  Stackup Area, Text, Via, Zone.
+### Profile panel
+- Manufacturing Profile (presets, "Save As"), Description, **Stackup** (for example "Standard 2 Layer"),
+  **Rulesets** (the project's own), **Overrides** (rules with `!important`), **System Defaults**.
+- **System Defaults = one read-only ruleset per object type**, like a browser's built-in stylesheet:
+  Circle, Container, Cutout, Component, Fill, Flex Joint, Footprint, Group, Layout, Line, Model,
+  Nets (with sub-classes: High / Medium / Low Speed Nets, Power Nets, Net), Pad, Polygon, Rectangle,
+  Root, Trace, Silk, Smart Via, Stackup Area, Text, Via, Zone.
 
-### Inspector ruleset
-Field: Designator, toggle Enabled, Description, **Selector** (kriteria + jumlah objek
-yang cocok, mis. "721 objek", sambil di-highlight di kanvas), lalu daftar **Layout Rules**.
-Contoh nilai default yang terlihat (dicatat sebagai *jenis* rule, bukan untuk ditiru angkanya):
-- Umum: Enabled, Dimension Unit, Rotation Unit, Position, Rotation, Size (+ min/max X/Y),
-  Scale for 3D models, Keep Out (min/max), Keep In (min/max), Corner radius minimum,
-  Silk Color, Layer.
-- Trace: Trace Width, Trace Corner minimum, Preferred Trace Widths, **Shape Start /
-  Shape End** (titik ujung segmen relatif).
-- Pad: Pad Shape, Pad Type (SMD/TH), Thermal Relief (+ jumlah, lebar, sudut konduktor),
+### Ruleset inspector
+Fields: Designator, Enabled toggle, Description, **Selector** (criteria + the number of matching
+objects, for example "721 objects", highlighted on the canvas), then a list of **Layout Rules**.
+Default values seen (noted as *kinds* of rules, not as numbers to copy):
+- General: Enabled, Dimension Unit, Rotation Unit, Position, Rotation, Size (+ min/max X/Y),
+  Scale for 3D models, Keep Out (min/max), Keep In (min/max), minimum corner radius, Silk Color, Layer.
+- Trace: Trace Width, minimum trace corner, Preferred Trace Widths, **Shape Start / Shape End**
+  (relative segment end points).
+- Pad: Pad Shape, Pad Type (SMD/TH), Thermal Relief (+ count, width, conductor angle),
   Connected Layers, Hole Size (+ min/max), Hole Position.
-- Nilai bercampur satuan (`10mil`, `500um`, `1.6mm`) → mesin satuan wajib.
-- Nilai Keep Out bisa **per jenis target**: bentuk seperti `net(0.5mm) polygon(0.5mm)`.
+- Values mix units (`10mil`, `500um`, `1.6mm`) → a units engine is required.
+- Keep Out values can be **per target type**: a form like `net(0.5mm) polygon(0.5mm)`.
 
-### Inspector komponen
-- Header: nama part + ikon; Designator, Component Name, Description.
-- **Layout Rules dengan toggle "Computed" vs "Specified"** — nilai efektif hasil
-  cascade vs nilai yang ditulis langsung (konsep sama dengan "computed style" di
-  DevTools). Rotasi 3 sumbu (mis. `0° 0° 90°`).
-- Properties: Part Type, Manufacturer Name/Part Number, Datasheet URL, Designator Prefix.
-- Pricing & Availability (kosong bila tidak ditemukan), Controls.
+### Component inspector
+- Header: part name + icon; Designator, Component Name, Description.
+- **Layout Rules with a "Computed" vs "Specified" toggle** — the effective value from the cascade vs
+  the value written directly (the same idea as "computed style" in browser DevTools). Rotation on three
+  axes (for example `0° 0° 90°`).
+- Properties: Part Type, Manufacturer Name / Part Number, Datasheet URL, Designator Prefix.
+- Pricing & Availability (empty when nothing is found), Controls.
 
-### Panel View (layer)
-Layer dikelompokkan: Mechanical Layers, Top Layers (Silkscreen, Solder Paste,
-Solder Mask, Copper…), dst.; tombol tampil/sembunyi per layer dan per grup.
+### View panel (layers)
+Layers are grouped: Mechanical Layers, Top Layers (Silkscreen, Solder Paste, Solder Mask, Copper…),
+and so on; show / hide buttons per layer and per group.
 
-### Panel Review (DRC)
-Filter Severity dan Relevance (mis. hanya Layout). Kategori dengan jumlah:
-Airwires (koneksi belum di-routing), Redundant Traces, Copper Clearance, Missing Pins,
-plus kelompok Manufacturing. Ikon merah = error, kuning = warning.
+### Review panel (DRC)
+Severity and Relevance filters (for example Layout only). Categories with counts: Airwires (unrouted
+connections), Redundant Traces, Copper Clearance, Missing Pins, plus a Manufacturing group. Red icon =
+error, yellow = warning.
 
 ### Schematic
-Kanvas gelap, simbol putih; label nilai di bawah designator (mis. `R2 51 Ω`);
-net tanpa nama diberi nama otomatis dari terminal (pola "Net (D2 - K)");
-port/label net untuk sinyal bernama.
-- Panel View di schematic: opsi tampilan — semua label pin, komentar,
-  **kursor kolaborator**, bar shortcut keyboard.
-- Panel Review di schematic: **Electrical Rule Checks** (mis. Floating Pin, Missing
-  Power) terpisah dari Design Rule Checks dan Manufacturing; filter "Relevance"
-  mengikuti tab aktif.
+Dark canvas, white symbols; the value label below the designator (for example `R2 51 Ω`); unnamed nets
+get an automatic name from their terminals (a "Net (D2 - K)" pattern); ports / net labels for named signals.
+- The View panel in the schematic has display options — all pin labels, comments, **collaborator
+  cursors**, a keyboard-shortcut bar.
+- The Review panel in the schematic separates **Electrical Rule Checks** (for example Floating Pin,
+  Missing Power) from Design Rule Checks and Manufacturing; the "Relevance" filter follows the active tab.
 
-### Seleksi net (PCB)
-- Object Tree bisa difilter teks (designator/nama part/selector); baris net menampilkan
-  ringkasan terminal yang terhubung (`C1:P2, C2:P2, …`).
-- Memilih net → **semua trace net itu di-highlight** di kanvas.
-- Inspector net: Designator, daftar Connected Components (terminal), Layout Rules
-  (Trace Width, Connected Layers untuk pour, **Auto-Layout Priority**, Fill Stitching
-  Density/Offset, Keep Out, Preferred Widths, Trace Width minimum, **Via Type**
-  mis. through-hole), Properties (**Net Type** mis. Ground, **Current**).
+### Net selection (PCB)
+- The Object Tree can be filtered by text (designator / part name / selector); a net row shows a
+  summary of its connected terminals (`C1:P2, C2:P2, …`).
+- Selecting a net → **every trace of that net is highlighted** on the canvas.
+- Net inspector: Designator, the list of Connected Components (terminals), Layout Rules (Trace Width,
+  Connected Layers for pours, **Auto-Layout Priority**, Fill Stitching Density / Offset, Keep Out,
+  Preferred Widths, minimum Trace Width, **Via Type** such as through-hole), Properties
+  (**Net Type** such as Ground, **Current**).
 
-### Inspector level proyek
-- Tanpa seleksi: nama, deskripsi, thumbnail proyek; rules proyek (mis. Grid Spacing,
-  satuan, layer aktif); **estimasi harga BOM per distributor** untuk qty 1
-  (beberapa distributor sekaligus); Controls.
-- Proyek contoh tidak punya ruleset/override sendiri → semua nilai dari System Defaults
-  + rule per objek. Artinya default harus cukup baik untuk board sederhana.
+### Project-level inspector
+- With nothing selected: name, description, project thumbnail; project rules (for example Grid Spacing,
+  units, active layer); **BOM price estimates per distributor** for quantity 1 (several distributors at
+  once); Controls.
+- The example project has no rulesets or overrides of its own → every value comes from the System
+  Defaults + per-object rules. So the defaults must be good enough for simple boards.
 
-### Tab 3D
-- View-cube dengan tombol orbit/putar/home dan tombol screenshot.
-- Panel View berganti konteks: kamera (Materials: realistis…, Projection: perspektif…),
-  layer model 3D (top/bottom).
+### 3D tab
+- A view cube with orbit / rotate / home buttons and a screenshot button.
+- The View panel changes context: camera (Materials: realistic…, Projection: perspective…), 3D model
+  layers (top / bottom).
 
-### Tab Files
-- **Documents**: file Markdown proyek (tujuan, catatan, hasil simulasi) — juga
-  dipakai agent sebagai memori proyek.
-- **Assets**: file terlampir dengan peran (mis. SVG "Default" untuk logo, PNG
-  "Thumbnail" untuk sampul proyek).
+### Files tab
+- **Documents**: the project's Markdown files (purpose, notes, simulation results) — also used by the
+  agent as project memory.
+- **Assets**: attached files with roles (for example an SVG "Default" for a logo, a PNG "Thumbnail"
+  for the project cover).
 
-### Library part
-- Pencarian kata kunci / part number, filter: berbintang, pemilik, Part Type,
-  tersedia di distributor, manufaktur, kode package, mount, jumlah terminal,
-  compliance, punya footprint, punya layout, punya MPN.
-- **Setiap part adalah "proyek" sendiri** (bisa di-star, punya pembuat, jumlah
-  pemakaian & bintang). Part = dokumen yang bisa dipakai ulang di dokumen lain
-  (komposisi), bukan record di tabel terpisah.
-- **Part generik parametrik**: satu part (mis. resistor/kapasitor/induktor generik)
-  yang simbol & footprint-nya menyesuaikan pilihan package dan nilai.
+### Part library
+- Keyword / part-number search, filters: starred, owner, Part Type, available at distributors,
+  manufacturer, package code, mount, terminal count, compliance, has a footprint, has a layout, has an MPN.
+- **Every part is a "project" of its own** (it can be starred, has a creator, usage and star counts).
+  A part is a document reused inside other documents (composition), not a record in a separate table.
+- **Generic parametric parts**: one part (for example a generic resistor / capacitor / inductor) whose
+  symbol and footprint adapt to the chosen package and value.
 
-### Perilaku agent (diamati di proyek kosong pengguna)
-- Setelah mode Agent dipilih, agent: berpikir → merujuk panduan internal →
-  **mengganti nama proyek** sesuai isi (slug URL ikut berubah, id proyek tetap) →
-  **membuat daftar tugas** (mis. 3 tugas: spesifikasi & rangkaian; cek konektivitas,
-  level tegangan, catu daya, ERC; ringkasan sebelum layout) → menjalankan tugas
-  sebagai *koordinator* dengan status per tugas (berjalan / menunggu / selesai).
-- Timeline chat menampilkan langkah ringkas ("Thought for N sec", "Referenced guidance",
-  "Renamed …", "Created 3 tasks") yang bisa dibuka-tutup; durasi kerja total ditampilkan.
-- Pengguna bisa mengetik arahan saat agent bekerja ("guide while it works") atau
-  menghentikannya.
-- **Hasil akhir sesi agent** (proyek pengguna, ±25 menit, berhenti karena kuota trial
-  habis): schematic awal 41 komponen / 24 net, layout belum dikerjakan. Laporan penutup
-  di chat terstruktur: *yang sudah tersedia* (blok rangkaian) → *hasil pemeriksaan*
-  (jumlah cek ERC yang lulus + temuan review teknis yang belum diperbaiki, mis.
-  proteksi polaritas, toleransi suplai, timing sinyal) → *koneksi yang perlu
-  diperhatikan* (pin per konektor) → *dokumen & pekerjaan tersisa* (spesifikasi,
-  rencana uji, catatan kepatuhan sebagai unduhan; layout, firmware, casing belum).
-- Kuota agent diukur dalam unit kerja; saat habis, agent berhenti di tengah dan
-  laporan menyebut alasannya, lalu muncul tawaran upgrade.
-- Pelajaran untuk kita: agent harus **jujur soal status** (apa yang lulus, apa yang
-  belum diverifikasi), dan pekerjaan panjang harus bisa berhenti dengan rapi lalu
-  dilanjutkan.
+### Agent behaviour (observed in the user's empty project)
+- Once Agent mode is chosen, the agent: thinks → consults internal guidance →
+  **renames the project** to match its contents (the URL slug changes, the project id stays) →
+  **creates a task list** (for example 3 tasks: specification & circuit; check connectivity, voltage
+  levels, power supply, ERC; summary before layout) → runs the tasks as a *coordinator* with a status
+  per task (running / waiting / done).
+- The chat timeline shows short steps ("Thought for N sec", "Referenced guidance", "Renamed …",
+  "Created 3 tasks") that can be expanded and collapsed; the total working time is shown.
+- The user can type guidance while the agent works ("guide while it works") or stop it.
+- **End result of the agent session** (the user's project, about 25 minutes, stopped because the trial
+  quota ran out): a first schematic with 41 components / 24 nets, no layout yet. The closing report in
+  the chat is structured: *what is available* (circuit blocks) → *check results* (number of ERC checks
+  passed + technical review findings not yet fixed, for example polarity protection, supply tolerance,
+  signal timing) → *connections that need attention* (pins per connector) → *documents and remaining
+  work* (specification, test plan, compliance notes as downloads; layout, firmware, enclosure not yet).
+- Agent quota is measured in work units; when it runs out the agent stops mid-way, the report says
+  why, and an upgrade offer appears.
+- Lesson for us: the agent must be **honest about status** (what passed, what is not verified yet), and
+  long work must be able to stop cleanly and resume.
 
 ---
 
-## 10. Implikasi untuk arsitektur kita (keputusan kita sendiri)
+## 10. Implications for our architecture (our own decisions)
 
-1. **Dokumen = pohon node ber-UID** dalam CRDT (mis. Yjs). Kolaborasi, autosave,
-   change history, dan fork/merge semua turun dari representasi ini.
-2. **Mesin rules ala CSS** sebagai inti: parser selector → matcher pada pohon →
-   resolver (specificity, cascade, inheritance, `!important`) → nilai efektif.
-   Renderer, DRC, dan exporter hanya membaca **nilai efektif**.
-3. **Mesin ekspresi** dengan satuan (bisa memakai library permisif seperti mathjs).
-4. **Renderer WebGL2** sendiri; layer visibility sebagai state tampilan, bukan data.
-5. **DRC inkremental** di Web Worker / WASM (geometri: Clipper2, R-tree).
-6. **Command layer tunggal**: setiap aksi UI = perintah terstruktur → otomatis bisa
-   dipakai AI agent (tool calling) dan undo/redo.
-7. Tampilan, nama fitur, dan alur UI kita didesain ulang — jangan meniru tata letak
-   piksel per piksel.
-8. Resolver rules harus bisa menjawab dua pertanyaan untuk tiap objek: **nilai
-   efektif** dan **asal nilai** (rule/ruleset mana yang menang) — dibutuhkan untuk
-   inspector "computed vs specified" dan untuk penjelasan AI.
-9. "Default per tipe objek" diimplementasikan sebagai ruleset bawaan berprioritas
-   terendah, bukan nilai hard-coded di kode renderer.
-10. Nilai rule bertipe: panjang ber-satuan, sudut, vektor 2D/3D, enum, daftar, dan
-    peta per-target (`net(…) polygon(…)`).
-11. **Part = dokumen** dengan format yang sama dengan proyek; proyek mereferensikan
-    part (dengan versi) dan bisa meng-override lewat `!important`. Satu format,
-    satu engine, satu sistem kolaborasi untuk keduanya.
-12. Panel Review = satu daftar temuan bertipe (kategori, severity, relevansi tab,
-    objek terkait), diisi oleh ERC, DRC, dan cek manufaktur yang berjalan inkremental.
-13. Agent bekerja lewat **task list eksplisit** yang terlihat pengguna, dan setiap
-    langkahnya adalah command editor yang sama dengan yang dipakai UI.
+1. **Document = a tree of nodes with UIDs** in a CRDT (for example Yjs). Collaboration, autosave,
+   change history and fork / merge all follow from this representation.
+   *(As built: a server-ordered operation log instead of a CRDT — see the phase 4 notes in the roadmap.)*
+2. **A CSS-like rule engine** at the core: selector parser → matcher on the tree → resolver
+   (specificity, cascade, inheritance, `!important`) → effective value. The renderer, DRC and
+   exporters only read **effective values**.
+3. **An expression engine** with units (a permissive library such as mathjs could be used).
+4. Our own **WebGL2 renderer**; layer visibility is view state, not data.
+5. **Incremental DRC** in a Web Worker / WASM (geometry: Clipper2, an R-tree).
+   *(As built: DRC on the main thread with a spatial grid, polygons with Clipper 6 WASM.)*
+6. **A single command layer**: every UI action is a structured command → automatically usable by the
+   AI agent (tool calling) and by undo/redo.
+7. Our look, feature names and UI flow are redesigned — do not copy the layout pixel for pixel.
+8. The rule resolver must answer two questions for every object: the **effective value** and **where
+   it comes from** (which rule / ruleset won) — needed for the "computed vs specified" inspector and for
+   the AI's explanations.
+9. "Defaults per object type" are implemented as built-in rulesets with the lowest priority, not as
+   values hard-coded in the renderer.
+10. Rule values are typed: lengths with units, angles, 2D/3D vectors, enums, lists, and per-target maps
+    (`net(…) polygon(…)`).
+11. **Part = document** in the same format as a project; a project references parts (with a version)
+    and can override them with `!important`. One format, one engine, one collaboration system for both.
+12. The Review panel = one list of typed findings (category, severity, tab relevance, related objects),
+    filled by ERC, DRC and manufacturing checks that run incrementally.
+13. The agent works through an **explicit task list** visible to the user, and every step is the same
+    editor command the UI uses.

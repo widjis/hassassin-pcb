@@ -1,49 +1,70 @@
-# Hassassin AI PCB Designer
+# Hassassin PCB
 
-Editor PCB berbasis browser (schematic, layout, kolaborasi real-time, AI agent), dibangun secara clean room.
+A browser-based PCB designer with schematic capture, board layout, real-time collaboration and an AI agent, built clean-room.
 
-## Aturan clean room
-- Tidak ada kode, aset, teks UI, atau merek dari produk lain (KiCad, Flux, dll.) yang disalin.
-- Perilaku referensi hanya dari materi publik dan pengamatan sebagai pengguna; dicatat di `docs/`.
-- Implementasi hanya merujuk dokumen di `docs/`, bukan produk aslinya.
-- Library pihak ketiga hanya yang berlisensi permisif (MIT/BSD/Apache/BSL).
+Part of the [Hassassin Mechatronics](https://github.com/widjis/hassassin-mechatronics) ecosystem.
 
-## Dokumen
-- [docs/01-flux-behavior-spec.md](docs/01-flux-behavior-spec.md) — spesifikasi perilaku referensi.
-- [docs/02-roadmap.md](docs/02-roadmap.md) — fase pengembangan.
-- [docs/03-agents.md](docs/03-agents.md) — CLI `hassassin` dan MCP server untuk Claude Code / Codex.
+## What it does
 
-## Menjalankan
+- **Whole project flow in one place:** requirements → schematic → components → layout → review → fabrication, with a visible gate for each stage.
+- **Schematic editor:** symbols, wires, labels, power symbols, hierarchical sheets, netlist, ERC, and schematic → PCB sync.
+- **Board editor:** WebGL2 layout, rules with CSS-like selectors and cascading, routing, copper pours, DRC, auto-place and autoroute, stackup and impedance, net lengths, differential pairs and length tuning, and a 3D view.
+- **Parts:** generic parametric footprints, the KiCad libraries installed on your machine, BOM with supplier prices and stock.
+- **Fabrication output:** Gerber (RS-274X with X2 attributes), Excellon drill, BOM and pick-and-place, as one ZIP.
+- **KiCad import:** opens `.kicad_pcb` and `.kicad_sch` projects, including hierarchical sheets.
+- **Collaboration:** share links with edit, comment or view access, live cursors, pinned comments, version history with restore, fork and clone.
+- **AI agent:** works through the same tools as the CLI and MCP server, with a task list and step-by-step progress. It can run on your Claude Code or Codex subscription, or on the Claude API.
+- **For other agents:** a `hassassin` CLI (JSON output) and an MCP server, so Claude Code, Codex or any MCP client can design boards too.
+
+## Clean-room rules
+
+- No code, assets, UI text or branding is copied from other products (KiCad, Flux, and so on).
+- Reference behaviour comes only from public material and from observing the products as a user; it is written down in `docs/`.
+- The implementation refers only to the documents in `docs/`, never to the original products.
+- Third-party libraries must be permissively licensed (MIT, BSD, Apache, BSL).
+
+## Documents
+
+- [docs/01-flux-behavior-spec.md](docs/01-flux-behavior-spec.md) — the reference behaviour specification.
+- [docs/02-roadmap.md](docs/02-roadmap.md) — development phases, what each one built, and known limitations.
+- [docs/03-agents.md](docs/03-agents.md) — the `hassassin` CLI, the MCP server for Claude Code / Codex, and the built-in agent.
+
+## Running it
+
 ```sh
 pnpm install
-pnpm dev        # http://localhost:5178 — buka file .kicad_pcb lewat tombol Open atau drag-and-drop
-pnpm run server # server kolaborasi di :5179 (Vite mem-proxy /api dan /ws ke sini) — perlu untuk Share dan tab Agent
-                # (pakai `pnpm run server`: `pnpm server` adalah perintah bawaan pnpm)
-pnpm start      # produksi: build web lalu satu proses melayani aplikasi + kolaborasi di :5179
-pnpm test       # unit test (set KICAD_SAMPLE=/path/board.kicad_pcb untuk uji board nyata)
+pnpm dev        # http://localhost:5178 — open a .kicad_pcb with the Open button or by drag-and-drop
+pnpm run server # collaboration server on :5179 (Vite proxies /api and /ws to it); needed for Share and the Agent tab
+                # (use `pnpm run server`: `pnpm server` is a built-in pnpm command)
+pnpm start      # production: builds the web app, then one process serves the app and collaboration on :5179
+pnpm test       # unit tests (set KICAD_PROJECT_DIR=/path/to/kicad/project to also test a real project)
 pnpm typecheck
 pnpm build
 ```
-Board contoh bisa ditaruh di `apps/web/public/samples/` (diabaikan git) lalu dibuka dengan
-`http://localhost:5178/?board=samples/<nama>.kicad_pcb`.
 
-## Struktur
-- `packages/core` — pohon dokumen, satuan, selector ala CSS, mesin cascade rules, default per tipe.
-- `packages/kicad-import` — parser S-expression dan impor `.kicad_pcb`.
-- `apps/web` — editor web (layout WebGL2, schematic Canvas2D, panel, kolaborasi).
+Sample boards can go in `apps/web/public/samples/` (ignored by git) and be opened with
+`http://localhost:5178/?board=samples/<name>.kicad_pcb`.
+
+To use the Claude API backend of the agent, put `ANTHROPIC_API_KEY=…` in a `.env` file at the repository root (ignored by git) before starting the server. The Claude Code and Codex backends need no key: sign in from the Agent tab.
+
+## Layout
+
+- `packages/core` — document tree, units, CSS-like selectors, the rule cascade, per-type defaults, connectivity, DRC/ERC, pours, autorouter, parts and footprints.
+- `packages/kicad-import` — S-expression parser and import of `.kicad_pcb`, `.kicad_sch`, `.kicad_sym` and `.kicad_mod`.
 - `packages/fab` — Gerber, drill, BOM, pick-and-place, ZIP.
-- `packages/tools` — tool bersama untuk CLI, MCP, dan agent.
-- `packages/sync` — protokol & klien kolaborasi.
-- `apps/cli` — CLI `hassassin` + MCP server.
-- `apps/server` — server kolaborasi (HTTP + WebSocket, penyimpanan di `.data/`).
+- `packages/tools` — the shared tools used by the CLI, the MCP server and the agent.
+- `packages/sync` — collaboration protocol and client.
+- `apps/web` — the web editor (WebGL2 layout, Canvas2D schematic, panels, collaboration).
+- `apps/cli` — the `hassassin` CLI and MCP server.
+- `apps/server` — the collaboration server (HTTP + WebSocket, storage in `.data/`), team library and agent backends.
 
-## Lisensi
+## License
 
-Kode di repo ini memakai lisensi ganda: [Apache License 2.0](LICENSE-APACHE) atau
-[MIT license](LICENSE-MIT), sesuai pilihan Anda. Kontribusi yang Anda kirim untuk digabungkan
-dianggap berlisensi ganda yang sama, tanpa syarat tambahan.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT),
+at your option. Unless you state otherwise, any contribution you intentionally submit
+for inclusion is dual-licensed as above, without additional terms or conditions.
 
-Dependensi pihak ketiga tetap memakai lisensinya masing-masing dan tidak disalin ke repo ini;
-semuanya dipasang dari npm. Contohnya js-angusj-clipper, three.js dan ws (MIT), Codex CLI
-(Apache-2.0), serta Claude Code CLI (lisensi Anthropic sendiri, bukan open source). Library
-KiCad dibaca dari instalasi KiCad di mesin pengguna dan tidak dibundel.
+Third-party dependencies keep their own licenses and are not copied into this repository;
+they are installed from npm. For example js-angusj-clipper, three.js and ws (MIT), the Codex CLI
+(Apache-2.0), and the Claude Code CLI (Anthropic's own license, not open source). KiCad libraries
+are read from the KiCad installation on the user's machine and are not bundled.
