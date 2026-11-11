@@ -77,7 +77,7 @@ only when all of its criteria pass.
   - Pasted parts get the next free references (R7 → R8 …); connections inside the copied group are kept;
     labels keep their names, so pasted global labels join the same nets.
   - Paste follows the mouse until clicked, then is one undo step.
-- [x] **S4. Wire editing and junctions.** — done
+- [x] **S4. Wire editing and junctions.** — `f618086`
   - Delivered: dragging a single wire segment moves it across its own direction; wires running along
     the drag stretch, and where its end sits on a pin, label or another wire a short new wire keeps it
     connected. A wire may start or end on the middle of another wire (the wire tool stops there).
