@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Document | `docs/04-schematic-improvements.md` |
-| Version | 0.2 |
+| Version | 0.3 |
 | Status | **Approved on 2026-11-11 — in progress** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
@@ -145,6 +145,15 @@ only when all of its criteria pass.
     capacitors below U1, 2.54 mm apart").
   - Re-running the RGB sleep lamp prompt: the sheet area used is clearly smaller than in v0.0.1
     (target: at least 40 % less bounding-box area), with blocks still separated.
+  - *(added in 0.3)* **Jog removal:** a command and a tool (`tidy_wires` for agents) move small parts
+    (for example a resistor divider or a pull-up) so that the pins they connect to line up and the wire
+    between them becomes straight; connections are checked with the netlist and never change. On the
+    RGB sleep lamp re-run, wires with a short jog (an offset of up to 5.08 mm that could be removed by
+    moving one part) drop by at least 80 %.
+  - *(added in 0.3)* **No overlapping text:** references, values, power-symbol names, net labels and
+    PWR_FLAG texts are placed so they do not overlap each other, symbol bodies or wires; when a text
+    cannot fit next to its owner it moves to a free spot nearby. On the RGB sleep lamp re-run: no two
+    texts overlap.
 - [ ] **S9. Sheet frame, title block, notes and group boxes.**
   - Each sheet can have a frame with a title block (title, revision, date, author, sheet number), filled
     from project data where possible.
@@ -277,6 +286,7 @@ one issue per item, if the owner asks for it.
 | 0.1 | 2026-11-11 | First draft | — |
 | 0.1 | 2026-11-11 | Approved as written | Owner (widjis), in chat: "Setuju, tanda tangani" |
 | 0.2 | 2026-11-11 | Added S19 footprint generator (with a KiCad reference check in tests), S20 pin ↔ pad check and S21 KiCad libraries on demand to M2; moved S16 symbol editor from M3 to M2 and extended it; exception for component libraries and copyleft code added to working rule 1. Reason: parts missing from every library were the weakest link for real boards. | Owner (widjis), in chat: "oke setuju v0.2 semua, tambahkan catatannya" |
+| 0.3 | 2026-11-11 | S8 extended with jog removal (`tidy_wires`) and non-overlapping texts, each with a check on the RGB sleep lamp re-run. Reason: the S7 re-run showed wires that jog because connected pins were placed slightly off one line, and texts that overlap. | Owner (widjis), in chat: "Yes, add to v0.3" |
 
 ## Approval
 
@@ -286,7 +296,8 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 |---|---|---|---|
 | Owner | widjis | 2026-11-11 | 0.1 |
 | Owner | widjis | 2026-11-11 | 0.2 |
+| Owner | widjis | 2026-11-11 | 0.3 |
 
 Approval was given by the owner in the working chat ("Setuju, tanda tangani" — "Agreed, sign it" for
-0.1; "oke setuju v0.2 semua, tambahkan catatannya" — "OK, agree to all of v0.2, add the notes" for 0.2)
+0.1; "oke setuju v0.2 semua, tambahkan catatannya" — "OK, agree to all of v0.2, add the notes" for 0.2; "Yes, add to v0.3" for 0.3)
 and recorded here by the implementer.
