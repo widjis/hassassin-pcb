@@ -37,6 +37,7 @@ type Events = {
   remote: { label: string; user: User };
   reset: { reason: string };
   welcome: { role: Role; project: ProjectInfo };
+  agent: { chat: string; by: string; backend: string; event: Record<string, unknown> };
 };
 
 export interface SyncOptions {
@@ -272,6 +273,9 @@ export class SyncClient {
         if (msg.peer.clientId === this.clientId) return;
         this.peers.set(msg.peer.clientId, msg.peer);
         this.emit('presence', this.peers);
+        return;
+      case 'agent':
+        this.emit('agent', { chat: msg.chat, by: msg.by, backend: msg.backend, event: msg.event });
         return;
       case 'leave':
         this.peers.delete(msg.clientId);

@@ -64,7 +64,9 @@ export type ServerMsg =
   | { t: 'leave'; clientId: string }
   | { t: 'reset'; seq: number; doc: DocFile; reason: string }
   | { t: 'error'; message: string }
-  | { t: 'pong' };
+  | { t: 'pong' }
+  /** An AI agent conversation on this project, mirrored to everyone who has it open. */
+  | { t: 'agent'; chat: string; by: string; backend: string; event: Record<string, unknown> };
 
 export const COMMENTS_CONTAINER = 'Comments';
 

@@ -62,6 +62,9 @@ interface Chat {
   live: LiveSession | null;
   abort: AbortController | null;
   lastUsed: number;
+  /** Who started it, and the transcript so far (for people who open the project later). */
+  by: string;
+  events: Record<string, unknown>[];
 }
 
 /** Requests from this machine (the CLI backends and sign-in act on the local user's accounts). */
@@ -140,6 +143,11 @@ export async function startServer(opts: ServerOptions) {
       chats.get(String(b.chat ?? ''))?.abort?.abort();
       return json(res, 200, { ok: true });
     }
+    if (parts[3] === 'chats') {
+      // Recent agent conversations on this project, newest last.
+      const list = [...chats.values()].filter((c) => c.project === id).sort((x, y) => x.lastUsed - y.lastUsed).slice(-5);
+      return json(res, 200, list.map((c) => ({ chat: c.id, by: c.by, backend: c.backend, running: !!c.abort, events: c.events.slice(-600) })));
+    }
     const backend: Backend = isCli(b.backend) ? b.backend : 'api';
     if (backend === 'api' && !agentModel) return json(res, 503, { error: 'The API backend is not configured: put ANTHROPIC_API_KEY in .env and restart the server, or choose Claude Code / Codex (your subscription) in the Agent tab.' });
     if (backend !== 'api' && !isLocal(req)) return json(res, 403, { error: 'Subscription backends (Claude Code / Codex) are for the server on your own machine; use the API backend here.' });
@@ -158,7 +166,7 @@ export async function startServer(opts: ServerOptions) {
           model: agentModel!,
           runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
         });
-        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now() };
+        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [] };
       } else {
         const st = await cliStatus(backend);
         if (!st.installed) return json(res, 503, { error: `${CLI_LABEL[backend]} is not installed here (run pnpm install).` });
@@ -166,7 +174,7 @@ export async function startServer(opts: ServerOptions) {
         const tokenFor = (r: string) => Object.entries(lp.meta.tokens).find(([, v]) => v === r)?.[0];
         const link = (t: string | undefined) => `http://127.0.0.1:${boundPort}/?p=${id}&t=${t ?? tok}`;
         const session = new CliAgentSession({ cli: backend, editLink: link(role === 'edit' ? tok : undefined), viewLink: link(tokenFor('view') ?? tok), workDir: join(opts.dataDir, 'agent-work', chatId), agentName: `${agentName} · ${backend === 'claude' ? 'Claude Code' : 'Codex'}` });
-        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now() };
+        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [] };
       }
       chats.set(chatId, chat);
     }
@@ -174,8 +182,19 @@ export async function startServer(opts: ServerOptions) {
     chat.session.mode = mode;
     chat.lastUsed = Date.now();
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend }) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+    const c0 = chat;
+    const mirror = (e: Record<string, unknown>) => {
+      c0.events.push(e);
+      if (c0.events.length > 1200) c0.events.splice(0, c0.events.length - 1200);
+      broadcast(lp, { t: 'agent', chat: chatId, by: c0.by, backend, event: e });
+    };
+    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend }) => {
+      res.write(`data: ${JSON.stringify(e)}\n\n`);
+      if (e.type !== 'chat') mirror(e as Record<string, unknown>);
+    };
     send({ type: 'chat', chat: chatId, mode, backend });
+    mirror({ type: 'user', text: prompt, by: c0.by });
+    mirror({ type: 'start' });
     const abort = new AbortController();
     chat.abort = abort;
     req.on('close', () => !res.writableEnded && abort.abort());
@@ -187,6 +206,7 @@ export async function startServer(opts: ServerOptions) {
     } finally {
       chat.abort = null;
       chat.lastUsed = Date.now();
+      mirror({ type: 'end' });
       res.end();
     }
   };

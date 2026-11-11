@@ -4,6 +4,10 @@
  * project is live, shared with collaborators).
  */
 import {
+  addPowerPortOp,
+  isGroundNet,
+  symbolFrame,
+  symToSheet,
   defaultStackup,
   diffImpedance,
   diffPairs,
@@ -482,7 +486,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'connect_pins',
-    description: 'Draw a schematic wire between two pins on the same sheet, e.g. from "R1.2" to "D1.2". The wire bends once (L-shape) and avoids passing over other pins when it can. For pins far apart or on different sheets prefer add_label with the same name on both.',
+    description: 'Draw a schematic wire between two pins on the same sheet, e.g. from "R1.2" to "D1.2". This is the normal way to connect parts: wires make the schematic easy to read and trace. The wire bends once (L-shape) and avoids passing over other pins when it can; place parts so their connected pins are close and aligned. Use add_label only for long-distance or cross-sheet signals, and add_power for GND/supply rails.',
     mutates: true,
     input: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] },
     run: (p, a) => {
@@ -514,8 +518,52 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'add_power',
+    description: 'Connect a pin to a power net with a proper power symbol and a short wire: ground symbol for GND-type nets (hangs below), supply symbol for rails like +3V3, +5V, +20V, VBAT (stands above). Power symbols with the same name are connected everywhere, so use this (not labels) for every power connection. flag=true adds a PWR_FLAG instead, to mark a net that is powered from a connector or other passive pin (clears "power input not driven" in ERC).',
+    mutates: true,
+    input: { type: 'object', properties: { pin: { type: 'string', description: 'e.g. "U1.8"' }, net: { type: 'string', description: 'e.g. "GND", "+3V3", "+5V"' }, flag: { type: 'boolean' } }, required: ['pin'] },
+    run: (p, a) => {
+      const P = pinOf(p, str(a.pin, 'pin'));
+      const flag = !!a.flag;
+      const net = flag ? 'PWR_FLAG' : str(a.net, 'net');
+      // Outward direction of the pin (away from the symbol body).
+      const sym = p.doc.nodes.get(P.pin.parent!)!;
+      const f = symbolFrame(p.engine, sym.uid);
+      const local = vec(p.engine.get(P.pin.uid, 'position')?.value)!;
+      const ang = ((Number(p.engine.get(P.pin.uid, 'rotation')?.value ?? 0) || 0) * Math.PI) / 180;
+      const len = Number(p.engine.get(P.pin.uid, 'pinLength')?.value ?? 2.54) || 2.54;
+      const body = symToSheet(f, { x: local.x + Math.cos(ang) * len, y: local.y - Math.sin(ang) * len });
+      const ox = P.at.x - body.x;
+      const oy = P.at.y - body.y;
+      const out = Math.abs(ox) > Math.abs(oy) ? { x: Math.sign(ox), y: 0 } : { x: 0, y: Math.sign(oy) || 1 };
+      // A flag points the same way as the rail it marks (down on ground nets, up on supplies).
+      const down = isGroundNet(flag ? (extractNetlist(p.doc, p.engine).byPin.get(String(a.pin)) ?? '') : net);
+      const g = 2.54;
+      const path: Vec2[] = [P.at];
+      let port: Vec2;
+      if (out.y !== 0) {
+        // Vertical pin: straight stub.
+        port = { x: P.at.x, y: P.at.y + out.y * g };
+      } else {
+        // Horizontal pin: step out, then down (ground) or up (supply).
+        const p1 = { x: P.at.x + out.x * g, y: P.at.y };
+        path.push(p1);
+        port = { x: p1.x, y: p1.y + (down ? g : -g) };
+      }
+      path.push(port);
+      const ops: Op[] = [];
+      for (let i = 0; i + 1 < path.length; i++) {
+        ops.push({ op: 'add', parent: P.sheet.uid, index: P.sheet.children.length + i, tree: { nodes: [{ uid: newUid('w'), type: 'wire', name: '', props: {}, rules: [{ name: 'start', value: path[i]! }, { name: 'end', value: path[i + 1]! }], parent: P.sheet.uid, children: [] }] } });
+      }
+      const { op, ref } = addPowerPortOp(p.doc, P.sheet.uid, net, port, { flag, down });
+      ops.push(op);
+      apply(p, flag ? 'Add PWR_FLAG' : `Add ${net} symbol`, ops);
+      return { pin: a.pin, symbol: ref, net: flag ? extractNetlist(p.doc, p.engine).byPin.get(String(a.pin)) : net };
+    },
+  },
+  {
     name: 'add_label',
-    description: 'Attach a net label to a pin (e.g. pin "U1.3", name "VCC"). Pins with the same local label on one sheet are connected; global=true connects across sheets (use for power nets like GND, 3V3).',
+    description: 'Attach a net label to a pin (e.g. pin "U1.3", name "SDA"). Pins with the same local label on one sheet are connected; global=true connects across sheets. Use labels only for signals that travel far or between sheets/blocks; wire nearby pins with connect_pins, and use add_power (not labels) for GND and supply rails.',
     mutates: true,
     input: { type: 'object', properties: { pin: { type: 'string' }, name: { type: 'string' }, global: { type: 'boolean' } }, required: ['pin', 'name'] },
     run: (p, a) => {

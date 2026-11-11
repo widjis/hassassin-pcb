@@ -5,6 +5,7 @@
  */
 import {
   genericPart,
+  isGroundNet,
   placePartOps,
   type PartDef,
   arcPoints,
@@ -616,7 +617,8 @@ export class SchematicView {
       const b = this.symbolBox(n);
       if (n.props.power) {
         const lbl = n.children.map((u) => doc.nodes.get(u)).find((x) => x?.type === 'label');
-        if (lbl) text(lbl.name, { x: (b.minX + b.maxX) / 2, y: b.minY - 0.4 }, 1.2, C.power, 'center', 'bottom');
+        // Ground names go under the symbol, supply names above it.
+        if (lbl) isGroundNet(lbl.name) ? text(lbl.name, { x: (b.minX + b.maxX) / 2, y: b.maxY + 0.4 }, 1.2, C.power, 'center', 'top') : text(lbl.name, { x: (b.minX + b.maxX) / 2, y: b.minY - 0.4 }, 1.2, C.power, 'center', 'bottom');
       } else {
         text(String(n.props.ref ?? n.name), { x: b.maxX + 0.8, y: b.minY + 0.8 }, 1.3, selected ? C.sel : C.ref);
         const v = String(n.props.Value ?? '');

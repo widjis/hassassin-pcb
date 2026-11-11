@@ -134,6 +134,22 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
   let backend: Backend = 'claude';
   let loadedFor = '';
   let tasksOpen = true;
+  /** Agent conversations started by other people on this project (mirrored by the server). */
+  interface Watched {
+    chat: string;
+    by: string;
+    backend: string;
+    items: Item[];
+    tasks: Task[];
+    running: boolean;
+    agentItem: Extract<Item, { kind: 'agent' }> | null;
+    stepsItem: Extract<Item, { kind: 'steps' }> | null;
+  }
+  const watched = new Map<string, Watched>();
+  let viewing: string | null = null; // a watched chat id, or null for my own conversation
+  const curItems = () => (viewing ? (watched.get(viewing)?.items ?? []) : items);
+  const curTasks = () => (viewing ? (watched.get(viewing)?.tasks ?? []) : tasks);
+  const curBusy = () => (viewing ? !!watched.get(viewing)?.running : busy);
   try {
     backend = (localStorage.getItem('hassassin:agent:backend') as Backend) ?? 'claude';
   } catch {
@@ -216,7 +232,23 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
   const drawLog = () => {
     clear(log);
     nodes.clear();
-    if (!items.length) {
+    const w = viewing ? watched.get(viewing) : null;
+    if (w) {
+      log.append(
+        h(
+          'div',
+          { class: 'watch-banner' },
+          h('span', { class: `live-dot ${w.running ? 'online' : 'offline'}` }),
+          h('span', {}, `${w.by}'s agent · ${w.backend === 'claude' ? 'Claude Code' : w.backend === 'codex' ? 'Codex' : 'Claude API'}${w.running ? ' · working' : ''}`),
+          h('button', { class: 'link', onclick: () => ((viewing = null), drawLog(), drawTasks()) }, 'My chat'),
+        ),
+      );
+    } else if (watched.size) {
+      const others = [...watched.values()];
+      log.append(h('div', { class: 'watch-list' }, ...others.map((o) => h('button', { class: 'link', onclick: () => ((viewing = o.chat), drawLog(), drawTasks()) }, `${o.running ? '● ' : ''}Watch ${o.by}'s agent`))));
+    }
+    const items = curItems();
+    if (!items.length && !w) {
       log.append(
         h(
           'div',
@@ -228,12 +260,13 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
     }
     log.append(typing);
     for (const it of items) updateItem(it);
-    typing.style.display = busy ? '' : 'none';
+    typing.style.display = curBusy() ? '' : 'none';
     log.scrollTop = log.scrollHeight;
   };
 
   const drawTasks = () => {
     clear(taskBox);
+    const tasks = curTasks();
     if (!tasks.length) return;
     const done = tasks.filter((t) => t.status === 'done').length;
     const head = h('button', { class: 'tasks-head', onclick: () => ((tasksOpen = !tasksOpen), drawTasks()) }, h('span', {}, tasksOpen ? '▾' : '▸'), h('span', {}, 'Tasks'), h('span', { class: 'dim' }, `${done}/${tasks.length}`), h('span', { class: 'tasks-bar' }, h('span', { style: `width:${(done / tasks.length) * 100}%` })));
@@ -372,6 +405,11 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
   const send = async () => {
     const prompt = input.value.trim();
     if (!prompt || busy || !collab.session || sendBtn.disabled) return;
+    if (viewing) {
+      viewing = null;
+      drawLog();
+      drawTasks();
+    }
     input.value = '';
     autoGrow();
     if (!items.length) clear(log), log.append(typing);
@@ -451,7 +489,97 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
       void send();
     }
   });
-  app.on('collab', () => void render());
+  /** Fold one mirrored event into a watched conversation. */
+  const applyWatched = (w: Watched, e: Record<string, unknown>) => {
+    const show = viewing === w.chat;
+    const push = (it: Item) => (w.items.push(it), show && updateItem(it));
+    const t = e.type;
+    if (t === 'user') {
+      w.agentItem = null;
+      w.stepsItem = null;
+      push({ kind: 'user', text: `${String(e.by ?? w.by)}: ${String(e.text ?? '')}` });
+    } else if (t === 'start') w.running = true;
+    else if (t === 'end' || t === 'done') w.running = false;
+    else if (t === 'text') {
+      w.stepsItem = null;
+      if (!w.agentItem) push((w.agentItem = { kind: 'agent', text: '' }));
+      w.agentItem.text += String(e.text ?? '');
+      if (show) updateItem(w.agentItem);
+    } else if (t === 'note') push({ kind: 'note', text: String(e.text ?? '') });
+    else if (t === 'tool') {
+      w.agentItem = null;
+      if (!w.stepsItem) push((w.stepsItem = { kind: 'steps', steps: [] }));
+      w.stepsItem.steps.push({ id: String(e.id), name: String(e.name), input: e.input });
+      if (show) updateItem(w.stepsItem);
+    } else if (t === 'tool_result') {
+      const owner = [...w.items].reverse().find((x): x is Extract<Item, { kind: 'steps' }> => x.kind === 'steps' && x.steps.some((st) => st.id === e.id));
+      const st = owner?.steps.find((x) => x.id === e.id);
+      if (st && owner) {
+        st.ok = !!e.ok;
+        st.summary = String(e.summary ?? '');
+        if (e.detail !== undefined) st.detail = String(e.detail);
+        if (show) updateItem(owner);
+      }
+    } else if (t === 'tasks') {
+      w.tasks = (e.tasks as Task[]) ?? [];
+      if (show) drawTasks();
+    } else if (t === 'error') push({ kind: 'error', text: String(e.message ?? '') });
+    if (show) typing.style.display = w.running ? '' : 'none';
+  };
+
+  const watch = (chatId: string, by: string, backendName: string) => {
+    let w = watched.get(chatId);
+    if (!w) {
+      w = { chat: chatId, by, backend: backendName, items: [], tasks: [], running: false, agentItem: null, stepsItem: null };
+      watched.set(chatId, w);
+    }
+    return w;
+  };
+
+  let unsubscribe: (() => void) | null = null;
+  const listen = () => {
+    unsubscribe?.();
+    unsubscribe = null;
+    const c = app.collab;
+    if (!c) return;
+    unsubscribe = c.on('agent', ({ chat: id, by, backend: b, event }) => {
+      if (id === chat && busy) return; // my own conversation arrives on my request stream
+      const fresh = !watched.has(id);
+      const w = watch(id, by, b);
+      applyWatched(w, event);
+      // Follow someone else's agent automatically when I am not in my own conversation.
+      if (fresh && !busy && !items.length) {
+        viewing = id;
+        drawLog();
+        drawTasks();
+      } else if (fresh && !viewing) drawLog();
+    });
+  };
+
+  /** Conversations already under way when the project was opened. */
+  const loadTranscripts = async () => {
+    if (!collab.session) return;
+    const list = await fetch(`/api/agent/${collab.session.id}/chats?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => []);
+    for (const c of list as { chat: string; by: string; backend: string; running: boolean; events: Record<string, unknown>[] }[]) {
+      if (c.chat === chat) continue;
+      watched.delete(c.chat);
+      const w = watch(c.chat, c.by, c.backend);
+      for (const e of c.events) applyWatched(w, e);
+      w.running = c.running;
+    }
+    const live = [...watched.values()].reverse().find((w) => w.running);
+    if (live && !items.length) viewing = live.chat;
+    drawLog();
+    drawTasks();
+  };
+
+  app.on('collab', () => {
+    listen();
+    void render().then(loadTranscripts);
+  });
   app.on('drc', drawHints);
-  void render();
+  listen();
+  void render().then(loadTranscripts);
 }

@@ -205,3 +205,70 @@ export function newProjectOps(doc: Doc): Op[] {
     { op: 'add', parent: doc.rootId, index: 1, tree: { nodes: [mk(schUid, 'schematic', 'Schematic', doc.rootId, [rootSheet]), mk(rootSheet, 'sheet', 'Root', schUid)] } },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// Power ports: GND, supply rails and PWR_FLAG as schematic symbols.
+
+/** Ground-type net names get the ground symbol; everything else gets the supply bar. */
+export const isGroundNet = (net: string) => /^(A|D|P|S|C)?GND|^VSS|^0V$|^EARTH/i.test(net.replace(/^[/]/, ''));
+
+/**
+ * Symbol graphics for a power port, symbol-local (Y down), connection point at (0,0).
+ * Ground hangs below the point; supplies stand above it; a PWR_FLAG is a small diamond.
+ */
+export function powerGraphics(kind: 'ground' | 'supply' | 'flag'): SymGraphicSpec[] {
+  const w = 0.254;
+  if (kind === 'ground')
+    return [
+      { t: 'poly', pts: [{ x: 0, y: 0 }, { x: 0, y: 1.27 }], fill: false, w },
+      { t: 'poly', pts: [{ x: -1.27, y: 1.27 }, { x: 1.27, y: 1.27 }], fill: false, w },
+      { t: 'poly', pts: [{ x: -0.762, y: 1.778 }, { x: 0.762, y: 1.778 }], fill: false, w },
+      { t: 'poly', pts: [{ x: -0.254, y: 2.286 }, { x: 0.254, y: 2.286 }], fill: false, w },
+    ];
+  if (kind === 'flag')
+    return [
+      { t: 'poly', pts: [{ x: 0, y: 0 }, { x: 0, y: -1.27 }], fill: false, w },
+      { t: 'poly', pts: [{ x: 0, y: -1.27 }, { x: -1.016, y: -2.032 }, { x: 0, y: -2.794 }, { x: 1.016, y: -2.032 }, { x: 0, y: -1.27 }], fill: false, w },
+    ];
+  return [
+    { t: 'poly', pts: [{ x: 0, y: 0 }, { x: 0, y: -1.27 }], fill: false, w },
+    { t: 'poly', pts: [{ x: -0.762, y: -1.27 }, { x: 0, y: -2.286 }, { x: 0.762, y: -1.27 }, { x: -0.762, y: -1.27 }], fill: true, w },
+  ];
+}
+
+/** Op that adds a power port symbol whose connection point is `at` (sheet coordinates). */
+export function addPowerPortOp(doc: Doc, sheetUid: string, net: string, at: Vec2, opts: { flag?: boolean; down?: boolean } = {}): { op: Op; uid: string; ref: string } {
+  const sheet = doc.nodes.get(sheetUid);
+  if (!sheet) throw new Error('No such sheet');
+  const kind = opts.flag ? 'flag' : isGroundNet(net) ? 'ground' : 'supply';
+  const uid = newUid('sym');
+  const ref = nextRef(doc, opts.flag ? '#FLG' : '#PWR');
+  const label: DocNode = {
+    uid: newUid('lbl'),
+    type: 'label',
+    name: opts.flag ? 'PWR_FLAG' : net,
+    props: { kind: opts.flag ? 'flag' : 'power' },
+    rules: [
+      { name: 'position', value: at },
+      { name: 'rotation', value: 0 },
+    ],
+    parent: uid,
+    children: [],
+  };
+  const sym: DocNode = {
+    uid,
+    type: 'symbol',
+    name: ref,
+    props: { ref, Value: opts.flag ? 'PWR_FLAG' : net, power: true },
+    rules: [
+      { name: 'position', value: at },
+      // A flag on a ground net hangs downward like the ground symbol.
+      { name: 'rotation', value: opts.flag && opts.down ? 180 : 0 },
+      { name: 'mirror', value: 'none' },
+    ],
+    parent: sheetUid,
+    children: [label.uid],
+    data: { graphics: powerGraphics(kind) },
+  };
+  return { op: { op: 'add', parent: sheetUid, index: sheet.children.length, tree: { nodes: [sym, label] } }, uid, ref };
+}

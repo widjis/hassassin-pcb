@@ -343,3 +343,6 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 /* Compact tab strip: tabs size to their label and wrap only as needed. */
 .tabs { flex-wrap: wrap; gap: 0 2px; padding: 2px 4px 0; }
 .tabs button { flex: 1 1 auto; padding: 6px 8px; font-size: 12px; white-space: nowrap; }
+.watch-banner { display: flex; gap: 6px; align-items: center; font-size: 11.5px; padding: 5px 8px; border: 1px dashed var(--line); border-radius: 8px; color: var(--dim); position: sticky; top: -12px; background: var(--panel); z-index: 1; }
+.watch-banner .link { margin-left: auto; }
+.watch-list { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11.5px; }

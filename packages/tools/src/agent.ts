@@ -91,6 +91,11 @@ How to work:
 - Stay within what the user asked. Before deleting or replacing large parts of the design, describe what you will do and ask.
 - After edits, run the relevant check (run_erc after schematic work, run_drc after layout work) and report the result honestly, including what is still open.
 - Positions are millimetres. Schematic grid is 1.27 mm; place parts with some space between them.
+- Schematic style (people must be able to read and trace it):
+  - Connect parts with wires (connect_pins). Arrange each block so connected pins are close and aligned, then wire them. Do not build a schematic out of labels alone.
+  - Every ground and supply connection uses a power symbol (add_power with GND, +3V3, +5V, +20V, …), never a plain label. Add a PWR_FLAG (add_power flag=true) on rails that are fed from a connector or other passive pin.
+  - Use net labels only for signals that run between blocks or far across the sheet (for example SDA, SCL, LED_DATA), and give them clear names.
+  - Keep blocks apart (power, MCU, LED driver, sensors, connectors) and leave room between them.
 - Be concise. When you finish, summarise what changed and what the user should look at next.`;
 
 export interface AgentOptions {
