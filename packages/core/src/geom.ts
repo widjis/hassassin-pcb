@@ -155,3 +155,33 @@ export function route45(a: Vec2, b: Vec2, diagonalFirst: boolean): Vec2[] {
   const mid = diagonalFirst ? { x: a.x + diag.x, y: a.y + diag.y } : { x: b.x - diag.x, y: b.y - diag.y };
   return [a, mid, b];
 }
+
+function segmentsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const o = (p: Vec2, q: Vec2, r: Vec2) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = o(c, d, a);
+  const d2 = o(c, d, b);
+  const d3 = o(a, b, c);
+  const d4 = o(a, b, d);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+/** Shortest distance between segments ab and cd (0 when they cross). */
+export function segSegDist(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
+  if (segmentsIntersect(a, b, c, d)) return 0;
+  return Math.min(distToSegment(a, c, d), distToSegment(b, c, d), distToSegment(c, a, b), distToSegment(d, a, b));
+}
+
+/** Closest points between segments ab and cd (midpoint of them, for markers). */
+export function segSegMid(a: Vec2, b: Vec2, c: Vec2, d: Vec2): Vec2 {
+  const proj = (p: Vec2, s: Vec2, t: Vec2): Vec2 => {
+    const dx = t.x - s.x;
+    const dy = t.y - s.y;
+    const l2 = dx * dx + dy * dy;
+    const u = l2 ? Math.max(0, Math.min(1, ((p.x - s.x) * dx + (p.y - s.y) * dy) / l2)) : 0;
+    return { x: s.x + u * dx, y: s.y + u * dy };
+  };
+  const cands: [Vec2, Vec2][] = [[a, proj(a, c, d)], [b, proj(b, c, d)], [proj(c, a, b), c], [proj(d, a, b), d]];
+  let best = cands[0]!;
+  for (const x of cands) if (dist(x[0], x[1]) < dist(best[0], best[1])) best = x;
+  return { x: (best[0].x + best[1].x) / 2, y: (best[0].y + best[1].y) / 2 };
+}

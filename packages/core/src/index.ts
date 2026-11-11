@@ -9,3 +9,7 @@ export * from './frames.ts';
 export * from './commands.ts';
 export * from './serialize.ts';
 export * from './connectivity.ts';
+export * from './copper.ts';
+export * from './drc.ts';
+export * from './pour.ts';
+export * from './clip.ts';

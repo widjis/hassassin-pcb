@@ -105,3 +105,20 @@ button:disabled { opacity: 0.4; cursor: default; }
 .topbar .actions button { padding: 4px 9px; }
 .canvas-wrap.dragging { outline: 2px dashed var(--accent); outline-offset: -8px; }
 .statusbar { position: absolute; left: 8px; bottom: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); background: rgba(13, 14, 18, 0.8); padding: 3px 8px; border-radius: 5px; pointer-events: none; }
+.badge { display: inline-block; min-width: 16px; padding: 0 5px; border-radius: 8px; font-size: 10.5px; line-height: 16px; margin-left: 3px; }
+.badge:empty { display: none; }
+.badge.bad { background: var(--danger); color: #1a0606; font-weight: 700; }
+.badge.ok { background: #1f3a2f; color: var(--ok); }
+.ok-text { color: var(--ok); }
+.review-head { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 8px; border-bottom: 1px solid var(--line); }
+.rv-group { display: flex; align-items: center; gap: 6px; padding: 5px 4px; cursor: pointer; border-radius: 5px; font-weight: 600; }
+.rv-group:hover { background: var(--panel-2); }
+.rv-group .count { margin-left: auto; color: var(--dim); font-weight: 400; }
+.rv-group .twisty { width: 12px; color: var(--dim); }
+.dot { width: 8px; height: 8px; border-radius: 50%; }
+.dot.error { background: var(--danger); }
+.dot.warning { background: #ffc83c; }
+.rv-item { padding: 5px 8px 5px 26px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+.rv-item:hover { background: var(--panel-2); }
+.rv-item.selected { background: rgba(255, 90, 90, 0.14); }
+.tabs button { font-size: 12.5px; }

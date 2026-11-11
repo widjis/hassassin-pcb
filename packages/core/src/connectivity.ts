@@ -9,6 +9,7 @@ import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { arcPoints, dist, distToSegment, pointInPolygon } from './geom.ts';
 import { padGeom, type PadGeom } from './frames.ts';
+import { inArea, type PolyWithHoles } from './copper.ts';
 
 export interface RatLine {
   net: string;
@@ -71,7 +72,7 @@ interface PadItem {
 interface FillItem {
   id: number;
   layer: string;
-  poly: Vec2[];
+  poly: PolyWithHoles;
 }
 
 export function computeRatsnest(doc: Doc, engine: StyleEngine, copper: string[]): Ratsnest {
@@ -133,10 +134,10 @@ export function computeRatsnest(doc: Doc, engine: StyleEngine, copper: string[])
         vias.push({ id, c: c0, r: Number(engine.get(n.uid, 'viaDiameter')?.value ?? 0.6) / 2, layers: new Set(span) });
         anchors.push({ id, p: c0 });
       } else if (n.type === 'fill') {
-        const polys = ((n.data?.fills ?? {}) as Record<string, Vec2[][]>);
+        const polys = (n.data?.fills ?? {}) as Record<string, PolyWithHoles[]>;
         for (const [layer, list] of Object.entries(polys)) {
           for (const poly of list) {
-            if (poly.length < 3) continue;
+            if (!poly[0] || poly[0].length < 3) continue;
             fills.push({ id: dsu.add(), layer, poly });
           }
         }
@@ -165,14 +166,14 @@ export function computeRatsnest(doc: Doc, engine: StyleEngine, copper: string[])
         if (!v.layers.has(a.layer)) continue;
         if (ends(a).some((e) => dist(e, v.c) <= v.r + 1e-3) || onTrace(v.c, a, 0)) dsu.union(a.id, v.id);
       }
-      for (const f of fills) if (f.layer === a.layer && ends(a).some((e) => pointInPolygon(e, f.poly))) dsu.union(a.id, f.id);
+      for (const f of fills) if (f.layer === a.layer && ends(a).some((e) => inArea(e, f.poly))) dsu.union(a.id, f.id);
     }
     for (const v of vias) {
       for (const p of pads) if ([...v.layers].some((l) => p.layers.has(l)) && pointInPolygon(v.c, p.g.outline)) dsu.union(v.id, p.id);
-      for (const f of fills) if (v.layers.has(f.layer) && pointInPolygon(v.c, f.poly)) dsu.union(v.id, f.id);
+      for (const f of fills) if (v.layers.has(f.layer) && inArea(v.c, f.poly)) dsu.union(v.id, f.id);
       for (const w of vias) if (w.id < v.id && dist(w.c, v.c) < Math.max(w.r, v.r)) dsu.union(v.id, w.id);
     }
-    for (const p of pads) for (const f of fills) if (p.layers.has(f.layer) && pointInPolygon(p.g.center, f.poly)) dsu.union(p.id, f.id);
+    for (const p of pads) for (const f of fills) if (p.layers.has(f.layer) && (inArea(p.g.center, f.poly) || p.g.outline.some((q) => inArea(q, f.poly)))) dsu.union(p.id, f.id);
     for (let i = 0; i < pads.length; i++) {
       for (let j = i + 1; j < pads.length; j++) {
         const a = pads[i]!;

@@ -4,7 +4,13 @@
  */
 import {
   computeRatsnest,
+  hasClipper,
   History,
+  planPours,
+  refillOps,
+  runDrc,
+  type DrcResult,
+  type Violation,
   newUid,
   parseDoc,
   querySelectorAll,
@@ -20,6 +26,7 @@ import {
   type Vec2,
 } from '@hassassin/core';
 import { importKicadPcb, type LayerInfo } from '@hassassin/kicad-import';
+import { buildFab, fabZip } from '@hassassin/fab';
 import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './render/colors.ts';
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
 import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
@@ -27,7 +34,7 @@ import { RouteTool } from './tools/route.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
 export type Mode = 'select' | 'route';
-type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status';
+type Event = 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc';
 
 const DEFAULT_HIDDEN = new Set(['paste', 'mask', 'adhesive', 'courtyard', 'fab', 'user']);
 const MOVABLE = new Set(['element', 'via', 'trace']);
@@ -48,6 +55,9 @@ export class App {
   copper: string[] = [];
   scene: SceneCache | null = null;
   ratsnest: Ratsnest = { lines: [], nets: [], unroutedNets: 0 };
+  drc: DrcResult | null = null;
+  focusedViolation: string | null = null;
+  private drcTimer = 0;
   visible = new Set<string>();
   selection = new Set<string>();
   queryMatches = new Set<string>();
@@ -134,6 +144,8 @@ export class App {
     this.scene = new SceneCache(doc, this.engine, this.copper);
     this.uploadLayers(true);
     this.updateRatsnest();
+    this.drc = null;
+    this.runDrcSoon(50);
     this.dirty = false;
     this.fit();
     this.emit('doc');
@@ -175,6 +187,7 @@ export class App {
     if (this.inspected.kind === 'node' && !this.doc.nodes.has(this.inspected.uid)) this.inspected = { kind: 'none' };
     this.uploadLayers(false);
     this.updateRatsnest();
+    this.runDrcSoon();
     if (this.queryText) this.runQuery(this.queryText);
     this.dirty = true;
     this.emit('change');
@@ -194,6 +207,59 @@ export class App {
   private updateRatsnest(): void {
     if (!this.doc || !this.engine) return;
     this.ratsnest = computeRatsnest(this.doc, this.engine, this.copper);
+    this.requestRender();
+  }
+
+  // ---------- checks, pours, fabrication ----------
+  runDrcSoon(delay = 400): void {
+    clearTimeout(this.drcTimer);
+    this.drcTimer = window.setTimeout(() => {
+      if (this.move) return this.runDrcSoon(delay);
+      this.runDrcNow();
+    }, delay);
+  }
+
+  runDrcNow(): void {
+    if (!this.doc || !this.engine) return;
+    this.drc = runDrc(this.doc, this.engine, this.copper, { ratsnest: this.ratsnest });
+    if (this.focusedViolation && !this.drc.violations.some((v) => v.id === this.focusedViolation)) this.focusedViolation = null;
+    this.emit('drc');
+    this.requestRender();
+  }
+
+  /** Create pours requested by net rules, then refill every pour — one undo step. */
+  refillPours(): void {
+    if (!this.doc || !this.engine) return;
+    if (!hasClipper()) return this.say('The geometry engine is still loading; try again in a moment.');
+    const key = newUid('pour');
+    const plan = planPours(this.doc, this.engine, this.copper);
+    if (plan.length) this.apply('Refill pours', plan, key);
+    const { ops, ms, pours } = refillOps(this.doc, this.engine, this.copper);
+    if (!pours) {
+      this.history?.seal();
+      return this.say('No pours yet. Select a net and set its “Pour layers” rule (e.g. F.Cu B.Cu), then refill.');
+    }
+    this.apply('Refill pours', ops, key);
+    this.history?.seal();
+    this.say(`Refilled ${pours} pour${pours > 1 ? 's' : ''} in ${Math.round(ms)} ms.`);
+  }
+
+  exportFab(): { blob: Blob; name: string; notes: string[] } | null {
+    if (!this.doc || !this.engine) return null;
+    const r = buildFab(this.doc, this.engine, this.layers.map((l) => l.name), this.fileName || 'board');
+    const bytes = fabZip(r);
+    return { blob: new Blob([bytes as BlobPart], { type: 'application/zip' }), name: `${this.fileName || 'board'}-fab.zip`, notes: r.notes };
+  }
+
+  focusViolation(v: Violation): void {
+    this.focusedViolation = v.id;
+    this.view.cx = v.at.x;
+    this.view.cy = v.at.y;
+    this.view.scale = Math.max(this.view.scale, 40);
+    this.select(v.uids.filter((u) => this.doc?.nodes.has(u)));
+    this.focusedViolation = v.id;
+    this.emit('view');
+    this.emit('drc');
     this.requestRender();
   }
 
@@ -557,6 +623,26 @@ export class App {
       ctx.lineTo(b.x, b.y);
     }
     ctx.stroke();
+
+    // DRC markers (unrouted connections are already shown by the ratsnest)
+    if (this.drc) {
+      for (const v of this.drc.violations) {
+        if (v.kind === 'unrouted' || v.kind === 'noOutline') continue;
+        const p = S(v.at);
+        if (p.x < -20 || p.y < -20 || p.x > w + 20 || p.y > h + 20) continue;
+        const focus = v.id === this.focusedViolation;
+        const r = focus ? 11 : 6;
+        ctx.lineWidth = focus ? 2.5 : 1.5;
+        ctx.strokeStyle = v.severity === 'error' ? 'rgba(255, 90, 90, 0.95)' : 'rgba(255, 200, 60, 0.95)';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.moveTo(p.x - r * 0.6, p.y - r * 0.6);
+        ctx.lineTo(p.x + r * 0.6, p.y + r * 0.6);
+        ctx.moveTo(p.x + r * 0.6, p.y - r * 0.6);
+        ctx.lineTo(p.x - r * 0.6, p.y + r * 0.6);
+        ctx.stroke();
+      }
+    }
 
     // Routing cursor
     this.route.drawOverlay(ctx, S);

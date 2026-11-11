@@ -1,7 +1,10 @@
+import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
+import { setClipper } from '@hassassin/core';
 import { App, type Mode } from './app.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
+import { mountReview } from './ui/review.ts';
 import { mountTree } from './ui/tree.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -13,6 +16,12 @@ mountLayers(app, $('layersPanel'));
 mountTree(app, $('treePanel'), $<HTMLInputElement>('treeFilter'));
 mountRules(app, $('rulesPanel'));
 mountInspector(app, $('inspector'));
+mountReview(app, $('reviewPanel'), $('reviewBadge'));
+
+// Polygon engine (WebAssembly) for pours; loads in the background.
+loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmWithAsmJsFallback)
+  .then((lib) => setClipper(lib as unknown as Parameters<typeof setClipper>[0]))
+  .catch((e) => console.error('Geometry engine failed to load', e));
 
 // ---- left tabs ----
 const tabs = $('leftTabs');
@@ -126,6 +135,17 @@ layerBtn.addEventListener('click', () => app.toggleActiveLayer());
 $('undoBtn').addEventListener('click', () => app.undo());
 $('redoBtn').addEventListener('click', () => app.redo());
 $('saveBtn').addEventListener('click', save);
+$('pourBtn').addEventListener('click', () => app.refillPours());
+$('fabBtn').addEventListener('click', () => {
+  const r = app.exportFab();
+  if (!r) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(r.blob);
+  a.download = r.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  app.say(`Exported ${r.name}${r.notes.length ? ' — ' + r.notes[0] : ''}`);
+});
 $('fitBtn').addEventListener('click', () => app.fit());
 $('flipBtn').addEventListener('click', () => app.flip());
 const syncToolbar = () => {
@@ -269,6 +289,10 @@ window.addEventListener('keydown', (e) => {
     case 'l':
     case 'L':
       app.toggleActiveLayer();
+      break;
+    case 'b':
+    case 'B':
+      app.refillPours();
       break;
     case 'r':
       app.rotateSelection(90);

@@ -15,7 +15,9 @@ export type Op =
   | { op: 'setName'; uid: string; name: string }
   | { op: 'add'; parent: string; index: number; tree: Subtree }
   | { op: 'remove'; uid: string }
-  | { op: 'setRulesets'; rulesets: Ruleset[] };
+  | { op: 'setRulesets'; rulesets: Ruleset[] }
+  /** Derived data that is not a rule (e.g. computed pour polygons). */
+  | { op: 'setData'; uid: string; key: string; value: unknown };
 
 export interface ApplyResult {
   inverse: Op[];
@@ -96,6 +98,19 @@ function applyOne(doc: Doc, op: Op, res: ApplyResult): void {
       for (const x of tree.nodes) doc.nodes.delete(x.uid);
       res.inverse.push({ op: 'add', parent: parent.uid, index, tree });
       for (const x of tree.nodes) res.touched.add(x.uid);
+      return;
+    }
+    case 'setData': {
+      const n = doc.nodes.get(op.uid);
+      if (!n) throw new Error(`setData: unknown node ${op.uid}`);
+      const prev = n.data && op.key in n.data ? n.data[op.key] : null;
+      if (op.value === null || op.value === undefined) {
+        if (n.data) delete n.data[op.key];
+      } else {
+        n.data = { ...(n.data ?? {}), [op.key]: clone(op.value) };
+      }
+      res.inverse.push({ op: 'setData', uid: op.uid, key: op.key, value: prev === null ? null : clone(prev) });
+      res.touched.add(op.uid);
       return;
     }
     case 'setRulesets': {

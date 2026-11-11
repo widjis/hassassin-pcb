@@ -24,7 +24,9 @@
         <button id="redoBtn" title="Redo (Shift+Cmd/Ctrl+Z)">↷</button>
         <button id="flipBtn" title="View from the other side (F)">Top</button>
         <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
+        <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
         <button id="saveBtn" title="Save as .hpcb (Cmd/Ctrl+S)">Save</button>
+        <button id="fabBtn" title="Download Gerbers, drill, BOM and placement as a ZIP">Export fab</button>
         <label class="btn primary">Open<input id="fileInput" type="file" accept=".kicad_pcb,.hpcb" hidden /></label>
       </div>
     </header>
@@ -34,6 +36,7 @@
           <button data-tab="layers" class="active">Layers</button>
           <button data-tab="objects">Objects</button>
           <button data-tab="rules">Rules</button>
+          <button data-tab="review">Review <span id="reviewBadge" class="badge"></span></button>
         </nav>
         <section class="tab-body" data-body="layers" id="layersPanel"></section>
         <section class="tab-body hidden" data-body="objects">
@@ -41,6 +44,7 @@
           <div id="treePanel" class="tree"></div>
         </section>
         <section class="tab-body hidden" data-body="rules" id="rulesPanel"></section>
+        <section class="tab-body hidden" data-body="review" id="reviewPanel"></section>
       </aside>
       <div class="canvas-wrap" id="canvasWrap">
         <canvas id="gl"></canvas>

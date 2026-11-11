@@ -60,7 +60,8 @@ describe('importKicadPcb', () => {
     expect(querySelectorAll(doc, 'net#GND > trace').length).toBe(1);
     expect(querySelectorAll(doc, 'net#GND > via').length).toBe(1);
     const fill = querySelectorAll(doc, 'net#GND > fill')[0]!;
-    expect((fill.data!.fills as Record<string, unknown[]>)['B.Cu']).toHaveLength(1);
+    expect((fill.data!.fills as Record<string, unknown[][]>)['B.Cu']).toHaveLength(1);
+    expect((fill.data!.fills as Record<string, unknown[][]>)['B.Cu']![0]).toHaveLength(1);
     // trace keeps its own width; ground default would be 0.5
     const t = querySelectorAll(doc, 'trace')[0]!;
     expect(e.get(t.uid, 'traceWidth')).toMatchObject({ value: 0.3, source: { kind: 'object' } });

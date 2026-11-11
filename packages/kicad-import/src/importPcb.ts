@@ -405,18 +405,29 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
     const net = netName(z);
     const zoneLayers = child(z, 'layers') ? layersOf(z) : [str(child(z, 'layer')?.[1]) ?? 'F.Cu'];
     const outline = pts(child(child(z, 'polygon') ?? [], 'pts'));
-    const fills: Record<string, Vec2[][]> = {};
+    // Each filled polygon is one ring (KiCad joins holes into the outline).
+    const fills: Record<string, Vec2[][][]> = {};
     for (const fpoly of children(z, 'filled_polygon')) {
       const layer = str(child(fpoly, 'layer')?.[1]) ?? zoneLayers[0] ?? 'F.Cu';
-      (fills[layer] ??= []).push(pts(child(fpoly, 'pts')));
+      (fills[layer] ??= []).push([pts(child(fpoly, 'pts'))]);
     }
     const isKeepout = !!child(z, 'keepout') || !net;
     const name = str(child(z, 'name')?.[1]) ?? '';
+    const rules: RuleDecl[] = [rule('layers', zoneLayers), rule('points', outline)];
+    const connect = child(z, 'connect_pads');
+    const zc = num(child(connect ?? [], 'clearance')?.[1]);
+    if (zc !== undefined) rules.push(rule('keepOut', { all: zc, byType: {} }));
+    const mode = connect ? str(connect[1]) : undefined;
+    if (mode === 'yes') rules.push(rule('thermalRelief', 'solid'));
+    else if (mode === 'no') rules.push(rule('thermalRelief', 'none'));
+    const zfill = child(z, 'fill');
+    const bridge = num(child(zfill ?? [], 'thermal_bridge_width')?.[1]);
+    if (bridge !== undefined) rules.push(rule('thermalSpokeWidth', bridge));
     addNode(doc, isKeepout ? zonesC.uid : netNode(net!).uid, {
       ...(uidOf(z) ? { uid: uidOf(z)! } : {}),
       type: isKeepout ? 'zone' : 'fill',
       name,
-      rules: [rule('layers', zoneLayers), rule('points', outline)],
+      rules,
       data: { fills },
     });
   }

@@ -147,12 +147,12 @@ export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string
       return;
     }
     case 'fill': {
-      const fills = (node.data?.fills ?? {}) as Record<string, Vec2[][]>;
+      const fills = (node.data?.fills ?? {}) as Record<string, Vec2[][][]>;
       let any = false;
       for (const [layer, polys] of Object.entries(fills)) {
         const out = sink(layer);
         if (!out) continue;
-        for (const poly of polys) fillPolygon(out, poly);
+        for (const poly of polys) if (poly[0]) fillPolygon(out, poly[0], poly.slice(1));
         any = true;
       }
       const outline = (e.get(uid, 'points')?.value as Vec2[]) ?? [];

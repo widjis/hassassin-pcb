@@ -17,8 +17,9 @@
     "baseUrl": ".",
     "paths": {
       "@hassassin/core": ["packages/core/src/index.ts"],
-      "@hassassin/kicad-import": ["packages/kicad-import/src/index.ts"]
+      "@hassassin/kicad-import": ["packages/kicad-import/src/index.ts"],
+      "@hassassin/fab": ["packages/fab/src/index.ts"]
     }
   },
-  "include": ["packages/*/src", "packages/*/test", "apps/web/src"]
+  "include": ["packages/*/src", "packages/*/test", "apps/web/src", "vitest.setup.ts"]
 }
