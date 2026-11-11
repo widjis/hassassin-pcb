@@ -4,6 +4,14 @@ A browser-based PCB designer with schematic capture, board layout, real-time col
 
 Part of the [Hassassin Mechatronics](https://github.com/widjis/hassassin-mechatronics) ecosystem.
 
+![The AI agent (Claude Code) finishing the layout of an RGB sleep lamp: task list, folded tool steps, and the routed board with GND pours](docs/media/agent-layout.png)
+
+*An RGB sleep lamp designed end to end by the built-in agent from a requirements-only prompt: 52 parts, ERC 0, DRC 0, everything routed inside a curved outline. The agent replies in the language of the prompt (Indonesian here).*
+
+| Schematic made by the agent | 3D view and the Board panel |
+|---|---|
+| ![Schematic: 20 V → 5 V buck, 3.3 V LDO and the ESP-12F module, with power symbols and wires](docs/media/schematic.png) | ![3D view of the routed board next to the stackup and impedance panel](docs/media/3d.png) |
+
 ## What it does
 
 - **Whole project flow in one place:** requirements → schematic → components → layout → review → fabrication, with a visible gate for each stage.
