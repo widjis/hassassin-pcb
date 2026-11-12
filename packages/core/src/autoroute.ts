@@ -1,8 +1,8 @@
 /**
  * Grid autorouter: routes the ratsnest connections one by one with A* over a grid per
  * copper layer (8 directions → 45° traces) with through vias, keeping each net's
- * clearance from other copper. Our own straightforward maze router: no rip-up and retry,
- * no push-and-shove. Connections it cannot complete are reported, never forced.
+ * clearance from other copper, with negotiated rip-up and retry (P8d) and no push-and-shove.
+ * Connections it cannot complete are reported, never forced.
  *
  * Clearance (P8b, docs/05-pcb-improvements.md): every grid cell keeps the distance to the
  * nearest copper of the two nearest different owners (a two-label distance field), with the
@@ -27,6 +27,8 @@ export interface AutorouteOptions {
   viaCost?: number;
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
+  /** Rounds of rip-up and retry (default 30; 1 = route once, no rip-up). */
+  rounds?: number;
   /** Stop after this many milliseconds (default 30 s); connections not tried are reported as `time limit`. */
   timeLimitMs?: number;
 }
@@ -292,29 +294,71 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   const order = rats.slice().sort((a, b) => Math.hypot(a.a.x - a.b.x, a.a.y - a.b.y) - Math.hypot(b.a.x - b.b.x, b.a.y - b.b.y));
   const viaCost = opts.viaCost ?? 12;
   const limit = opts.timeLimitMs ?? 30000;
+  const maxRounds = opts.rounds ?? 30;
   const ops: Op[] = [];
   const cost = new Float32Array(N * L);
   const from = new Int32Array(N * L);
   const stamp = new Int32Array(N * L);
   let run = 0;
-  // Per-connection memo of the cell tests (value = 2 * run + result; stale runs read as unknown).
+  // Per-call memo of the cell tests (value = 2 * call + result; stale calls read as unknown).
   const usableMemo = new Int32Array(N * L);
   const viaMemo = new Int32Array(N);
+  const dynStamp = new Int32Array(N * L);
+  const dynCount = new Uint8Array(N * L);
   let conn = 0;
-  /** Copper laid by this run (for the exact checks of pad entries): capsules per layer, with owner and clearance. */
-  const added: { li: number; a: Vec2; b: Vec2; r: number; id: number; cl: number }[] = [];
   const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]] as const;
+  // The step between two cell centres can pass closer to a corner of copper than either centre;
+  // this margin covers it for a half-width + clearance of `R` (worst case: a point obstacle).
+  const halfStep = g * Math.SQRT1_2;
+  const slackFor = (R: number) => R - Math.sqrt(Math.max(0, R * R - halfStep * halfStep));
+  const cellOf = (q: Vec2) => {
+    const i = toI(q.x);
+    const j = toJ(q.y);
+    return i < 0 || j < 0 || i >= W || j >= H ? -1 : j * W + i;
+  };
 
-  for (const r of order) {
-    if (performance.now() - t0 > limit) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'time limit' });
-      continue;
-    }
+  // ---- Routes laid by this run (P8d). They are kept apart from the fixed copper above so they can be
+  // ripped up: capsules in buckets of BK mm per layer; a capsule is filed in every bucket within `reach`
+  // of it, so the bucket of a point holds every capsule that can matter there.
+  interface Cap { li: number; a: Vec2; b: Vec2; r: number; id: number; cl: number; route: number }
+  interface Route { key: number; conn: number; net: string; id: number; caps: Cap[]; segs: { li: number; a: Vec2; b: Vec2; w: number }[]; vias: Vec2[]; length: number; deps: Set<number> }
+  const BK = Math.max(1, reach * 2);
+  const BW = Math.ceil((maxX - minX) / BK) + 2;
+  const buckets = layers.map(() => new Map<number, Cap[]>());
+  const bucketOf = (x: number, y: number) => Math.floor((y - minY) / BK + 1) * BW + Math.floor((x - minX) / BK + 1);
+  const routes = new Map<number, Route>();
+  let routeKey = 0;
+  const fileCap = (cp: Cap, add: boolean) => {
+    const m = cp.r + reach;
+    const b = buckets[cp.li]!;
+    for (let by = Math.floor((Math.min(cp.a.y, cp.b.y) - m - minY) / BK + 1); by <= Math.floor((Math.max(cp.a.y, cp.b.y) + m - minY) / BK + 1); by++)
+      for (let bx = Math.floor((Math.min(cp.a.x, cp.b.x) - m - minX) / BK + 1); bx <= Math.floor((Math.max(cp.a.x, cp.b.x) + m - minX) / BK + 1); bx++) {
+        const k = by * BW + bx;
+        if (add) (b.get(k) ?? b.set(k, []).get(k)!).push(cp);
+        else {
+          const list = b.get(k);
+          if (list) b.set(k, list.filter((x) => x !== cp));
+        }
+      }
+  };
+  const capsNear = (li: number, p: Vec2) => buckets[li]!.get(bucketOf(p.x, p.y)) ?? [];
+  /** Every run-route capsule that can matter anywhere along segment a–b (all buckets it crosses). */
+  const capsAlong = (li: number, a: Vec2, b: Vec2): Cap[] => {
+    const out = new Set<Cap>();
+    const bmap = buckets[li]!;
+    for (let by = Math.floor((Math.min(a.y, b.y) - minY) / BK + 1); by <= Math.floor((Math.max(a.y, b.y) - minY) / BK + 1); by++)
+      for (let bx = Math.floor((Math.min(a.x, b.x) - minX) / BK + 1); bx <= Math.floor((Math.max(a.x, b.x) - minX) / BK + 1); bx++) for (const cp of bmap.get(by * BW + bx) ?? []) out.add(cp);
+    return [...out];
+  };
+
+  /** Try one connection. `pres` = cost per run-route in the way (Infinity: only free room). */
+  const routeConn = (r: (typeof rats)[number], pres: number, hist: Float32Array): { ok: true; route: Route; victims: Set<number>; contested: number[] } | { ok: false; reason: string; joined?: boolean } => {
     const id = netId(r.net);
     const width = netRule(r.net, 'traceWidth', 0.25);
     const viaD = netRule(r.net, 'viaDiameter', 0.6);
     const cn = netClear(r.net);
     const viaR = Math.ceil((viaD / 2 + cn - width / 2) / g);
+    const soft = pres !== Infinity;
     // Pads of this net at the two ends that are narrower than the trace: inside a zone around them
     // (the pad grown by half the width plus the clearance) the trace necks down to the pad's width.
     const minTrace = netRule(r.net, 'traceWidthMin', 0.15);
@@ -328,20 +372,13 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         necks.push({ box: { minX: sh.box.minX - m, minY: sh.box.minY - m, maxX: sh.box.maxX + m, maxY: sh.box.maxY + m }, w: Math.floor(w * 1000) / 1000 });
       }
     }
-    if (necks.some((n) => n.w < minTrace)) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'pad is narrower than the minimum trace width' });
-      continue;
-    }
+    if (necks.some((n) => n.w < minTrace)) return { ok: false, reason: 'pad is narrower than the minimum trace width' };
     const neckAt = (x: number, y: number) => {
       let w = width;
       for (const n of necks) if (x >= n.box.minX && x <= n.box.maxX && y >= n.box.minY && y <= n.box.maxY) w = Math.min(w, n.w);
       return w;
     };
-    // The step between two cell centres can pass closer to a corner of copper than either centre;
-    // this margin covers it for a half-width + clearance of `R` (worst case: a point obstacle).
-    const halfStep = g * Math.SQRT1_2;
-    const slackFor = (R: number) => R - Math.sqrt(Math.max(0, R * R - halfStep * halfStep));
-    /** Room at cell `c` for copper of this net with half-width `half`: nearest foreign copper far enough. */
+    /** Room at cell `c` for copper of this net with half-width `half`: nearest fixed foreign copper far enough. */
     const clear = (li: number, c: number, half: number, slack: number) => {
       const f = field[li]!;
       let m = Math.min(f.zd[c]! - cn, f.ze[c]!);
@@ -349,48 +386,75 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       if (f.o2[c] !== id) m = Math.min(m, f.d2[c]! - cn, f.e2[c]!);
       return m >= half + slack - 1e-6;
     };
+    /** Run-routes of other nets too close to point p for copper of half-width `half`. */
+    const dynHits = (li: number, p: Vec2, half: number, slack: number, out?: Set<number>) => {
+      let n = 0;
+      for (const cp of capsNear(li, p)) {
+        if (cp.id === id) continue;
+        if (distToSegment(p, cp.a, cp.b) - cp.r < half + slack + Math.max(cn, cp.cl) - 1e-6) {
+          n++;
+          out?.add(cp.route);
+        }
+      }
+      return n;
+    };
     const halfFull = width / 2;
     const slackFull = slackFor(halfFull + cn);
-    conn++;
-    /** Every cell on the path must have room for the trace, necked down near narrow end pads. */
-    const usable = (li: number, c: number) => {
+    const call = ++conn;
+    const halfAt = (c: number) => {
+      if (!necks.length) return halfFull;
+      const i = c % W;
+      return neckAt(cx(i), cy((c - i) / W)) / 2;
+    };
+    const fixedOk = (li: number, c: number) => {
       const m = usableMemo[li * N + c]!;
-      if (m >> 1 === conn) return (m & 1) === 1;
-      const ok = usableRaw(li, c);
-      usableMemo[li * N + c] = (conn << 1) | (ok ? 1 : 0);
+      if (m >> 1 === call) return (m & 1) === 1;
+      const k = core[li]![c]!;
+      let ok = k === 0 || k === id;
+      if (ok) {
+        const h = halfAt(c);
+        ok = clear(li, c, h, h === halfFull ? slackFull : slackFor(h + cn));
+      }
+      usableMemo[li * N + c] = (call << 1) | (ok ? 1 : 0);
       return ok;
     };
-    const usableRaw = (li: number, c: number) => {
-      const k = core[li]![c]!;
-      if (k !== 0 && k !== id) return false;
-      if (!necks.length) return clear(li, c, halfFull, slackFull);
+    /** Run-routes of other nets in the way at cell c (memoised). */
+    const crowd = (li: number, c: number) => {
+      const s = li * N + c;
+      if (dynStamp[s] === call) return dynCount[s]!;
       const i = c % W;
-      const w = neckAt(cx(i), cy((c - i) / W));
-      return w === width ? clear(li, c, halfFull, slackFull) : clear(li, c, w / 2, slackFor(w / 2 + cn));
+      const h = halfAt(c);
+      const n = Math.min(255, dynHits(li, { x: cx(i), y: cy((c - i) / W) }, h, h === halfFull ? slackFull : slackFor(h + cn)));
+      dynStamp[s] = call;
+      dynCount[s] = n;
+      return n;
     };
+    /** Every cell on the path must have room for the trace (necked down near narrow end pads). */
+    const usable = (li: number, c: number) => fixedOk(li, c) && (soft || crowd(li, c) === 0);
     const viaOk = (c: number) => {
       const m = viaMemo[c]!;
-      if (m >> 1 === conn) return (m & 1) === 1;
-      const ok = viaOkRaw(c);
-      viaMemo[c] = (conn << 1) | (ok ? 1 : 0);
-      return ok;
-    };
-    const viaOkRaw = (c: number) => {
-      for (let li = 0; li < L; li++) {
-        const k = core[li]![c]!;
-        if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) return false;
-      }
-      // A via never sits on or touches a pad, the net's own included.
+      if (m >> 1 === call) return (m & 1) === 1;
+      let ok = true;
       const i = c % W;
       const j = (c - i) / W;
-      for (let dj = -viaR; dj <= viaR; dj++)
+      for (let li = 0; li < L && ok; li++) {
+        const k = core[li]![c]!;
+        if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) ok = false;
+        else if (!soft && dynHits(li, { x: cx(i), y: cy(j) }, viaD / 2, 0)) ok = false;
+      }
+      // A via never sits on or touches a pad, the net's own included.
+      for (let dj = -viaR; dj <= viaR && ok; dj++)
         for (let di = -viaR; di <= viaR; di++) {
           if (di * di + dj * dj > viaR * viaR) continue;
           const ii = i + di;
           const jj = j + dj;
-          if (ii < 0 || jj < 0 || ii >= W || jj >= H || padMask[jj * W + ii]) return false;
+          if (ii < 0 || jj < 0 || ii >= W || jj >= H || padMask[jj * W + ii]) {
+            ok = false;
+            break;
+          }
         }
-      return true;
+      viaMemo[c] = (call << 1) | (ok ? 1 : 0);
+      return ok;
     };
     /** Width of a segment: necked down if any part of it lies in a neck zone. */
     const segWidth = (a: Vec2, b: Vec2) => {
@@ -403,16 +467,15 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     // group at each end (found by flooding the net's copper on the grid) that has room for the trace, and
     // short exact entries from the end point itself (a straight 0° / 45° / 90° run out of the pad, then at
     // most one 45° or straight jog onto the grid), so pads off the grid are entered cleanly.
-    const cellOf = (q: Vec2) => {
-      const i = toI(q.x);
-      const j = toJ(q.y);
-      return i < 0 || j < 0 || i >= W || j >= H ? -1 : j * W + i;
-    };
     /**
      * Layers where this net's copper covers point q, by the same tests the connectivity check uses
      * (inside a pad or pour, on a trace or via): a trace may only start or end where this holds.
      */
     const ownShapes = shapes.filter((sh) => sh.net === r.net);
+    const ownRouteAt = (li: number, q: Vec2) => {
+      for (const cp of capsNear(li, q)) if (cp.id === id && distToSegment(q, cp.a, cp.b) <= cp.r) return cp.route;
+      return -1;
+    };
     const ownLayersAt = (q: Vec2) => {
       const out = new Set<number>();
       for (const sh of ownShapes) {
@@ -421,16 +484,17 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         const on = sh.kind === 'pad' || sh.kind === 'fill' ? sh.areas.some((ar) => inArea(q, ar)) : sh.edges.some(([a, b, rr]) => distToSegment(q, a, b) <= rr);
         if (on) out.add(li);
       }
-      for (const e of added) if (e.id === id && distToSegment(q, e.a, e.b) <= e.r + 1e-6) out.add(e.li);
+      for (let li = 0; li < L; li++) if (!out.has(li) && ownRouteAt(li, q) >= 0) out.add(li);
       return [...out];
     };
     /** Half-extent of the net's pad under q (how far an entry may run before it is out of the pad row). */
     const padExtentAt = (q: Vec2) => {
       let ext = 0;
-      for (const sh of shapes) if (sh.kind === 'pad' && sh.net === r.net && sh.areas[0] && inArea(q, sh.areas[0])) ext = Math.max(ext, (sh.box.maxX - sh.box.minX) / 2, (sh.box.maxY - sh.box.minY) / 2);
+      for (const sh of ownShapes) if (sh.kind === 'pad' && sh.areas[0] && inArea(q, sh.areas[0])) ext = Math.max(ext, (sh.box.maxX - sh.box.minX) / 2, (sh.box.maxY - sh.box.minY) / 2);
       return ext;
     };
-    /** Exact check of a short piece of trace against foreign copper on layer li. */
+    let nearShapes = shapes;
+    /** Exact check of a short piece of trace against foreign copper on layer li (fixed copper; run-routes too unless soft). */
     const pieceClear = (li: number, a: Vec2, b: Vec2) => {
       const half = segWidth(a, b) / 2;
       const ca = cellOf(a);
@@ -443,10 +507,9 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         for (const [e0, e1, er] of sh.edges) if (segSegDist(a, b, e0, e1) - er < need) return false;
         if (sh.kind === 'pad' && sh.areas[0] && (inArea(a, sh.areas[0]) || inArea(b, sh.areas[0]))) return false;
       }
-      for (const e of added) if (e.li === li && e.id !== id && segSegDist(a, b, e.a, e.b) - e.r < half + Math.max(cn, e.cl) - 1e-6) return false;
+      if (!soft) for (const cp of capsAlong(li, a, b)) if (cp.id !== id && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl) - 1e-6) return false;
       return true;
     };
-    let nearShapes = shapes;
     type End = Map<number, { cost: number; pts: Vec2[] }>;
     /** Entry states at end point q: grid state → cost (in cells) and the exact points from q up to (not including) the cell. */
     const entries = (q: Vec2, out: End) => {
@@ -502,37 +565,39 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       }
       nearShapes = shapes;
     };
+    /** Is cell c on layer li this net's copper (fixed copper on the grid, or a run-route of the net)? */
+    const ownCell = (li: number, c: number) => {
+      if (core[li]![c] === id) return true;
+      const i = c % W;
+      return ownRouteAt(li, { x: cx(i), y: cy((c - i) / W) }) >= 0;
+    };
     /** The net's copper group around q, flooded on the grid (4-neighbour, layers joined where copper is on both). */
     const group = (q: Vec2): Set<number> => {
       const seen = new Set<number>();
       const stack: number[] = [];
       const c0 = cellOf(q);
       if (c0 < 0) return seen;
-      for (let li = 0; li < L; li++) if (core[li]![c0] === id) (seen.add(li * N + c0), stack.push(li * N + c0));
+      for (let li = 0; li < L; li++) if (ownCell(li, c0)) (seen.add(li * N + c0), stack.push(li * N + c0));
       while (stack.length && seen.size < 60000) {
         const st = stack.pop()!;
         const li = Math.floor(st / N);
         const c = st - li * N;
         const i = c % W;
         const j = (c - i) / W;
-        const next = (ns: number) => {
-          if (!seen.has(ns)) (seen.add(ns), stack.push(ns));
+        const next = (ns: number, lj: number, nc: number) => {
+          if (!seen.has(ns) && ownCell(lj, nc)) (seen.add(ns), stack.push(ns));
         };
-        if (i > 0 && core[li]![c - 1] === id) next(st - 1);
-        if (i < W - 1 && core[li]![c + 1] === id) next(st + 1);
-        if (j > 0 && core[li]![c - W] === id) next(st - W);
-        if (j < H - 1 && core[li]![c + W] === id) next(st + W);
-        for (let lj = 0; lj < L; lj++) if (lj !== li && core[lj]![c] === id) next(lj * N + c);
+        if (i > 0) next(st - 1, li, c - 1);
+        if (i < W - 1) next(st + 1, li, c + 1);
+        if (j > 0) next(st - W, li, c - W);
+        if (j < H - 1) next(st + W, li, c + W);
+        for (let lj = 0; lj < L; lj++) if (lj !== li) next(lj * N + c, lj, c);
       }
       return seen;
     };
     const groupA = group(r.a);
     const cB = cellOf(r.b);
-    if (cB >= 0 && [...Array(L).keys()].some((li) => groupA.has(li * N + cB))) {
-      // Already joined by copper laid earlier in this run.
-      report.routed.push({ net: r.net, from: r.a, to: r.b, length: 0, vias: 0 });
-      continue;
-    }
+    if (cB >= 0 && [...Array(L).keys()].some((li) => groupA.has(li * N + cB))) return { ok: false, reason: '', joined: true };
     const groupB = group(r.b);
     const seeds: End = new Map();
     const goals: End = new Map();
@@ -548,10 +613,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     for (const st of groupB) if (onOwn(st)) goals.set(st, { cost: 0, pts: [] });
     entries(r.a, seeds);
     entries(r.b, goals);
-    if (!seeds.size || !goals.size) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'no room to leave the pad with the current clearances' });
-      continue;
-    }
+    if (!seeds.size || !goals.size) return { ok: false, reason: 'no room to leave the pad with the current clearances' };
     run++;
     const heap = new Heap();
     // Heuristic: octile distance to the box around the goal cells (never more than the true distance).
@@ -569,11 +631,13 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const dy = j < gj0 ? gj0 - j : j > gj1 ? j - gj1 : 0;
       return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
     };
+    /** Extra cost of entering a cell: run-routes in the way (soft only) and the cell's history. */
+    const extra = (li: number, c: number) => (soft ? pres * crowd(li, c) : 0) + hist[li * N + c]!;
     for (const [st, e] of seeds) {
       stamp[st] = run;
-      cost[st] = e.cost;
+      cost[st] = e.cost + extra(Math.floor(st / N), st % N);
       from[st] = -1;
-      heap.push(e.cost + hcost(st % N), st);
+      heap.push(cost[st]! + hcost(st % N), st);
     }
     let found = -1;
     let expanded = 0;
@@ -599,7 +663,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         if (di && dj && (!usable(li, j * W + ii) || !usable(li, jj * W + i))) continue;
         const ns = li * N + nc;
         const turn = from[s]! >= 0 && from[s]! !== s - (dj * W + di) ? 0.1 : 0;
-        const nCost = base + w + turn;
+        const nCost = base + w + turn + extra(li, nc);
         if (stamp[ns] === run && cost[ns]! <= nCost) continue;
         stamp[ns] = run;
         cost[ns] = nCost;
@@ -610,7 +674,8 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         for (let lj = 0; lj < L; lj++) {
           if (lj === li) continue;
           const ns = lj * N + c;
-          const nCost = base + viaCost;
+          let nCost = base + viaCost + hist[ns]!;
+          if (soft) for (let lk = 0; lk < L; lk++) nCost += pres * dynHits(lk, { x: cx(i), y: cy(j) }, viaD / 2, 0);
           if (stamp[ns] === run && cost[ns]! <= nCost) continue;
           stamp[ns] = run;
           cost[ns] = nCost;
@@ -619,39 +684,30 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         }
       }
     }
-    if (found < 0) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'no free path with the current clearances' });
-      continue;
-    }
+    if (found < 0) return { ok: false, reason: 'no free path with the current clearances' };
     // Walk back.
     const cells: { li: number; c: number }[] = [];
     let first = found;
     for (let s = found; s >= 0; s = from[s]!) (cells.push({ li: Math.floor(s / N), c: s % N }), (first = s));
     cells.reverse();
     const pts = (k: number) => ({ x: cx(cells[k]!.c % W), y: cy(Math.floor(cells[k]!.c / W)) });
-    const segs: { layer: number; pts: Vec2[] }[] = [];
+    const raw: { layer: number; pts: Vec2[] }[] = [];
     const vias: Vec2[] = [];
     let cur: { layer: number; pts: Vec2[] } = { layer: cells[0]!.li, pts: [...seeds.get(first)!.pts] };
     for (let k = 0; k < cells.length; k++) {
       const p = pts(k);
       if (cells[k]!.li !== cur.layer) {
         cur.pts.push(p);
-        segs.push(cur);
+        raw.push(cur);
         vias.push(p);
         cur = { layer: cells[k]!.li, pts: [p] };
       } else cur.pts.push(p);
     }
     cur.pts.push(...goals.get(found)!.pts.slice().reverse());
-    segs.push(cur);
-
-    const node = netNode.get(r.net);
-    if (!node) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'net object missing (run update_pcb)' });
-      continue;
-    }
-    let length = 0;
-    let idx = node.children.length + ops.length;
-    segs.forEach((sgm) => {
+    raw.push(cur);
+    const key = ++routeKey;
+    const route: Route = { key, conn: -1, net: r.net, id, caps: [], segs: [], vias, length: 0, deps: new Set() };
+    for (const sgm of raw) {
       // Merge collinear runs.
       const simple: Vec2[] = [];
       for (const p of sgm.pts) {
@@ -670,23 +726,130 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       for (let k = 0; k + 1 < simple.length; k++) {
         const a = simple[k]!;
         const b = simple[k + 1]!;
-        length += Math.hypot(b.x - a.x, b.y - a.y);
         const w = segWidth(a, b);
-        const rules: RuleDecl[] = [{ name: 'start', value: a }, { name: 'end', value: b }, { name: 'layer', value: layers[sgm.layer]! }];
-        if (w < width) rules.push({ name: 'traceWidth', value: w });
-        ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
-        paint(sgm.layer, id, { edges: [[a, b, w / 2]], areas: [] }, cn);
-        added.push({ li: sgm.layer, a, b, r: w / 2, id, cl: cn });
-      }
-    });
-    for (const v of vias) {
-      ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('via'), type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
-      for (let li = 0; li < L; li++) {
-        paint(li, id, { edges: [[v, v, viaD / 2]], areas: [] }, cn);
-        added.push({ li, a: v, b: v, r: viaD / 2, id, cl: cn });
+        route.length += Math.hypot(b.x - a.x, b.y - a.y);
+        route.segs.push({ li: sgm.layer, a, b, w });
+        route.caps.push({ li: sgm.layer, a, b, r: w / 2, id, cl: cn, route: key });
       }
     }
-    report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(length * 1000) / 1000, vias: vias.length });
+    for (const v of vias) for (let li = 0; li < L; li++) route.caps.push({ li, a: v, b: v, r: viaD / 2, id, cl: cn, route: key });
+    // Run-routes of this net that the new route starts or ends on: it depends on them.
+    const ends = [route.segs[0]?.a, route.segs[route.segs.length - 1]?.b];
+    for (const [k, q] of ends.entries()) {
+      if (!q) continue;
+      const li = route.segs[k === 0 ? 0 : route.segs.length - 1]!.li;
+      for (const cp of capsNear(li, q)) if (cp.id === id && distToSegment(q, cp.a, cp.b) <= cp.r) route.deps.add(cp.route);
+    }
+    // Exact conflicts with run-routes of other nets: the routes to rip up for this one.
+    const victims = new Set<number>();
+    const contested: number[] = [];
+    if (soft) {
+      for (const cp of route.caps)
+        for (const other of capsAlong(cp.li, cp.a, cp.b))
+          if (other.id !== id && segSegDist(cp.a, cp.b, other.a, other.b) - other.r - cp.r < Math.max(cn, other.cl) - 1e-6) victims.add(other.route);
+      for (const cl of cells) if (crowd(cl.li, cl.c) > 0) contested.push(cl.li * N + cl.c);
+    }
+    return { ok: true, route, victims, contested };
+  };
+
+  // ---- Negotiated rip-up and retry (P8d; after McMurchie and Ebeling, "PathFinder", 1995). Each round
+  // routes the waiting connections in free room; one that cannot get through is routed again with the
+  // run-routes of other nets allowed in its way at a price (`pres`, rising each round) plus a history cost
+  // on contested cells (rising each time a cell is fought over). The routes in its way are ripped up and
+  // wait for the next round; routes that end on a ripped route are ripped too. Every committed route is
+  // legal, so whatever the round limit or the time limit leaves is a legal board.
+  const hist = new Float32Array(N * L);
+  const routeOf = new Map<number, number>(); // connection → route key
+  const joined = new Set<number>();
+  const failReason = new Map<number, string>();
+  const commit = (ci: number, route: Route) => {
+    route.conn = ci;
+    routes.set(route.key, route);
+    routeOf.set(ci, route.key);
+    for (const cp of route.caps) fileCap(cp, true);
+  };
+  /** Rip up a route and everything resting on it; returns the connections that must be routed again. */
+  const rip = (key: number, out: Set<number>) => {
+    const route = routes.get(key);
+    if (!route) return;
+    routes.delete(key);
+    routeOf.delete(route.conn);
+    for (const cp of route.caps) fileCap(cp, false);
+    out.add(route.conn);
+    for (const other of [...routes.values()]) if (other.deps.has(key)) rip(other.key, out);
+    // Connections counted as joined through this net's copper may be open now.
+    for (const ci of [...joined]) if (order[ci]!.net === route.net) (joined.delete(ci), out.add(ci));
+  };
+  let pending = order.map((_, i) => i);
+  let pres = 2;
+  let timedOut = false;
+  for (let round = 0; round < maxRounds && pending.length && !timedOut; round++) {
+    const again = new Set<number>();
+    for (const ci of pending) {
+      if (routeOf.has(ci) || joined.has(ci)) continue;
+      if (performance.now() - t0 > limit) {
+        timedOut = true;
+        again.add(ci);
+        continue;
+      }
+      const r = order[ci]!;
+      failReason.delete(ci);
+      const hard = routeConn(r, Infinity, hist);
+      if (hard.ok) {
+        commit(ci, hard.route);
+        continue;
+      }
+      if (hard.joined) {
+        joined.add(ci);
+        continue;
+      }
+      if (hard.reason !== 'no free path with the current clearances' && hard.reason !== 'no room to leave the pad with the current clearances') {
+        failReason.set(ci, hard.reason);
+        continue;
+      }
+      const res = round + 1 < maxRounds ? routeConn(r, pres, hist) : hard;
+      if (!res.ok) {
+        // Blocked by fixed copper, not by other routes of this run: no rip-up can help.
+        failReason.set(ci, res.ok === false && !res.joined ? res.reason : hard.reason);
+        continue;
+      }
+      for (const s of res.contested) hist[s] = hist[s]! + 1;
+      for (const v of res.victims) rip(v, again);
+      commit(ci, res.route);
+    }
+    pending = [...again].sort((a, b) => a - b);
+    pres *= 1.6;
+  }
+  for (const ci of pending) if (!routeOf.has(ci) && !joined.has(ci)) failReason.set(ci, timedOut ? 'time limit' : 'congestion: could not be fitted in after rip-up and retry');
+
+  // ---- Emit, in the order the connections were planned.
+  const nextIndex = new Map<string, number>();
+  for (const [ci, r] of order.entries()) {
+    if (joined.has(ci)) {
+      report.routed.push({ net: r.net, from: r.a, to: r.b, length: 0, vias: 0 });
+      continue;
+    }
+    const key = routeOf.get(ci);
+    const route = key === undefined ? undefined : routes.get(key);
+    if (!route) {
+      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: failReason.get(ci) ?? 'no free path with the current clearances' });
+      continue;
+    }
+    const node = netNode.get(r.net);
+    if (!node) {
+      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'net object missing (run update_pcb)' });
+      continue;
+    }
+    let idx = nextIndex.get(node.uid) ?? node.children.length;
+    const width = netRule(r.net, 'traceWidth', 0.25);
+    for (const s of route.segs) {
+      const rules: RuleDecl[] = [{ name: 'start', value: s.a }, { name: 'end', value: s.b }, { name: 'layer', value: layers[s.li]! }];
+      if (s.w < width) rules.push({ name: 'traceWidth', value: s.w });
+      ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+    }
+    for (const v of route.vias) ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('via'), type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
+    nextIndex.set(node.uid, idx);
+    report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(route.length * 1000) / 1000, vias: route.vias.length });
   }
   report.ms = Math.round(performance.now() - t0);
   return { ops, report };

@@ -226,4 +226,20 @@ export async function fixtureTee(): Promise<Project> {
   return p;
 }
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee } as const;
+/**
+ * One copper layer. Net A (13.2 mm, edge to edge) is routed first and runs straight across; net B
+ * (15.6 mm) must cross A's straight line to reach a pad by the bottom edge. Without rip-up B fails; with it, A gives way and
+ * goes round above B's upper pad (P8d). Route with `layers: ['F.Cu']` (see FIXTURE_ARGS).
+ */
+export async function fixtureChannel(): Promise<Project> {
+  const p = newProject('fixture-channel');
+  for (let i = 0; i < 4; i++) await runTool(p, 'add_part', { kind: 'connector', pins: 1, x: i * 15, y: 0 });
+  await wire(p, 'A', 'J1.1', 'J2.1');
+  await wire(p, 'B', 'J3.1', 'J4.1');
+  return finish(p, { x: 100, y: 100, width: 16, height: 20 }, [['J1', 101.4, 110], ['J2', 114.6, 110], ['J3', 108, 103], ['J4', 108, 118.6]]);
+}
+
+/** Extra `autoroute` arguments per fixture. */
+export const FIXTURE_ARGS: Record<string, Record<string, unknown>> = { channel: { layers: ['F.Cu'] } };
+
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel } as const;

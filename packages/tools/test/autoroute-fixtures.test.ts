@@ -6,13 +6,13 @@
  * that test starts passing, Vitest reports it, and it is moved to the first block in the same commit.
  */
 import { describe, expect, it } from 'vitest';
-import { planAutoroute } from '@hassassin/core';
-import { fixtureTee, measureAutoroute, ROUTE_FIXTURES, type RouteFigures } from '@hassassin/tools';
+import { planAutoroute, runDrc } from '@hassassin/core';
+import { FIXTURE_ARGS, fixtureChannel, fixtureReversedBus, fixtureTee, measureAutoroute, ROUTE_FIXTURES, runTool, type RouteFigures } from '@hassassin/tools';
 
 const cache = new Map<string, Promise<RouteFigures>>();
 const figures = (name: keyof typeof ROUTE_FIXTURES) => {
   let f = cache.get(name);
-  if (!f) cache.set(name, (f = ROUTE_FIXTURES[name]().then((p) => measureAutoroute(p))));
+  if (!f) cache.set(name, (f = ROUTE_FIXTURES[name]().then((p) => measureAutoroute(p, FIXTURE_ARGS[name] ?? {}))));
   return f;
 };
 
@@ -56,6 +56,30 @@ describe('autoroute fixtures: invariants', { timeout: 60_000 }, () => {
     expect(t).toHaveLength(1);
     expect(t[0]!.length).toBeLessThan(10);
     expect(report.failed).toEqual([]);
+  });
+  // P8d: on one layer, net A (routed first, straight across) blocks net B. Without rip-up B fails;
+  // with it, B's route rips A up and A goes round above B's upper pad.
+  it('channel: rip-up and retry routes a connection the first pass leaves (P8d)', async () => {
+    const once = await measureAutoroute(await fixtureChannel(), { layers: ['F.Cu'], rounds: 1 });
+    expect([once.routed, once.connections]).toEqual([1, 2]);
+    const f = await figures('channel');
+    expect([f.routed, f.connections, f.unroutedAfter]).toEqual([2, 2, 0]);
+    expect(f.drcByKind).toEqual({});
+  });
+  it('rip-up never moves copper that was on the board before the run (P8d)', async () => {
+    const p = await fixtureTee();
+    const before = [...p.doc.nodes.values()].filter((n) => n.type === 'trace').map((n) => JSON.stringify([p.engine.get(n.uid, 'start')?.value, p.engine.get(n.uid, 'end')?.value]));
+    await runTool(p, 'autoroute', {});
+    const after = [...p.doc.nodes.values()].filter((n) => n.type === 'trace' && !n.props.autorouted).map((n) => JSON.stringify([p.engine.get(n.uid, 'start')?.value, p.engine.get(n.uid, 'end')?.value]));
+    expect(after).toEqual(before);
+  });
+  it('a run stopped by the time limit leaves a legal board and reports what it did not route (P8d)', async () => {
+    const p = await fixtureReversedBus();
+    const { ops, report } = planAutoroute(p.doc, p.engine, p.copper, { timeLimitMs: 1 });
+    expect(report.routed.length + report.failed.length).toBe(8);
+    expect(report.failed.every((f) => f.reason === 'time limit')).toBe(true);
+    p.history.apply('Autoroute', ops);
+    expect(runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted')).toEqual([]);
   });
 });
 

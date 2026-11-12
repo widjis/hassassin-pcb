@@ -16,7 +16,7 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { applyOps, parseDoc, stringifyDoc, type Op } from '@hassassin/core';
-import { measureAutoroute, openProject, ripUpUnpoured, ROUTE_FIXTURES, type Project, type RouteFigures } from '@hassassin/tools';
+import { FIXTURE_ARGS, measureAutoroute, openProject, ripUpUnpoured, ROUTE_FIXTURES, type Project, type RouteFigures } from '@hassassin/tools';
 import { loadGeometry } from '../src/io.ts';
 
 async function readBoard(path: string): Promise<{ name: string; project: Project; replayed: number }> {
@@ -58,7 +58,7 @@ const json = args.includes('--json');
 await loadGeometry();
 if (args.includes('--fixtures')) {
   for (const [name, make] of Object.entries(ROUTE_FIXTURES)) {
-    const f = await measureAutoroute(await make());
+    const f = await measureAutoroute(await make(), FIXTURE_ARGS[name] ?? {});
     console.log(json ? JSON.stringify({ board: name, ...f }) : line(name, f));
   }
 }

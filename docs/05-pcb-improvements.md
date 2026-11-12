@@ -194,7 +194,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     under concurrent edits" (`apps/server/test/sync.test.ts`, a fixed 10 s window) fails now and then when
     the whole suite runs, more often with the added routing tests; it passes on its own. Outside the PM2
     files, so left for the owner.
-- [ ] **P8d. Rip-up and retry by negotiated congestion.**
+- [x] **P8d. Rip-up and retry by negotiated congestion.**
   - Method: negotiated congestion routing as published by McMurchie and Ebeling (PathFinder, 1995),
     written from the paper. All nets are routed with cells allowed to be shared; shared cells get a present
     cost that rises each round and a history cost that accumulates; nets are ripped up and re-routed until
@@ -203,6 +203,16 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     until the result is legal; they are reported as unrouted with the reason `congestion`.
   - Locked traces and vias are fixed obstacles and are never ripped up.
   - The time limit stops between rounds and keeps the best legal result found so far.
+  - *Done:* routes laid by the run are kept apart from the fixed copper (capsules in spatial buckets),
+    so they can be ripped up. A connection that finds no free room is routed again with the routes of
+    other nets allowed in its way at a price that rises each round, plus a history cost on cells fought
+    over; the routes it crosses (checked exactly, segment against segment) are ripped up and wait for
+    the next round, and routes that end on a ripped route go with it. Every committed route is legal,
+    so a run stopped by the round or time limit leaves a legal board; what is left is reported as
+    `congestion` or `time limit`. Copper on the board before the run is never moved. The `autoroute`
+    tool takes `layers` and `rounds`. New fixture `channel` (one layer, net A blocks net B): 1 / 2
+    without rip-up, 2 / 2 with it, 0 DRC errors. `reversed-bus` 1.9 s → 2.3 s. The benchmark boards are
+    still to be measured.
 - [ ] **P8e. Clean traces and soft corners (human-like routing).**
   - *Owner's finding (2026-11-12):* routed traces still bend sharply. Every change of direction must be
     soft: no 90° corners and no acute corners. Today the search may turn by 45°, 90° or 135° at one cell

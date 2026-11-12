@@ -1451,11 +1451,11 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'autoroute',
-    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, net clearances kept). `nets` limits it to some nets. Connections it cannot finish are listed; it never forces a route. Run refill_pours and run_drc afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
+    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, each net\'s width and clearance kept, rip-up and retry when connections block each other). `nets` limits it to some nets, `layers` to some copper layers, `rounds` sets the rip-up rounds (1 = no rip-up). Connections it cannot finish are listed with the reason; it never forces a route and never moves copper that was on the board before. Run refill_pours and run_drc afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
     mutates: true,
-    input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number' } } },
+    input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, layers: { type: 'array', items: { type: 'string' }, description: 'Copper layers to route on (default: all)' }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number' }, rounds: { type: 'number', description: 'Rip-up and retry rounds (default 30; 1 = route once)' } } },
     run: (p, a) => {
-      const { ops, report } = planAutoroute(p.doc, p.engine, p.copper, { ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}) });
+      const { ops, report } = planAutoroute(p.doc, p.engine, p.copper, { ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(Array.isArray(a.layers) ? { layers: a.layers.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}), ...(a.rounds !== undefined ? { rounds: Math.max(1, Math.round(num(a.rounds, 'rounds'))) } : {}) });
       apply(p, 'Autoroute', ops);
       return { routed: report.routed.length, failed: report.failed, grid: report.grid, ms: report.ms, totalLength: +report.routed.reduce((s, r) => s + r.length, 0).toFixed(2), vias: report.routed.reduce((s, r) => s + r.vias, 0) };
     },
