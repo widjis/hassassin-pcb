@@ -109,6 +109,7 @@ function usage(): string {
     '  import <board.kicad_pcb> [sch…] -o <out.hpcb>   convert a KiCad project (sibling .kicad_sch files are picked up)',
     '  mcp                                     run as an MCP server (stdio)',
     '  kicad-libraries [status|download] [--version x.y.z]   official KiCad symbol / footprint libraries for machines without KiCad (downloaded from gitlab.com/kicad into a local cache)',
+    '  kicad-libraries install <kicad-symbols-x.y.z.tar.gz> <kicad-footprints-x.y.z.tar.gz>   the same from archives downloaded in a browser',
     '  agent <project> "<request>" [--mode ask] [-o out.hpcb]   let the AI agent work on the project (needs Anthropic credentials)',
     '  <tool> <project> [positional…] [--arg value] [--json \'{…}\'] [-o out.hpcb] [--fail-on-error]',
     '',
@@ -265,7 +266,12 @@ async function kicadLibrariesCommand(action: string, flags: Record<string, strin
     const got = await dl.downloadedKicadLibraries();
     return print({ available: !!dirs, ...(dirs ? dirs : {}), ...(got ? { downloaded: { version: got.version, date: got.date } } : {}), cache: dl.kicadCacheRoot(), license: dl.KICAD_LIBRARY_LICENSE });
   }
-  if (action !== 'download') fail('Usage: hassassin kicad-libraries [status|download] [--version x.y.z]');
+  if (action === 'install') {
+    const files = process.argv.slice(2).filter((a) => /\.tar\.gz$/.test(a));
+    const r = await dl.installKicadArchives(files);
+    return print({ version: r.version, symbols: r.symbols, footprints: r.footprints, license: r.license });
+  }
+  if (action !== 'download') fail('Usage: hassassin kicad-libraries [status|download|install <archives>] [--version x.y.z]');
   const version = typeof flags.version === 'string' ? flags.version : undefined;
   process.stderr.write(`Downloading the official KiCad libraries from ${dl.KICAD_REPOS.symbols} and ${dl.KICAD_REPOS.footprints}\nLicense: ${dl.KICAD_LIBRARY_LICENSE.name} (${dl.KICAD_LIBRARY_LICENSE.url})\n`);
   let last = 0;

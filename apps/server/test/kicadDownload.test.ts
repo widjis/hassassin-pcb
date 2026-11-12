@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import { afterAll, describe, expect, it } from 'vitest';
-import { downloadedKicadLibraries, latestKicadVersion, untarGz } from '../../../packages/tools/src/kicadDownload.ts';
+import { downloadKicadLibraries, downloadedKicadLibraries, installKicadArchives, latestKicadVersion, untarGz } from '../../../packages/tools/src/kicadDownload.ts';
+import { writeFileSync } from 'node:fs';
 import { startServer } from '../src/server.ts';
 
 /** A minimal ustar archive (with a pax long name when a path is over 100 characters). */
@@ -84,6 +85,21 @@ describe('S21: KiCad libraries on demand', () => {
   it('picks the newest stable release', async () => {
     expect(await latestKicadVersion(fakeFetch)).toBe('9.9.9');
     expect(await latestKicadVersion(async () => new Response('x', { status: 500 }))).toBe('9.0.6');
+  });
+
+  it('a refused download says how to fetch the archives by hand; install takes those files', async () => {
+    const r2 = mkdtempSync(join(tmpdir(), 'hkicad-refused-'));
+    const refuse = async () => new Response('{"message":"406 Not Acceptable"}', { status: 406 });
+    await expect(downloadKicadLibraries({ version: '9.9.9', root: r2, fetchImpl: refuse })).rejects.toThrow(/refused.*406.*kicad-libraries install/);
+    expect(await downloadedKicadLibraries(r2)).toBeNull();
+    const dir = mkdtempSync(join(tmpdir(), 'hkicad-files-'));
+    writeFileSync(join(dir, 'kicad-symbols-9.9.9.tar.gz'), ARCHIVES['kicad-symbols']!);
+    writeFileSync(join(dir, 'kicad-footprints-9.9.9.tar.gz'), ARCHIVES['kicad-footprints']!);
+    const got = await installKicadArchives([join(dir, 'kicad-footprints-9.9.9.tar.gz'), join(dir, 'kicad-symbols-9.9.9.tar.gz')], { root: r2 });
+    expect(got.version).toBe('9.9.9');
+    expect(existsSync(join(got.symbols, 'Test_Lib.kicad_sym'))).toBe(true);
+    expect(existsSync(join(got.footprints, 'Pkg_Test.pretty/TEST-2.kicad_mod'))).toBe(true);
+    await expect(installKicadArchives([join(dir, 'kicad-symbols-9.9.9.tar.gz')], { root: r2 })).rejects.toThrow(/kicad-footprints/);
   });
 
   const root = mkdtempSync(join(tmpdir(), 'hkicad-cache-'));

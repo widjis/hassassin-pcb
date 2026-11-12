@@ -303,7 +303,12 @@ only when all of its criteria pass.
     request; parts and footprints searchable with source and license afterwards). Browser check: a server
     without KiCad shows the offer and the confirmation (declined: nothing fetched); with KiCad installed,
     the part detail shows "From: KiCad library Regulator_Linear · License: CC BY-SA 4.0 …".
-    Not yet done: a real download from gitlab.com (waits for the owner's go-ahead).
+    Real download (owner's go-ahead, 2026-11-12): gitlab.com answered `406 Not Acceptable` to Node's
+    built-in fetch for both the archive link and the archive API, while the same link works in a browser
+    and with curl. We do not work around a site's bot protection, so a refused download now explains how
+    to fetch the two archives in a browser, and `hassassin kicad-libraries install <archives>` installs
+    them (tested with local archives). Open: how the automatic download should identify itself to
+    gitlab.com is the owner's decision.
   - Without KiCad installed, the app can download the official symbol and footprint libraries from
     KiCad's public repository into a local cache, after the user agrees.
   - They are never stored in this repository. The UI shows where each part came from and its license

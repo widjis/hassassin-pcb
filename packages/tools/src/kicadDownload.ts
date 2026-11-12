@@ -11,10 +11,10 @@
  */
 import { createGunzip } from 'node:zlib';
 import { Readable } from 'node:stream';
-import { existsSync, readFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export const KICAD_REPOS = {
   symbols: 'https://gitlab.com/kicad/libraries/kicad-symbols',
@@ -150,41 +150,37 @@ export interface DownloadProgress {
   error?: string;
 }
 
-/**
- * Download and unpack both libraries into the cache, then make them current. Only call this after
- * the user agreed (it fetches tens of megabytes from gitlab.com).
- */
-export async function downloadKicadLibraries(opts: { version?: string; root?: string; fetchImpl?: Fetch; signal?: AbortSignal; onProgress?: (p: DownloadProgress) => void } = {}): Promise<DownloadedLibraries> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
-  const root = opts.root ?? kicadCacheRoot();
-  const progress = (p: DownloadProgress) => opts.onProgress?.(p);
-  progress({ stage: 'version', bytes: 0, files: 0 });
-  const version = opts.version ?? (await latestKicadVersion(fetchImpl));
+const KEEP = {
+  symbols: (p: string) => /^[^/]+\.kicad_sym$/.test(p) || p === 'LICENSE.md',
+  footprints: (p: string) => /^[^/]+\.pretty\/[^/]+\.kicad_mod$/.test(p) || p === 'LICENSE.md',
+} as const;
+
+/** Unpack both archives (symbols, then footprints) into the cache and make them current. */
+async function installArchives(
+  version: string,
+  archives: { what: 'symbols' | 'footprints'; label: string; open: () => Promise<Readable> }[],
+  root: string,
+  progress: (p: DownloadProgress) => void,
+): Promise<DownloadedLibraries> {
   const tmp = join(root, `.partial-${version}-${process.pid}`);
   await rm(tmp, { recursive: true, force: true });
   let bytes = 0;
   let files = 0;
   try {
-    for (const [what, repo, keep] of [
-      ['symbols', KICAD_REPOS.symbols, (p: string) => /^[^/]+\.kicad_sym$/.test(p) || p === 'LICENSE.md'],
-      ['footprints', KICAD_REPOS.footprints, (p: string) => /^[^/]+\.pretty\/[^/]+\.kicad_mod$/.test(p) || p === 'LICENSE.md'],
-    ] as const) {
-      const url = archiveUrl(repo, version);
-      const r = await fetchImpl(url, opts.signal ? { signal: opts.signal } : undefined);
-      if (!r.ok || !r.body) throw new Error(`Download of ${url} failed (${r.status})`);
+    for (const a of archives) {
       const base = bytes;
-      const n = await untarGz(Readable.fromWeb(r.body as never), join(tmp, what), keep, (b) => {
+      const n = await untarGz(await a.open(), join(tmp, a.what), KEEP[a.what], (b) => {
         bytes = base + b;
-        progress({ stage: what, bytes, files, version });
+        progress({ stage: a.what, bytes, files, version });
       });
       files += n;
-      if (!n) throw new Error(`No ${what} found in ${url}`);
-      progress({ stage: what, bytes, files, version });
+      if (!n) throw new Error(`No ${a.what} found in ${a.label}`);
+      progress({ stage: a.what, bytes, files, version });
     }
     const dir = join(root, version);
     await rm(dir, { recursive: true, force: true });
     await rename(tmp, dir);
-    const info = { version, date: new Date().toISOString(), sources: [archiveUrl(KICAD_REPOS.symbols, version), archiveUrl(KICAD_REPOS.footprints, version)], license: KICAD_LIBRARY_LICENSE.name };
+    const info = { version, date: new Date().toISOString(), sources: archives.map((a) => a.label), license: KICAD_LIBRARY_LICENSE.name };
     await writeFile(join(root, 'current.json'), JSON.stringify(info, null, 2));
     progress({ stage: 'done', bytes, files, version });
     return { ...info, symbols: join(dir, 'symbols'), footprints: join(dir, 'footprints') };
@@ -193,4 +189,61 @@ export async function downloadKicadLibraries(opts: { version?: string; root?: st
     progress({ stage: 'error', bytes, files, version, error: (e as Error).message });
     throw e;
   }
+}
+
+/** What to do when the automatic download is refused: fetch the archives by hand. */
+export function manualInstallHint(version: string): string {
+  return `Download ${archiveUrl(KICAD_REPOS.symbols, version)} and ${archiveUrl(KICAD_REPOS.footprints, version)} in a web browser, then run: hassassin kicad-libraries install <kicad-symbols-${version}.tar.gz> <kicad-footprints-${version}.tar.gz>`;
+}
+
+/**
+ * Download and unpack both libraries into the cache, then make them current. Only call this after
+ * the user agreed (it fetches tens of megabytes from gitlab.com).
+ */
+export async function downloadKicadLibraries(opts: { version?: string; root?: string; fetchImpl?: Fetch; signal?: AbortSignal; onProgress?: (p: DownloadProgress) => void } = {}): Promise<DownloadedLibraries> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const progress = (p: DownloadProgress) => opts.onProgress?.(p);
+  progress({ stage: 'version', bytes: 0, files: 0 });
+  const version = opts.version ?? (await latestKicadVersion(fetchImpl));
+  const open = (repo: string) => async () => {
+    const url = archiveUrl(repo, version);
+    const r = await fetchImpl(url, opts.signal ? { signal: opts.signal } : undefined);
+    if (!r.ok || !r.body) throw new Error(`gitlab.com refused the download of ${url} (${r.status}). ${manualInstallHint(version)}`);
+    return Readable.fromWeb(r.body as never);
+  };
+  return installArchives(
+    version,
+    [
+      { what: 'symbols', label: archiveUrl(KICAD_REPOS.symbols, version), open: open(KICAD_REPOS.symbols) },
+      { what: 'footprints', label: archiveUrl(KICAD_REPOS.footprints, version), open: open(KICAD_REPOS.footprints) },
+    ],
+    opts.root ?? kicadCacheRoot(),
+    progress,
+  );
+}
+
+/**
+ * Install the libraries from archives the user downloaded (kicad-symbols-<v>.tar.gz and
+ * kicad-footprints-<v>.tar.gz, in any order), e.g. when the automatic download is refused or the
+ * machine is offline.
+ */
+export async function installKicadArchives(paths: string[], opts: { root?: string; onProgress?: (p: DownloadProgress) => void } = {}): Promise<DownloadedLibraries> {
+  const find = (what: 'symbols' | 'footprints') => {
+    const p = paths.find((x) => basename(x).startsWith(`kicad-${what}-`) && x.endsWith('.tar.gz'));
+    if (!p) throw new Error(`Give the kicad-${what}-<version>.tar.gz archive (from ${KICAD_REPOS[what]})`);
+    return p;
+  };
+  const sym = find('symbols');
+  const fp = find('footprints');
+  const version = basename(sym).slice('kicad-symbols-'.length, -'.tar.gz'.length);
+  if (basename(fp) !== `kicad-footprints-${version}.tar.gz`) throw new Error('The symbol and footprint archives are of different versions');
+  return installArchives(
+    version,
+    [
+      { what: 'symbols', label: sym, open: async () => createReadStream(sym) },
+      { what: 'footprints', label: fp, open: async () => createReadStream(fp) },
+    ],
+    opts.root ?? kicadCacheRoot(),
+    (p) => opts.onProgress?.(p),
+  );
 }
