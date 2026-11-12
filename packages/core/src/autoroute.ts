@@ -92,7 +92,8 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   const t0 = performance.now();
   const layers = (opts.layers ?? copper).filter((l) => copper.includes(l));
   const report: AutorouteReport = { routed: [], failed: [], grid: 0, ms: 0 };
-  const outline = boardOutline(doc, engine).loops[0];
+  const board = boardOutline(doc, engine);
+  const outline = board.loops[0];
   const rats = computeRatsnest(doc, engine, copper).lines.filter((l) => !opts.nets || opts.nets.includes(l.net));
   if (!outline || !rats.length || !layers.length) {
     report.ms = performance.now() - t0;
@@ -180,13 +181,27 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       (f.o2[c] = owner), (f.d2[c] = d), (f.e2[c] = e);
     } else fold(d, e);
   };
-  const edgeMargin = 0.3;
+  // Distance from each cell centre to the board edge (outline and cutouts), up to EDGE_CAP mm: copper
+  // must keep its half-width plus the board-edge clearance from it. Cells outside the board, or in a
+  // cutout, belong to nobody (-1).
+  const EDGE_CAP = 3;
+  const edgeDist = new Float32Array(N).fill(EDGE_CAP);
+  const cutouts = board.loops.slice(1);
   for (let j = 0; j < H; j++) {
+    const y = cy(j);
+    const rowSegs = board.segments.filter(([a, b]) => Math.min(a.y, b.y) <= y + EDGE_CAP && Math.max(a.y, b.y) >= y - EDGE_CAP);
     for (let i = 0; i < W; i++) {
-      const p = { x: cx(i), y: cy(j) };
-      let ok = pointInPolygon(p, outline);
-      if (ok) for (let k = 0; k < outline.length; k++) if (distToSegment(p, outline[k]!, outline[(k + 1) % outline.length]!) < edgeMargin) ok = false;
-      if (!ok) for (const o of core) o[j * W + i] = -1;
+      const p = { x: cx(i), y };
+      const c = j * W + i;
+      if (!pointInPolygon(p, outline) || cutouts.some((h) => pointInPolygon(p, h))) {
+        for (const o of core) o[c] = -1;
+        edgeDist[c] = 0;
+        continue;
+      }
+      let d = EDGE_CAP;
+      for (const [a, b] of rowSegs) if (Math.min(a.x, b.x) <= p.x + d && Math.max(a.x, b.x) >= p.x - d) d = Math.min(d, distToSegment(p, a, b));
+      edgeDist[c] = d;
+      if (d < 0.02) for (const o of core) o[c] = -1;
     }
   }
 
@@ -391,8 +406,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       for (const n of necks) if (x >= n.box.minX && x <= n.box.maxX && y >= n.box.minY && y <= n.box.maxY) w = Math.min(w, n.w);
       return w;
     };
-    /** Room at cell `c` for copper of this net with half-width `half`: nearest fixed foreign copper far enough. */
+    const edgeCl = netRule(r.net, 'boardEdgeClearance', 0.3);
+    /** Room at cell `c` for copper of this net with half-width `half`: nearest fixed foreign copper and the board edge far enough. */
     const clear = (li: number, c: number, half: number, slack: number) => {
+      if (edgeDist[c]! < half + slack + edgeCl - 1e-6) return false;
       const f = field[li]!;
       let m = Math.min(f.zd[c]! - cn, f.ze[c]!);
       if (f.o1[c] !== id) m = Math.min(m, f.d1[c]! - cn, f.e1[c]!);
@@ -513,6 +530,14 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const ca = cellOf(a);
       const cb = cellOf(b);
       if (ca < 0 || cb < 0 || core[li]![ca] === -1 || core[li]![cb] === -1) return false;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (Math.min(edgeDist[ca]!, edgeDist[cb]!) < half + edgeCl + len + g) {
+        const needE = half + edgeCl - 1e-6;
+        for (const [e0, e1] of board.segments) {
+          if (Math.min(e0.x, e1.x) - needE > Math.max(a.x, b.x) || Math.max(e0.x, e1.x) + needE < Math.min(a.x, b.x) || Math.min(e0.y, e1.y) - needE > Math.max(a.y, b.y) || Math.max(e0.y, e1.y) + needE < Math.min(a.y, b.y)) continue;
+          if (segSegDist(a, b, e0, e1) < needE) return false;
+        }
+      }
       for (const sh of nearShapes) {
         if (sh.layer !== layers[li] || sh.net === r.net || sh.kind === 'fill') continue;
         const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace')) - 1e-6;

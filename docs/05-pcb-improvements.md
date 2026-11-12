@@ -160,6 +160,26 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
 
     On qfn-escape, routing only the signal nets gives 2 / 6, and all nets at 0.2 mm give 4 / 8: the shared
     clearance zone is the main blocker (P8b), the rest is pin escape (P8c, P8f).
+
+    *First real-board run (2026-11-12, after P8e):* the owner's RGB Sleep Lamp, revision 6 (KiCad 10.0.7,
+    2 layers, 60 parts, 38 nets, 46 vias, 5 pours, DRC clean in KiCad), run on a copy with
+    `bench/autoroute.ts --kicad-rules`, which applies the `.kicad_pro` net classes (Default 0.3 / 0.3 mm,
+    via 1.2 / 0.8 mm; VIN_BUCK and the buck switching node in their own class) and the 0.35 mm
+    copper-to-edge clearance, since the importer does not bring them over yet. It imports with 0 ratsnest
+    and 0 DRC errors. Traces and vias of every net without a pour are ripped up (380 items), the 4 poured
+    power nets stay.
+    | Router | Routed | Vias | Length | Time |
+    |---|---|---|---|---|
+    | Hand routing (same nets) | 59 / 59 | 38 | 901 mm | — |
+    | v0.0.3 | 33 / 59 | 6 | 244 mm | 30 s (time limit) |
+    | P8e + edge fix | 59 / 59 | 51 | 1037 mm | 10.6 s |
+
+    The run found a board-edge bug, fixed with it: the router kept the trace *centre* 0.3 mm from the edge
+    instead of the copper edge plus `boardEdgeClearance`; it now keeps a per-cell distance to the outline
+    and cutouts. After routing, DRC shows 4 shorts between F.Cu pours, which appear on refill without any
+    routing (pour priority, P6), none from the router; 1 corner of 90° is left. Still poor, for P8f: long
+    detours along the board edge on B.Cu, 13 more vias and 15 % more length than the hand routing.
+    `bench/compare.ts` draws the hand and the routed copper side by side (`--save` writes both boards).
 - [x] **P8b. Per-net clearance (clearance field).**
   - The obstacle grid stores, per layer and cell, the distance to the nearest copper and the nearest copper
     of a *different* net than that one (a two-label distance transform, computed once and updated when a
