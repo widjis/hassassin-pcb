@@ -4,6 +4,9 @@
  * project is live, shared with collaborators).
  */
 import {
+  schematicPdf,
+  exportSheets,
+  schematicSvgs,
   moveSymbolsOps,
   toggleMirror,
   type Mirror,
@@ -90,7 +93,7 @@ import {
   groupBoxAround,
   sheetBlocks,
 } from '@hassassin/core';
-import { buildFab, fabZip } from '@hassassin/fab';
+import { buildFab, fabZip, zip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
 import type { Project } from './project.ts';
 import { Library } from './library.ts';
@@ -1301,6 +1304,55 @@ export const TOOLS: ToolDef[] = [
       const zip = fabZip(r);
       await ctx.writeFile(str(a.out, 'out'), zip);
       return { written: a.out, bytes: zip.length, files: r.files.map((f) => ({ name: f.name, bytes: f.data.length })), notes: r.notes };
+    },
+  },
+  {
+    name: 'export_schematic',
+    description: 'Export the schematic as vector PDF (one page per sheet) or SVG. out: path ending in .pdf, .svg or .zip (SVG files of several sheets). sheet: one sheet (name or path; default all). theme: light (default, for printing), dark (as on screen) or mono (black and white). paper: auto (default: the sheet frame, or the drawing size) or A4…A0 to scale each sheet to that paper.',
+    mutates: false,
+    input: {
+      type: 'object',
+      properties: {
+        out: { type: 'string', description: 'Path of the .pdf, .svg or .zip to write' },
+        sheet: { type: 'string' },
+        theme: { type: 'string', enum: ['light', 'dark', 'mono'] },
+        paper: { type: 'string', description: 'auto, A4, A3, A2, A1 or A0' },
+      },
+      required: ['out'],
+    },
+    run: async (p, a, ctx) => {
+      if (!ctx.writeFile) throw new ToolError('This host cannot write files.');
+      const out = str(a.out, 'out');
+      const theme = a.theme === undefined ? 'light' : String(a.theme);
+      if (!['light', 'dark', 'mono'].includes(theme)) throw new ToolError('theme must be light, dark or mono');
+      const opts = { theme: theme as 'light' | 'dark' | 'mono', ...(typeof a.paper === 'string' ? { paper: a.paper } : {}), ...(typeof a.sheet === 'string' ? { sheet: a.sheet } : {}) };
+      const title = p.doc.meta.projectName ? String(p.doc.meta.projectName) : p.name.replace(/\.hpcb$/i, '');
+      try {
+        if (/\.pdf$/i.test(out)) {
+          const pdf = schematicPdf(p.doc, p.engine, { ...opts, title });
+          await ctx.writeFile(out, pdf);
+          return { written: out, bytes: pdf.length, pages: exportSheets(p.doc, opts.sheet).length };
+        }
+        const svgs = schematicSvgs(p.doc, p.engine, opts);
+        const base = (title || 'schematic').replace(/[^\w.-]+/g, '_');
+        const fileOf = (_: unknown, i: number) => (svgs.length > 1 ? `${base}-${i + 1}.svg` : `${base}.svg`);
+        if (/\.zip$/i.test(out)) {
+          const data = zip(svgs.map((s, i) => ({ name: fileOf(s, i), data: s.svg })));
+          await ctx.writeFile(out, data);
+          return { written: out, bytes: data.length, files: svgs.map(fileOf) };
+        }
+        if (!/\.svg$/i.test(out)) throw new ToolError('out must end in .pdf, .svg or .zip');
+        const written: string[] = [];
+        for (const [i, s] of svgs.entries()) {
+          const path = svgs.length === 1 ? out : out.replace(/\.svg$/i, `-${i + 1}.svg`);
+          await ctx.writeFile(path, s.svg);
+          written.push(path);
+        }
+        return { written };
+      } catch (e) {
+        if (e instanceof ToolError) throw e;
+        throw new ToolError((e as Error).message);
+      }
     },
   },
   // ---------------------------------------------------------------- library & parts

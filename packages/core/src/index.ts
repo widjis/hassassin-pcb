@@ -32,3 +32,4 @@ export * from './textLayout.ts';
 export * from './arrange.ts';
 export * from './compact.ts';
 export * from './sheetFrame.ts';
+export * from './schematicExport.ts';

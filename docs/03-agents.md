@@ -17,6 +17,7 @@ pnpm hassassin set-rule board.hpcb "net#GND" pourLayers "F.Cu B.Cu"
 pnpm hassassin refill-pours board.hpcb
 pnpm hassassin run-drc board.hpcb --fail-on-error           # exit code 2 when there are errors (for CI)
 pnpm hassassin export-fab board.hpcb -o fab.zip
+pnpm hassassin export-schematic board.hpcb -o schematic.pdf --paper A4   # or .svg / .zip; --theme light|mono|dark
 ```
 
 Output is always JSON. Tools that change the project write it back to the `.hpcb` file (KiCad
@@ -100,6 +101,7 @@ between blocks.
 | impedance | read | Impedance from a width, or the width for a target impedance |
 | net_lengths / tune_length | read / write | Net lengths, differential pairs and skew, serpentines |
 | export_fab | writes a file | ZIP with Gerber, drill, BOM, pick-and-place |
+| export_schematic | writes a file | Vector PDF (one page per sheet) or SVG of the schematic; light, black-and-white or dark; fit to a paper size |
 | undo / redo / apply_ops | write | History, raw operations |
 
 ## Built-in agent

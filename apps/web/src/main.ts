@@ -1,5 +1,6 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, compactBlocksOps, localDate, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -356,6 +357,68 @@ $('frameBtn').addEventListener('click', () => {
       if (r.ops.length) app.apply('Sheet frame', r.ops);
       sch.fit();
       app.say(r.size === 'none' ? 'Frame removed.' : `Frame ${r.size}${r.fits ? '' : ' (the drawing is larger than the paper)'}.`);
+    } catch (e) {
+      app.say((e as Error).message);
+    }
+  });
+  dlg.showModal();
+});
+
+// Schematic export (S10): vector PDF or SVG of this sheet or every sheet.
+$('schExportBtn').addEventListener('click', () => {
+  const doc = app.doc;
+  const engine = app.engine;
+  const sheet = sch.sheet();
+  if (!doc || !engine || !sheet) return;
+  const many = allSheets(doc).length > 1;
+  const dlg = document.createElement('dialog');
+  dlg.className = 'annotate-dialog frame-dialog';
+  dlg.innerHTML = `
+    <form method="dialog">
+      <h3>Export schematic</h3>
+      <fieldset><legend>Format</legend>
+        <label><input type="radio" name="format" value="pdf" checked> PDF (one page per sheet)</label>
+        <label><input type="radio" name="format" value="svg"> SVG${many ? ' (a ZIP for several sheets)' : ''}</label>
+      </fieldset>
+      <fieldset><legend>Sheets</legend>
+        <label><input type="radio" name="sheets" value="this" ${many ? '' : 'checked'}> This sheet (${sheetPath(doc, sheet)})</label>
+        <label><input type="radio" name="sheets" value="all" ${many ? 'checked' : ''}> All sheets</label>
+      </fieldset>
+      <fieldset><legend>Look</legend>
+        <label>Colours <select name="theme"><option value="light">Light background (print)</option><option value="mono">Black and white</option><option value="dark">Dark, as on screen</option></select></label>
+        <label>Paper <select name="paper"><option value="auto">Sheet frame, or drawing size</option>${['A4', 'A3', 'A2', 'A1', 'A0'].map((k) => `<option value="${k}">Fit to ${k}</option>`).join('')}</select></label>
+      </fieldset>
+      <div class="row"><button value="cancel">Cancel</button><button value="ok" class="primary">Export</button></div>
+    </form>`;
+  const form = dlg.querySelector('form')!;
+  document.body.append(dlg);
+  dlg.addEventListener('close', () => {
+    const data = new FormData(form);
+    dlg.remove();
+    if (dlg.returnValue !== 'ok') return;
+    const base = (String(doc.meta.projectName ?? '') || (app.fileName ?? 'schematic').replace(/\.(hpcb|kicad_pcb|kicad_sch)$/i, '')).replace(/[^\w.-]+/g, '_') || 'schematic';
+    const opts = {
+      theme: String(data.get('theme')) as 'light' | 'dark' | 'mono',
+      paper: String(data.get('paper')),
+      ...(data.get('sheets') === 'this' ? { sheet: sheet.uid } : {}),
+    };
+    const save = (blob: Blob, name: string) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      app.say(`Exported ${name}`);
+    };
+    try {
+      if (data.get('format') === 'pdf') {
+        const pdf = schematicPdf(doc, engine, { ...opts, title: base });
+        save(new Blob([pdf as BlobPart], { type: 'application/pdf' }), `${base}-schematic.pdf`);
+      } else {
+        const svgs = schematicSvgs(doc, engine, opts);
+        if (svgs.length === 1) save(new Blob([svgs[0]!.svg], { type: 'image/svg+xml' }), `${base}-schematic.svg`);
+        else save(new Blob([zip(svgs.map((s, i) => ({ name: `${base}-${i + 1}.svg`, data: s.svg }))) as BlobPart], { type: 'application/zip' }), `${base}-schematic-svg.zip`);
+      }
     } catch (e) {
       app.say((e as Error).message);
     }

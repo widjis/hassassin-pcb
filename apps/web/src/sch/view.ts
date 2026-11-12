@@ -14,6 +14,7 @@ import {
   type WiresBefore,
   transformSelectionOps,
   sheetFrame,
+  titleBlockGraphics,
   noteBox,
   groupBoxRect,
   sheetContentBox,
@@ -1006,36 +1007,17 @@ export class SchematicView {
       R(frame.inner, Math.max(1, 0.35 * s), '#7a8194');
       const tb = frame.titleBlock;
       R(tb, Math.max(1, 0.3 * s), '#7a8194');
-      // Rows: title / project / rev, date, sheet / author.
-      const rowY = [tb.minY + 12, tb.minY + 19, tb.minY + 25.5];
+      const g = titleBlockGraphics(frame);
       ctx.beginPath();
-      for (const y of rowY) {
-        const a = S({ x: tb.minX, y });
-        const b = S({ x: tb.maxX, y });
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      }
-      for (const x of [tb.minX + 30, tb.minX + 75]) {
-        const a = S({ x, y: rowY[1]! });
-        const b = S({ x, y: rowY[2]! });
+      for (const [p0, p1] of g.lines) {
+        const a = S(p0);
+        const b = S(p1);
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
       }
       ctx.stroke();
+      for (const t of g.texts) text(t.text, t.at, t.size, t.kind === 'label' ? '#6c7383' : t.kind === 'title' ? C.ref : C.value, 'left', 'top');
       const f = frame.fields;
-      const lab = (t: string, x: number, y: number) => text(t, { x, y }, 1.1, '#6c7383', 'left', 'top');
-      lab('Title', tb.minX + 1.5, tb.minY + 1);
-      text(f.title, { x: tb.minX + 1.5, y: tb.minY + 4.5 }, 3.2, C.ref, 'left', 'top');
-      lab('Project', tb.minX + 1.5, rowY[0]! + 0.8);
-      text(f.project || '—', { x: tb.minX + 14, y: rowY[0]! + 0.6 }, 1.8, C.value, 'left', 'top');
-      lab('Rev', tb.minX + 1.5, rowY[1]! + 0.8);
-      text(f.revision, { x: tb.minX + 9, y: rowY[1]! + 0.8 }, 1.8, C.value, 'left', 'top');
-      lab('Date', tb.minX + 31.5, rowY[1]! + 0.8);
-      text(f.date || '—', { x: tb.minX + 40, y: rowY[1]! + 0.8 }, 1.8, C.value, 'left', 'top');
-      lab('Sheet', tb.minX + 76.5, rowY[1]! + 0.8);
-      text(f.sheet, { x: tb.minX + 87, y: rowY[1]! + 0.8 }, 1.8, C.value, 'left', 'top');
-      lab('Author', tb.minX + 1.5, rowY[2]! + 0.8);
-      text(f.author || '—', { x: tb.minX + 14, y: rowY[2]! + 0.6 }, 1.8, C.value, 'left', 'top');
       text(`${f.title} · ${frame.size}`, { x: frame.paper.minX + 1, y: frame.paper.minY - 1 }, 1.4, '#6c7383', 'left', 'bottom');
     }
 
