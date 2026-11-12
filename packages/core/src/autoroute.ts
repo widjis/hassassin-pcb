@@ -36,6 +36,8 @@ export interface AutorouteOptions {
   proximityCost?: number;
   /** Order of connections: `short` (default: shortest first) or `difficulty` (fine-pitch pads first, then long connections). The `autoPlacePriority` rule comes before either. */
   order?: 'difficulty' | 'short';
+  /** Fan out dense parts first (P8f; default true): straight stubs out of fine-pitch pad rows, where routing starts. */
+  fanout?: boolean;
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
   /** Corner style for every net, overriding the `cornerStyle` rule (P8e). */
@@ -51,6 +53,8 @@ export interface AutorouteReport {
   failed: { net: string; from: Vec2; to: Vec2; reason: string }[];
   grid: number;
   ms: number;
+  /** Pads fanned out before routing (P8f). */
+  fanouts?: number;
 }
 
 class Heap {
@@ -218,6 +222,74 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
 
   const shapes = collectCopper(doc, engine, copper);
   const routedNets = [...new Set(rats.map((r) => r.net))];
+
+  // ---- Fanout (P8f). Pads of a dense part (8 or more SMD pads on a layer, centres closer than 0.85 mm)
+  // escape first: a straight stub along the pad's long axis, out of the pad row, as a person would draw it.
+  // The stubs are laid as fixed copper of their nets before routing, and a connection at such a pad starts
+  // (or ends) at the stub's outer end, never from the side of the pad. Pads whose connections all stay at
+  // the part (a link between two of its pins) and stubs without room are left out. Vias stay outside pads.
+  interface Fan { pad: (typeof shapes)[number]; stub: (typeof shapes)[number]; li: number; a: Vec2; e: Vec2; half: number; out: [number, number]; off: boolean }
+  const fans: Fan[] = [];
+  if (opts.fanout !== false) {
+    const byPart = new Map<string, typeof shapes>();
+    for (const s of shapes) {
+      if (s.kind !== 'pad' || s.hole || !s.areas[0] || !layers.includes(s.layer)) continue;
+      const part = doc.nodes.get(s.uid)?.parent;
+      if (!part) continue;
+      const k = `${part}|${s.layer}`;
+      (byPart.get(k) ?? byPart.set(k, []).get(k)!).push(s);
+    }
+    const mid = (s: (typeof shapes)[number]) => ({ x: (s.box.minX + s.box.maxX) / 2, y: (s.box.minY + s.box.maxY) / 2 });
+    for (const pads of byPart.values()) {
+      if (pads.length < 8) continue;
+      const ms = pads.map(mid);
+      let pitch = Infinity;
+      for (let x = 0; x < ms.length; x++) for (let y = x + 1; y < ms.length; y++) pitch = Math.min(pitch, Math.hypot(ms[x]!.x - ms[y]!.x, ms[x]!.y - ms[y]!.y));
+      if (pitch >= 0.85) continue;
+      let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
+      for (const s of pads) (px0 = Math.min(px0, s.box.minX)), (py0 = Math.min(py0, s.box.minY)), (px1 = Math.max(px1, s.box.maxX)), (py1 = Math.max(py1, s.box.maxY));
+      const pc = { x: (px0 + px1) / 2, y: (py0 + py1) / 2 };
+      const inPart = (q: Vec2) => q.x >= px0 - 0.5 && q.x <= px1 + 0.5 && q.y >= py0 - 0.5 && q.y <= py1 + 0.5;
+      for (const [k, pad] of pads.entries()) {
+        if (!pad.net || !routedNets.includes(pad.net)) continue;
+        const onPad = (q: Vec2) => q.x >= pad.box.minX - 1e-6 && q.x <= pad.box.maxX + 1e-6 && q.y >= pad.box.minY - 1e-6 && q.y <= pad.box.maxY + 1e-6;
+        const mine = rats.filter((r) => r.net === pad.net && (onPad(r.a) || onPad(r.b)));
+        if (!mine.length || mine.every((r) => inPart(onPad(r.a) ? r.b : r.a))) continue;
+        const bw = pad.box.maxX - pad.box.minX;
+        const bh = pad.box.maxY - pad.box.minY;
+        if (Math.max(bw, bh) < 1.4 * Math.min(bw, bh)) continue; // square pads (BGA balls, thermal pads): no straight escape
+        const a = ms[k]!;
+        const alongX = bw > bh;
+        const sgn = Math.sign(alongX ? a.x - pc.x : a.y - pc.y);
+        if (!sgn) continue;
+        const w = Math.min(netRule(pad.net, 'traceWidth', 0.25), Math.min(bw, bh));
+        const cn = netClear(pad.net);
+        const ext = Math.max(0.4, 1.5 * (w + cn));
+        // The outer end lies on a grid line across the escape, so the router picks it up cleanly.
+        const edgeAt = (alongX ? a.x + (sgn * bw) / 2 : a.y + (sgn * bh) / 2) + sgn * ext;
+        const base = alongX ? minX : minY;
+        const snapped = base + (sgn > 0 ? Math.ceil((edgeAt - base) / g - 1e-9) : Math.floor((edgeAt - base) / g + 1e-9)) * g;
+        const e = alongX ? { x: snapped, y: a.y } : { x: a.x, y: snapped };
+        const half = w / 2;
+        const edgeCl = netRule(pad.net, 'boardEdgeClearance', 0.3);
+        let ok = pointInPolygon(e, outline) && board.segments.every(([p, q]) => segSegDist(a, e, p, q) >= half + edgeCl - 1e-6);
+        for (const sh of [...shapes, ...fans.map((f) => f.stub)]) {
+          if (!ok) break;
+          if (sh.layer !== pad.layer || sh.net === pad.net || sh.kind === 'fill') continue;
+          const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace')) - 1e-6;
+          if (sh.box.minX - need > Math.max(a.x, e.x) || sh.box.maxX + need < Math.min(a.x, e.x) || sh.box.minY - need > Math.max(a.y, e.y) || sh.box.maxY + need < Math.min(a.y, e.y)) continue;
+          if (sh.edges.some(([p, q, rr]) => segSegDist(a, e, p, q) - rr < need) || (sh.kind === 'pad' && sh.areas[0] && inArea(e, sh.areas[0]))) ok = false;
+        }
+        if (!ok) continue;
+        const keepOut = (netNode.get(pad.net) && (engine.get(netNode.get(pad.net)!.uid, 'keepOut')?.value as KeepOut | undefined)) || pad.keepOut;
+        const box = { minX: Math.min(a.x, e.x) - half, minY: Math.min(a.y, e.y) - half, maxX: Math.max(a.x, e.x) + half, maxY: Math.max(a.y, e.y) + half };
+        const stub = { uid: `fan:${pad.uid}`, kind: 'trace' as const, net: pad.net, layer: pad.layer, edges: [[a, e, half]] as [Vec2, Vec2, number][], areas: [], box, keepOut, edgeClearance: edgeCl, probe: a };
+        fans.push({ pad, stub, li: layers.indexOf(pad.layer), a, e, half, out: alongX ? [sgn, 0] : [0, sgn], off: false });
+      }
+    }
+    for (const f of fans) shapes.push(f.stub);
+  }
+  report.fanouts = fans.length;
   // How far the distance field must reach: the widest half-width plus the largest clearance that
   // any routed net or any copper asks for, plus one cell for the step between cell centres.
   let reachW = 0;
@@ -608,9 +680,9 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       if (!soft) for (const cp of capsAlong(li, a, b)) if (cp.id !== id && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl) - 1e-6) return false;
       return true;
     };
-    type End = Map<number, { cost: number; pts: Vec2[]; dir?: [number, number] }>;
+    type End = Map<number, { cost: number; pts: Vec2[]; dir?: [number, number]; strict?: boolean }>;
     /** Entry states at end point q: grid state → cost (in cells) and the exact points from q up to (not including) the cell. */
-    const entries = (q: Vec2, out: End) => {
+    const entries = (q: Vec2, out: End, dirOut?: [number, number]) => {
       const ls = ownLayersAt(q);
       const rho = padExtentAt(q) + width + cn + 3 * g;
       // A person leaves a pad straight along its long axis: other first directions cost a little more.
@@ -639,13 +711,15 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         const kept = path.filter((x, k) => k === 0 || Math.hypot(x.x - path[k - 1]!.x, x.y - path[k - 1]!.y) > 1e-9);
         if (kept.length < 2) {
           const cur = out.get(st);
-          if (!cur || cur.cost > len / g) out.set(st, { cost: len / g, pts: [q] });
+          // At a fanout stub's end the trace carries on outwards: no turn of 90° or more onto the stub.
+          if (!cur || cur.cost > len / g) out.set(st, dirOut ? { cost: len / g, pts: [q], dir: dirOut, strict: true } : { cost: len / g, pts: [q] });
           return;
         }
         // Turns inside the entry may not be acute; the first piece should follow the pad's long axis.
         for (let k = 1; k + 1 < kept.length; k++) if (dirDot(kept[k - 1]!, kept[k]!, kept[k + 1]!) < -1e-9) return;
         const f0 = kept[0]!;
         const f1 = kept[1]!;
+        if (dirOut && (f1.x - f0.x) * dirOut[0] + (f1.y - f0.y) * dirOut[1] < 1e-9) return;
         const offAxis = axis === 'x' ? Math.abs(f1.y - f0.y) > 1e-9 : axis === 'y' ? Math.abs(f1.x - f0.x) > 1e-9 : false;
         const cost = len / g + (kept.length > 2 ? 0.1 : 0) + (offAxis ? 1 : 0);
         const l0 = kept[kept.length - 2]!;
@@ -799,10 +873,32 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     };
     // A cell on copper of both islands (they overlap without being joined, e.g. a trace grazing a pad) is no
     // start: a path must leave island A and end in island B, so it gets at least one piece of trace.
-    for (const st of groupA) if (!groupB.has(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
-    for (const st of groupB) if (onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
-    entries(r.a, seeds);
-    entries(r.b, goals);
+    // Fanned-out pads of this net (and their stubs) are no start or end: a connection there leaves from the
+    // stub's outer end, straight on or at 45°.
+    const myFans = fans.filter((f) => !f.off && f.pad.net === r.net);
+    const fanAt = (q: Vec2) => myFans.find((f) => q.x >= f.pad.box.minX - 1e-6 && q.x <= f.pad.box.maxX + 1e-6 && q.y >= f.pad.box.minY - 1e-6 && q.y <= f.pad.box.maxY + 1e-6);
+    const fanned = (st: number) => {
+      if (!myFans.length) return false;
+      const li = Math.floor(st / N);
+      const c = st % N;
+      const p = { x: cx(c % W), y: cy(Math.floor(c / W)) };
+      return myFans.some((f) => f.li === li && ((f.pad.areas[0] && inArea(p, f.pad.areas[0])) || distToSegment(p, f.a, f.e) <= f.half + 1e-6));
+    };
+    for (const st of groupA) if (!groupB.has(st) && !fanned(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
+    for (const st of groupB) if (!fanned(st) && onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
+    const fa = fanAt(r.a);
+    const fb = fanAt(r.b);
+    entries(fa ? fa.e : r.a, seeds, fa?.out);
+    entries(fb ? fb.e : r.b, goals, fb?.out);
+    // No way out of a stub's end: start from the pad after all.
+    if (fa && !seeds.size) {
+      for (const st of groupA) if (!groupB.has(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
+      entries(r.a, seeds);
+    }
+    if (fb && !goals.size) {
+      for (const st of groupB) if (onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
+      entries(r.b, goals);
+    }
     if (!seeds.size || !goals.size) return { ok: false, reason: 'no room to leave the pad with the current clearances' };
     run++;
     const heap = new Heap();
@@ -868,6 +964,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const j = (c - i) / W;
       const pd = predDir(s, li, i, j);
       if (!pd) return true;
+      if (e.strict && e.dir) return pd[0] * e.dir[0] + pd[1] * e.dir[1] < 0;
       const t = e.pts[e.pts.length - 1]!;
       return pd[0] * (t.x - cx(i)) + pd[1] * (t.y - cy(j)) >= -1e-9;
     };
@@ -902,7 +999,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         let turn = 0;
         if (pd) {
           const dot = pd[0] * di + pd[1] * dj;
-          if (dot < 0) continue;
+          if (dot < 0 || (dot === 0 && from[s]! < 0 && seeds.get(s)?.strict)) continue;
           if (dot === 0) turn = turn90;
           else if (pd[0] !== di || pd[1] !== dj) turn = 0.1;
         }
@@ -944,7 +1041,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const pts = (k: number) => ({ x: cx(cells[k]!.c % W), y: cy(Math.floor(cells[k]!.c / W)) });
     const raw: { layer: number; pts: Vec2[] }[] = [];
     const vias: Vec2[] = [];
+    // A route that leaves from a fanout stub's end takes the stub in as its first (or last) piece, unless a
+    // route of the net already holds it, so the corner passes treat the escape like any other corner.
+    const stubFree = (f: Fan) => ![...routes.values()].some((rt) => rt.id === id && rt.segs.some((sg) => sg.li === f.li && (Math.hypot(sg.a.x - f.a.x, sg.a.y - f.a.y) < 1e-6 || Math.hypot(sg.b.x - f.a.x, sg.b.y - f.a.y) < 1e-6)));
+    const atStub = (f: Fan | undefined, q: Vec2 | undefined, li: number) => !!f && !!q && li === f.li && Math.hypot(q.x - f.e.x, q.y - f.e.y) < 1e-6 && stubFree(f);
     let cur: { layer: number; pts: Vec2[] } = { layer: cells[0]!.li, pts: [...seeds.get(first)!.pts] };
+    if (atStub(fa, cur.pts[0], cur.layer)) cur.pts.unshift(fa!.a);
     for (let k = 0; k < cells.length; k++) {
       const p = pts(k);
       if (cells[k]!.li !== cur.layer) {
@@ -955,6 +1057,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       } else cur.pts.push(p);
     }
     cur.pts.push(...goals.get(found)!.pts.slice().reverse());
+    if (atStub(fb, cur.pts[cur.pts.length - 1], cur.layer) && fb !== fa) cur.pts.push(fb!.a);
     raw.push(cur);
     const key = ++routeKey;
     const route: Route = { key, conn: -1, net: r.net, id, caps: [], segs: [], vias, length: 0, deps: new Set() };

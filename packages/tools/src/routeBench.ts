@@ -38,6 +38,8 @@ export interface RouteFigures {
   arcs: number;
   /** Grid pitch the router used (mm). */
   grid: number;
+  /** Pads fanned out before routing (P8f). */
+  fanouts: number;
   /**
    * Share of the straight autorouted length (0–1) that runs against its layer's default direction (P8f:
    * even copper layers horizontal, odd ones vertical); 45° pieces count half.
@@ -153,7 +155,7 @@ export function cornerFigures(doc: Doc, engine: StyleEngine, copper: string[] = 
 export async function measureAutoroute(p: Project, args: Record<string, unknown> = {}): Promise<RouteFigures> {
   await runTool(p, 'refill_pours', {});
   const connections = computeRatsnest(p.doc, p.engine, p.copper).lines.length;
-  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number; grid: number };
+  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number; grid: number; fanouts: number };
   await runTool(p, 'refill_pours', {});
   const errors = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted');
   const drcByKind: Record<string, number> = {};
@@ -179,6 +181,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     collinear: c.collinear,
     arcs: c.arcs,
     grid: Math.round(r.grid * 1000) / 1000,
+    fanouts: r.fanouts,
     againstDirection: againstDirection(p.doc, p.engine, p.copper),
   };
 }

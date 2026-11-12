@@ -6,7 +6,7 @@
  * that test starts passing, Vitest reports it, and it is moved to the first block in the same commit.
  */
 import { describe, expect, it } from 'vitest';
-import { planAutoroute, runDrc } from '@hassassin/core';
+import { collectCopper, planAutoroute, runDrc } from '@hassassin/core';
 import { FIXTURE_ARGS, fixtureChannel, fixtureReversedBus, fixtureTee, measureAutoroute, ROUTE_FIXTURES, runTool, type RouteFigures } from '@hassassin/tools';
 
 const cache = new Map<string, Promise<RouteFigures>>();
@@ -147,6 +147,32 @@ describe('autoroute fixtures: costs and order (P8f)', { timeout: 120_000 }, () =
     await runTool(p, 'set_rule', { target: `net#${JSON.stringify(net.name)}`, rule: 'autoPlacePriority', value: '5' });
     const { report } = planAutoroute(p.doc, p.engine, p.copper);
     expect(report.routed[0]!.net).toBe(last);
+  });
+  it('fanout: every connected pin of a fine-pitch QFN leaves its pad row straight along the pad (P8f)', async () => {
+    for (const make of [ROUTE_FIXTURES['qfn-escape'], ROUTE_FIXTURES['qfn-fine']]) {
+      const p = await make();
+      const f = await measureAutoroute(p);
+      expect([f.failed, f.unroutedAfter, f.drcErrors, f.collinear]).toEqual([0, 0, 0, 0]);
+      expect(f.fanouts).toBe(8);
+      // Each pad of U1 with a route: a trace starts at the pad centre and runs along the pad's long axis.
+      const u1 = [...p.doc.nodes.values()].find((n) => n.type === 'element' && n.name === 'U1')!;
+      const pads = collectCopper(p.doc, p.engine, p.copper).filter((s) => s.kind === 'pad' && s.net && u1.children.includes(s.uid));
+      const traces = [...p.doc.nodes.values()].filter((n) => n.type === 'trace').map((t) => [p.engine.get(t.uid, 'start')?.value, p.engine.get(t.uid, 'end')?.value] as [{ x: number; y: number }, { x: number; y: number }]);
+      let checked = 0;
+      for (const pad of pads) {
+        const c = { x: (pad.box.minX + pad.box.maxX) / 2, y: (pad.box.minY + pad.box.maxY) / 2 };
+        const t = traces.find(([a]) => Math.hypot(a.x - c.x, a.y - c.y) < 1e-6);
+        if (!t) continue;
+        const alongX = pad.box.maxX - pad.box.minX > pad.box.maxY - pad.box.minY;
+        expect(Math.abs(alongX ? t[0].y - t[1].y : t[0].x - t[1].x)).toBeLessThan(1e-6);
+        checked++;
+      }
+      expect(checked).toBe(8);
+    }
+  });
+  it('fanout=false routes from the pads as before', async () => {
+    const f = await measureAutoroute(await ROUTE_FIXTURES['qfn-fine'](), { fanout: false });
+    expect([f.failed, f.fanouts]).toEqual([0, 0]);
   });
   it('graze: copper that only touches a pad does not count as connected; the pad is still routed (P8f)', async () => {
     const f = await figures('graze');

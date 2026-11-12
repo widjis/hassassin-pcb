@@ -359,9 +359,23 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     (3) a route ending in a via on another route did not record that it rests on it, so ripping that
     route left it dangling. The flood is replaced by islands built with the connectivity check's own
     rules; fixture `graze` reproduces (2). Also: route ends never sit on a pad's very edge.
-    Still open in P8f: fanout first, the reference-plane cost, bundles, and the per-class costs (with P16).
     The long B.Cu runs round the left board edge are still there, though shorter in total than the hand
     routing.
+  - *Progress (2026-11-13), fanout:* done for SMD parts with a row of elongated pads: a part with 8 or more
+    SMD pads on a layer and pad centres closer than 0.85 mm is dense; each of its pads with a connection
+    leaving the part gets a straight stub from the pad centre along the pad's long axis, out of the row by
+    max(0.4 mm, 1.5 × (width + clearance)), its end on a grid line. The stubs are laid as fixed copper of
+    their net before routing (so other nets keep clear of the escapes), and a connection at such a pad
+    starts or ends at the stub's end, carrying on straight or at 45° (never a 90° turn onto the stub); the
+    first route there takes the stub in as its first piece, so the corner styles apply to it. A stub with
+    no room is not laid, and a connection that cannot leave a stub's end starts from the pad as before.
+    Option `fanout` (default on), the report counts `fanouts`. On the QFN fixtures every pin now leaves
+    its row straight (before: hooks into the side of a pad, 45° runs across the pad ends, GND run under
+    the part); a test checks it. The RGB lamp has no fine-pitch part, so its figures are unchanged.
+    Not done: BGA dog-bones (square pads, a via per ball between the balls), regular fan patterns
+    (alternating stub lengths, vias placed in a ring), and a run on a real board with a QFN / QFP (the
+    solar-mppt board, P8a, waits for the owner's leave).
+    Still open in P8f: the reference-plane cost, bundles, and the per-class costs (with P16).
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.
