@@ -370,6 +370,43 @@ Known limitations:
 - Next: milestone M3 (KiCad netlist and `.kicad_sch` export, buses, configurable ERC, PCB → schematic
   back-annotation).
 
+## Schematic improvements, milestone M3 (v0.1.0)
+
+Done under the work agreement [docs/04-schematic-improvements.md](04-schematic-improvements.md)
+(S13–S15, S17, S18), so schematics travel to and from KiCad and the checks can be tuned per project.
+KiCad itself (kicad-cli 10.0.7) was the judge throughout:
+
+- **KiCad netlist export (S13):** File → Export KiCad netlist (.net), `export_netlist`. Generic footprints
+  map to KiCad library footprints. Unnamed nets are now named as KiCad names them. On 16 local KiCad
+  projects our netlist equals kicad-cli's (components, net names, pins, pin types); the RGB sleep lamp's
+  netlist imports into KiCad's PCB editor with 0 warnings and 0 errors (53 footprints, 35 nets).
+- **`.kicad_sch` export (S14):** one file per sheet with symbols, wires, labels, power symbols, sheets,
+  notes, group boxes, paper and title block, plus a project file and a bundled symbol library. Symbols
+  imported from KiCad and unchanged are written back exactly. The 16 projects, imported and exported
+  again, give kicad-cli the same netlist and the same ERC as the originals.
+- **Buses (S15):** `DATA[0..7]` and `I2C{SDA SCL}` buses with bus entries; members connect as KiCad
+  connects them (by label, in order through sheet pins, everywhere through a global bus label), checked
+  on eight probe schematics. Bus (B) and Entry (E) tools; ERC `netNotBusMember`.
+- **Configurable ERC (S17):** a pin-type matrix per project whose defaults equal KiCad's on all 78 pairs
+  of the 12 pin types; per-check error / warning / ignore; power symbols that need a source (KiCad's
+  rule) as an option; waivers with a recorded reason, listed apart in Review.
+- **Back-annotation (S18):** Update from PCB writes board changes back: references renamed on the board,
+  pin swaps within a part's swap groups and gate swaps of identical units; anything else is listed.
+
+| A bus `DATA[0..3]` with entries and member labels | ERC settings: pin-type matrix and checks | Exported schematic as KiCad draws it |
+|---|---|---|
+| ![An MCU's four data pins on a bus DATA[0..3]; four bus entries with wires to four LEDs labelled DATA0 to DATA3](media/m3-bus.jpg) | ![The ERC settings dialog: the 12 × 12 pin-type matrix, the power-symbol option and the list of checks](media/m3-erc-settings.jpg) | ![The RGB sleep lamp schematic exported from Hassassin and plotted by kicad-cli](media/m3-s14-kicad-render.jpg) |
+
+Known limitations:
+- The KiCad Schematic Editor window and KiCad 9 were not checked by hand (kicad-cli 10.0.7, which uses
+  the same file reader, was).
+- Board swaps are made with the `swap_pads` / `swap_gates` tools or come from KiCad; the layout editor has
+  no swap command yet.
+- Swap groups are a part property (`swapGroups`); the symbol editor does not show them yet.
+- The collaboration sync test can still time out on a busy machine (its wait was raised to 10 s).
+- Next: the PCB layout work agreement ([05-pcb-improvements.md](05-pcb-improvements.md)), milestone PM2
+  first.
+
 ## Out of scope (for now)
 
 SPICE simulation, mechanical / enclosure design, firmware, wire harnesses, ordering from fabricators.

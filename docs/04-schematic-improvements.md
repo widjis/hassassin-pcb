@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/04-schematic-improvements.md` |
 | Version | 0.4 |
-| Status | **Approved on 2026-11-11 — in progress** |
+| Status | **Completed on 2026-11-12** (M1 `v0.0.2`, M2 `v0.0.3`, M3 `v0.1.0`) |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.1 (tag `v0.0.1`) |
