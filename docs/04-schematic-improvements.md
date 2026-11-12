@@ -346,7 +346,31 @@ only when all of its criteria pass.
     with 146 pads and 35 nets. The test board was not saved.
   - The exported netlist opens in KiCad's PCB editor ("Update PCB from netlist" / import netlist) for a
     test project, with every component and net present.
-- [ ] **S14. `.kicad_sch` export.**
+- [x] **S14. `.kicad_sch` export.** — `c350665`
+  - Delivered: `packages/core/src/kicadSchematic.ts`, written from KiCad's file format documentation and
+    example files: one `.kicad_sch` per sheet (format 20250114, KiCad 9 and 10) with symbols, wires,
+    junctions, no-connects, local / global / hierarchical labels, sheet blocks with their pins, power
+    symbols, notes, group boxes, paper size and title block, plus a `.kicad_pro`. Each placed symbol's
+    drawing and pins go into `lib_symbols`; library symbols imported from KiCad and unchanged since are
+    written back exactly as they came (the importer now keeps them), and symbols made here go into a
+    bundled `hassassin.kicad_sym` with a `sym-lib-table`, so KiCad finds every library and sees no
+    changed symbols. Generic footprints are mapped to KiCad's (as in S13). **File → Export KiCad
+    schematic (.zip)**, the `export_kicad_schematic` tool and `hassassin export-kicad-schematic`.
+  - Found on the way and fixed: unnamed nets on a hierarchical label are named after it (`/Filter/IN`),
+    as KiCad does; new ERC warning `labelSinglePin` (a label on only one pin), matching KiCad's.
+  - Tests: `packages/tools/test/schematic-s14.test.ts`: round trip (export → import gives the same nets
+    and names), the files and the tool; with KiCad installed, kicad-cli reads a design made here with the
+    same nets, no library or footprint warnings and the same unconnected-pin error; with
+    `KICAD_PROJECT_DIR`, a real project round trip.
+  - KiCad check (kicad-cli 10.0.7, the program behind the editor): on 16 local KiCad projects, imported
+    into Hassassin and exported again, KiCad's netlist and ERC of our files are identical to those of the
+    originals (components, net names, pins, every error and warning; the original project's library
+    tables copied next to the export). The RGB sleep lamp made by the agent: same 53 components and 35
+    nets; KiCad's ERC finds the two labels on a single pin that our ERC now finds too
+    ([render by KiCad](media/m3-s14-kicad-render.jpg)). Not checked: opening the files in the KiCad
+    Schematic Editor window (access to it was not granted this time) and KiCad 9.
+  - Left for S17: KiCad treats a power symbol as a power input (a net with power symbols but no source
+    or PWR_FLAG is an error there, not here), and checks pin types against each other (`pin_to_pin`).
   - A schematic made in Hassassin opens in KiCad 9/10 with the same symbols, wires, labels and power
     symbols; KiCad's ERC on it matches ours for the test projects.
   - Round trip: import → export → import gives the same netlist.
