@@ -299,6 +299,38 @@ export function genericAlias(name: string): string | null {
   return null;
 }
 
+const CHIP_METRIC: Record<string, string> = { '0201': '0603', '0402': '1005', '0603': '1608', '0805': '2012', '1206': '3216', '1210': '3225', '2010': '5025', '2512': '6332' };
+const SOIC_LEN: Record<string, string> = { '8': '4.9', '14': '8.7', '16': '9.9' };
+const TSSOP_LEN: Record<string, string> = { '8': '3', '14': '5', '16': '5', '20': '6.5', '24': '7.8', '28': '9.7' };
+const HOLE_DIA: Record<string, string> = { '2': '2.2', '2.5': '2.7', '3': '3.2', '4': '4.3' };
+
+/**
+ * The KiCad library footprint for one of the generic footprints, e.g. "chip-0603" on a resistor →
+ * "Resistor_SMD:R_0603_1608Metric", for tools that look footprints up by library name. The reference
+ * prefix (R, C, L, D, LED, F, FB) picks the library of a chip part. Null when there is no clear match.
+ */
+export function kicadFootprintFor(name: string, refPrefix: string): string | null {
+  let m: RegExpExecArray | null;
+  const pre = refPrefix.toUpperCase();
+  if ((m = /^chip-(\d{4})$/.exec(name)) && CHIP_METRIC[m[1]!]) {
+    const size = `${m[1]}_${CHIP_METRIC[m[1]!]}Metric`;
+    if (pre === 'R' || pre === 'RN') return `Resistor_SMD:R_${size}`;
+    if (pre === 'C') return `Capacitor_SMD:C_${size}`;
+    if (pre === 'L' || pre === 'FB') return `Inductor_SMD:L_${size}`;
+    if (pre === 'D' || pre === 'LED') return `LED_SMD:LED_${size}`;
+    if (pre === 'F') return `Fuse:Fuse_${size}`;
+    return null;
+  }
+  if ((m = /^sot-23(?:-(5|6))?$/.exec(name))) return `Package_TO_SOT_SMD:SOT-23${m[1] ? `-${m[1]}` : ''}`;
+  if ((m = /^(sod-123|sod-323|sod-523|sma|smb|smc)$/.exec(name))) return `Diode_SMD:D_${m[1]!.toUpperCase()}`;
+  if ((m = /^soic-(\d+)$/.exec(name)) && SOIC_LEN[m[1]!]) return `Package_SO:SOIC-${m[1]}_3.9x${SOIC_LEN[m[1]!]}mm_P1.27mm`;
+  if ((m = /^tssop-(\d+)$/.exec(name)) && TSSOP_LEN[m[1]!]) return `Package_SO:TSSOP-${m[1]}_4.4x${TSSOP_LEN[m[1]!]}mm_P0.65mm`;
+  if ((m = /^dip-(\d+)$/.exec(name))) return `Package_DIP:DIP-${m[1]}_W7.62mm`;
+  if ((m = /^header-([12])x(\d+)-p2\.54$/.exec(name))) return `Connector_PinHeader_2.54mm:PinHeader_${m[1]}x${m[2]!.padStart(2, '0')}_P2.54mm_Vertical`;
+  if ((m = /^hole-m([\d.]+)$/.exec(name)) && HOLE_DIA[m[1]!]) return `MountingHole:MountingHole_${HOLE_DIA[m[1]!]}mm_M${m[1]}`;
+  return null;
+}
+
 /** Expand KiCad-style wildcard layers against the board's copper layers. */
 export function expandLayers(names: string[], copper: string[]): string[] {
   const out = new Set<string>();

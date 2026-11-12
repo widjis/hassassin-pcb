@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { kicadNetlist, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
@@ -634,6 +634,20 @@ $('fabBtn').addEventListener('click', () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   app.say(`Exported ${r.name}${r.notes.length ? ' — ' + r.notes[0] : ''}`);
+});
+$('netExportBtn').addEventListener('click', () => {
+  if (!app.doc || !app.engine) return app.say('Open or create a project first.');
+  const base = (app.fileName || 'design').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_');
+  const r = kicadNetlist(app.doc, app.engine, { source: `${base}.kicad_sch` });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([r.text], { type: 'text/plain' }));
+  a.download = `${base}.net`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const notes = [`${r.components} components, ${r.nets} nets`];
+  if (r.mapped.length) notes.push(`${r.mapped.length} generic footprints mapped to KiCad's`);
+  if (r.unresolved.length) notes.push(`no KiCad footprint for ${r.unresolved.map((u) => u.ref).join(', ')}`);
+  app.say(`Exported ${base}.net — ${notes.join(' · ')}`);
 });
 $('fitBtn').addEventListener('click', () => app.fit());
 $('flipBtn').addEventListener('click', () => app.flip());

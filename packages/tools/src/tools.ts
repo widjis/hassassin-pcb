@@ -5,6 +5,7 @@
  */
 import {
   pinPadCheck,
+  kicadNetlist,
   describePinPad,
   generateFootprint,
   genericFootprint,
@@ -1432,6 +1433,34 @@ export const TOOLS: ToolDef[] = [
       const zip = fabZip(r);
       await ctx.writeFile(str(a.out, 'out'), zip);
       return { written: a.out, bytes: zip.length, files: r.files.map((f) => ({ name: f.name, bytes: f.data.length })), notes: r.notes };
+    },
+  },
+  {
+    name: 'export_netlist',
+    description: 'Export the schematic as a KiCad netlist (.net, S-expression), for KiCad\'s PCB editor (File → Import → Netlist). Components (all units together, power symbols left out) and nets with their pins. Generic footprints are mapped to KiCad library footprints where clear (map_footprints, default true); the result lists what was mapped and which footprints KiCad will not find by name.',
+    mutates: false,
+    input: {
+      type: 'object',
+      properties: {
+        out: { type: 'string', description: 'Path of the .net file to write' },
+        map_footprints: { type: 'boolean', description: 'Map generic footprints (chip-0603 …) to KiCad library footprints (default true)' },
+      },
+      required: ['out'],
+    },
+    run: async (p, a, ctx) => {
+      if (!ctx.writeFile) throw new ToolError('This host cannot write files.');
+      const out = str(a.out, 'out');
+      if (!/\.net$/i.test(out)) throw new ToolError('out must end in .net');
+      const name = (p.doc.meta.projectName ? String(p.doc.meta.projectName) : p.name.replace(/\.hpcb$/i, '')) || 'design';
+      const r = kicadNetlist(p.doc, p.engine, { source: `${name.replace(/[^\w.-]+/g, '_')}.kicad_sch`, mapFootprints: a.map_footprints !== false });
+      await ctx.writeFile(out, r.text);
+      return {
+        written: out,
+        components: r.components,
+        nets: r.nets,
+        ...(r.mapped.length ? { mapped: r.mapped } : {}),
+        ...(r.unresolved.length ? { unresolved: r.unresolved, note: 'KiCad looks footprints up as Library:Name; these parts need a KiCad footprint before importing the netlist.' } : {}),
+      };
     },
   },
   {

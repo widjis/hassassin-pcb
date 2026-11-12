@@ -196,13 +196,14 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
     }
     if (!name) {
       if (!pins.length) continue; // wire fragments with nothing on them
-      // Prefer e.g. U1-SW1 over C3-Pad2.
-      // Rank: active (non-passive) pins first, then pins with a real name.
-      const rank = (x: NetPin) => (x.pinType === 'passive' ? 2 : 0) + (x.pinName && x.pinName !== '~' && x.pinName !== x.pin ? 0 : 1);
-      const p = [...pins].sort((a, b) => rank(a) - rank(b) || a.ref.localeCompare(b.ref, undefined, { numeric: true }) || a.pin.localeCompare(b.pin, undefined, { numeric: true }))[0]!;
-      const hasName = p.pinName && p.pinName !== '~' && p.pinName !== p.pin;
-      const pn = hasName ? p.pinName : `Pad${p.pin}`;
-      name = pins.length === 1 ? `unconnected-(${p.ref}-${hasName ? `${p.pinName}-Pad${p.pin}` : `Pad${p.pin}`})` : `Net-(${p.ref}-${pn})`;
+      // As KiCad names them: a pin with a real name first (U1-SW1 over C3-Pad2), then the first
+      // reference (D2-K over U2-D1, whatever the pin types), then the pin number.
+      const named = (x: NetPin) => !!x.pinName && x.pinName !== '~' && x.pinName !== x.pin;
+      const p = [...pins].sort((a, b) => Number(named(b)) - Number(named(a)) || a.ref.localeCompare(b.ref, undefined, { numeric: true }) || a.pin.localeCompare(b.pin, undefined, { numeric: true }))[0]!;
+      const hasName = named(p);
+      // A "/" in a pin name would read as a sheet separator, so KiCad writes it as {slash}.
+      const pn = hasName ? p.pinName.replace(/\//g, '{slash}') : `Pad${p.pin}`;
+      name = pins.length === 1 ? `unconnected-(${p.ref}-${hasName ? `${pn}-Pad${p.pin}` : `Pad${p.pin}`})` : `Net-(${p.ref}-${pn})`;
     }
     const n = usedNames.get(name) ?? 0;
     usedNames.set(name, n + 1);

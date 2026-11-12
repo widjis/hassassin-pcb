@@ -279,7 +279,8 @@ export function importKicadSchematic(input: SchFiles, existing?: Doc): SchImport
           if (k === 'Sheetname' || k === 'Sheet name') sname = str(pr[2]) ?? '';
           if (k === 'Sheetfile' || k === 'Sheet file') sfile = str(pr[2]) ?? '';
         }
-        const block = addNode(doc, sheet.uid, { type: 'block', name: sname || sfile, props: { file: sfile }, rules: [rule('position', p), rule('size', size)] });
+        const uuid = str(child(e, 'uuid')?.[1]);
+        const block = addNode(doc, sheet.uid, { type: 'block', name: sname || sfile, props: { file: sfile, ...(uuid ? { uuid } : {}) }, rules: [rule('position', p), rule('size', size)] });
         for (const pin of children(e, 'pin')) {
           const pp = at(child(pin, 'at'));
           if (pp) addNode(doc, block.uid, { type: 'sheetPin', name: str(pin[1]) ?? '', props: { kind: str(pin[2]) ?? 'passive' }, rules: [rule('position', pp)] });
