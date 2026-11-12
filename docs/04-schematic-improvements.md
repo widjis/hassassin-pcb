@@ -324,7 +324,26 @@ only when all of its criteria pass.
 
 ### Milestone M3 — compatibility and advanced features
 
-- [ ] **S13. KiCad netlist export (`.net`).**
+- [x] **S13. KiCad netlist export (`.net`).** — `9eafd2b`
+  - Delivered: `packages/core/src/kicadNetlist.ts`, written from KiCad's netlist files (S-expression,
+    version "E"): the sheets with their title blocks, one component per reference (all units together,
+    power and flag symbols left out, stable UUIDs; imported sheets keep their KiCad UUID) and every net
+    with its pins, pin functions and pin types (`+no_connect` on pins with a marker). Generic footprints
+    map to KiCad library footprints where the match is clear (`chip-0603` on a resistor →
+    `Resistor_SMD:R_0603_1608Metric`, SOIC, TSSOP, DIP, SOT-23, diodes, pin headers, mounting holes);
+    the rest are listed as not found. **File → Export KiCad netlist (.net)**, the `export_netlist` tool
+    and `hassassin export-netlist`.
+  - Unnamed nets are now named as KiCad names them (seen across real projects): a pin with a name first,
+    then the first reference, whatever the pin types; a "/" in a pin name is written `{slash}`. This also
+    applies to Update PCB.
+  - Tests: `packages/tools/test/schematic-s13.test.ts` (a design made here, naming, the tool). Against
+    KiCad: with `KICAD_PROJECT_DIR` set and KiCad installed, the test compares our netlist with
+    `kicad-cli sch export netlist`; run on 16 local projects (solar MPPT r3/r4, GPS tracker and backups,
+    battery carrier, Pico BQ40Z50 adapter rev b–f, and others): components, net names, pins and pin
+    types identical in all of them.
+  - KiCad check (KiCad 10.0.7 PCB Editor, File → Import → Netlist, on an empty board): the RGB sleep lamp
+    netlist exported from Hassassin loads with 0 warnings and 0 errors; Update PCB adds all 53 footprints
+    with 146 pads and 35 nets. The test board was not saved.
   - The exported netlist opens in KiCad's PCB editor ("Update PCB from netlist" / import netlist) for a
     test project, with every component and net present.
 - [ ] **S14. `.kicad_sch` export.**
