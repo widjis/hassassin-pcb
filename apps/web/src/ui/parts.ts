@@ -25,6 +25,7 @@ import { parseKicadFootprint, parseKicadSymbolLib } from '@hassassin/kicad-impor
 import type { App } from '../app.ts';
 import { library, serverLibrary } from '../library.ts';
 import { clear, h } from './dom.ts';
+import { openSymbolEditor } from './symbolEditor.ts';
 
 const SRC_LABEL: Record<string, string> = { generic: 'generic', project: 'project', kicad: 'KiCad', team: 'team' };
 
@@ -185,7 +186,7 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
   const detailEl = h('div', {});
   const bomEl = h('div', {});
   root.append(
-    h('div', { class: 'section-title' }, h('span', {}, 'Library')),
+    h('div', { class: 'section-title' }, h('span', {}, 'Library'), h('button', { class: 'btn', title: 'Make a symbol from a pin table (e.g. pasted from a datasheet)', onclick: () => openSymbolEditor(app, { onPlace: (def) => hooks.place(def, []) }) }, 'New symbol…')),
     searchBox,
     status,
     resultsEl,
@@ -256,6 +257,9 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
               hooks.place(part, app.doc ? storePartOps(app.doc, p, selFp ? { ...selFp, name: fpName! } : null) : []);
             },
           }, 'Place on schematic'),
+          app.doc?.meta[`part:${p.id}`]
+            ? h('button', { title: 'Change pins, sides and units of this symbol; placed copies follow', onclick: () => openSymbolEditor(app, { def: app.doc!.meta[`part:${p.id}`] as PartDef, onPlace: (def) => hooks.place(def, []) }) }, 'Edit symbol…')
+            : null,
           hooks.shareAuth() && p.source !== 'generic'
             ? h('button', {
                 onclick: async () => {

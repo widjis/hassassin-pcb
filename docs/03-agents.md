@@ -80,6 +80,7 @@ between blocks.
 | set_rule | write | A ruleset (default) or a rule on specific objects |
 | set_property / set_spec | write | Part properties / project requirements |
 | add_part / connect_pins / add_label | write | Schematic editing |
+| create_symbol | write | Symbol from a pin table (pasted text or a list): sides by function, by package order or from the table; units and a power unit; updates placed copies when called again |
 | place_unit / switch_unit | write | Place a unit of a multi-unit part that is missing (e.g. the power unit), or change which unit a symbol is |
 | add_sheet | write | Hierarchical sub-sheet block with an empty sheet inside; `add_label kind=hier` inside adds a block pin, wired on the parent as `Block:NAME` |
 | add_power | write | Power symbol (GND, a rail) with a short wire, or a PWR_FLAG |

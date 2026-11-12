@@ -84,7 +84,9 @@ const C = {
   power: '#ff8f8f',
   block: '#7aa2f7',
   nc: '#ff6b6b',
-  sel: '#ffd166',
+  // Selection: cyan, so it stands apart from the yellow part bodies, green wires and blue labels.
+  sel: '#3ee0ff',
+  selFill: 'rgba(62,224,255,0.13)',
   text: '#c7cdd8',
 };
 
@@ -320,9 +322,18 @@ export class SchematicView {
     const doc = this.app.doc;
     if (!s || !doc) return this.app.say('Open or create a schematic first.');
     const at = this.snap({ x: this.view.cx, y: this.view.cy });
-    // Step right past symbols already sitting at the view centre.
-    const taken = s.children.map((c) => doc.nodes.get(c)).filter((n) => n?.type === 'symbol').map((n) => this.app.engine?.get(n!.uid, 'position')?.value as Vec2 | undefined);
-    for (let i = 0; i < 40 && taken.some((q) => q && Math.abs(q.x - at.x) < 7 && Math.abs(q.y - at.y) < 7); i++) at.x += 12.7;
+    // Step right until the new symbol's outline (body and pins, plus a margin) is clear of the others.
+    const e = this.app.engine;
+    const taken = e ? s.children.map((c) => doc.nodes.get(c)).filter((n) => n?.type === 'symbol').map((n) => symbolBounds(doc, e, n!.uid)) : [];
+    const u0 = part.units[0];
+    let ext = { minX: -5, minY: -5, maxX: 5, maxY: 5 };
+    if (u0) {
+      const xs = [...u0.pins.map((q) => q.at.x), ...u0.graphics.flatMap((g) => (g.t === 'rect' ? [g.a.x, g.b.x] : []))];
+      const ys = [...u0.pins.map((q) => q.at.y), ...u0.graphics.flatMap((g) => (g.t === 'rect' ? [g.a.y, g.b.y] : []))];
+      if (xs.length) ext = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs) + 8, maxY: Math.max(...ys) };
+    }
+    const hits = () => taken.some((b) => at.x + ext.minX - 2.54 < b.maxX && at.x + ext.maxX + 2.54 > b.minX && at.y + ext.minY - 2.54 < b.maxY && at.y + ext.maxY + 2.54 > b.minY);
+    for (let i = 0; i < 80 && hits(); i++) at.x += 5.08;
     // A multi-unit part starts with unit A; the inspector offers the other units.
     const multi = part.units.length > 1;
     const { ops, ref, uids } = placePartOps(doc, s.uid, part, at, multi ? { units: [1] } : {});
@@ -1134,7 +1145,7 @@ export class SchematicView {
       const b = vec(e.get(n.uid, 'end')?.value);
       if (!a || !b) continue;
       ctx.strokeStyle = isSel(n) ? C.sel : C.wire;
-      ctx.lineWidth = lw(0.15);
+      ctx.lineWidth = isSel(n) ? Math.max(2.5, lw(0.3)) : lw(0.15);
       ctx.beginPath();
       const p = S(a);
       const q = S(b);
@@ -1149,6 +1160,17 @@ export class SchematicView {
       const f = symbolFrame(e, n.uid);
       const W = (p: Vec2) => S(symToSheet(f, p));
       const selected = isSel(n);
+      if (selected) {
+        // A tinted box around each selected part: what a drag will move is visible at a glance.
+        const b = this.symbolBox(n);
+        const a = S({ x: b.minX - 0.6, y: b.minY - 0.6 });
+        const z = S({ x: b.maxX + 0.6, y: b.maxY + 0.6 });
+        ctx.fillStyle = C.selFill;
+        ctx.fillRect(a.x, a.y, z.x - a.x, z.y - a.y);
+        ctx.strokeStyle = C.sel;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(a.x, a.y, z.x - a.x, z.y - a.y);
+      }
       ctx.strokeStyle = selected ? C.sel : C.body;
       for (const g of (n.data?.graphics ?? []) as (SymGraphicSpec | { t: 'arc'; s: Vec2; m: Vec2; e: Vec2; w: number })[]) {
         ctx.lineWidth = lw('w' in g ? Math.max(g.w, 0.15) : 0.15);
@@ -1217,7 +1239,7 @@ export class SchematicView {
       const p = vec(e.get(n.uid, 'position')?.value);
       if (!p) continue;
       if (n.type === 'junction') {
-        ctx.fillStyle = C.wire;
+        ctx.fillStyle = isSel(n) ? C.sel : C.wire;
         const q = S(p);
         ctx.beginPath();
         ctx.arc(q.x, q.y, Math.max(2.5, 0.45 * s), 0, Math.PI * 2);

@@ -35,3 +35,4 @@ export * from './sheetFrame.ts';
 export * from './schematicExport.ts';
 export * from './hierarchy.ts';
 export * from './multiUnit.ts';
+export * from './symbolEditor.ts';

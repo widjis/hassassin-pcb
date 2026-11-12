@@ -9,8 +9,9 @@ import {
   type Ruleset,
 } from '@hassassin/core';
 import type { App } from '../app.ts';
-import { placeUnitOps, renameRefOps, setPartPropsOps, switchUnitOps, unitLetter, unitsOf, type Op } from '@hassassin/core';
+import { partDefOf, placeUnitOps, renameRefOps, setPartPropsOps, switchUnitOps, unitLetter, unitsOf, type Op } from '@hassassin/core';
 import { clear, h } from './dom.ts';
+import { openSymbolEditor } from './symbolEditor.ts';
 
 const ORDER = [...RULE_DEFS.keys()];
 const label = (name: string) => RULE_DEFS.get(name)?.label ?? name;
@@ -151,6 +152,8 @@ export function mountInspector(app: App, root: HTMLElement): void {
         form.append(h('label', { class: 'k' }, 'Not placed'), row);
       }
     }
+    const def = partDefOf(doc, n);
+    if (def) form.append(h('label', { class: 'k' }, 'Symbol'), h('button', { title: 'Change pins, sides and units; every placed copy follows', onclick: () => openSymbolEditor(app, { def }) }, 'Edit symbol…'));
     return h('div', {}, h('strong', {}, 'Part'), form, h('div', { class: 'dim', style: 'font-size:11.5px;margin:-4px 0 8px' }, 'Changes apply to every unit and to the board component; a new footprint reaches the board on Update PCB.'));
   };
 

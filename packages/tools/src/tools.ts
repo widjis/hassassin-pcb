@@ -4,6 +4,16 @@
  * project is live, shared with collaborators).
  */
 import {
+  parsePinTable,
+  pinTypeFrom,
+  buildSymbolUnits,
+  symbolPart,
+  updatePlacedSymbolsOps,
+  PIN_SIDES,
+  type PinRow,
+  type PinSide,
+  type PinLayout,
+  type PinOrder,
   placedUnits,
   unitsOf,
   unitLetter,
@@ -617,6 +627,8 @@ export const TOOLS: ToolDef[] = [
         ref: { type: 'string', description: 'Reference to use (default: next free)' },
         mpn: { type: 'string' },
         package: { type: 'string', description: 'Footprint (default per kind, e.g. chip-0603, soic-8; any name search_footprints returns)' },
+        pin_layout: { type: 'string', enum: ['package', 'auto', 'table'], description: 'ic: where pins go. package (default): first half down the left, second half up the right, as on the package; auto: supplies on top, grounds at the bottom, inputs left, outputs right; table: the sides in pin_sides' },
+        pin_sides: { type: 'array', items: { type: 'string', enum: ['left', 'right', 'top', 'bottom'] }, description: 'ic: side of each pin in pin-number order (with pin_layout table)' },
       },
       required: ['kind', 'x', 'y'],
     },
@@ -625,6 +637,20 @@ export const TOOLS: ToolDef[] = [
       if (!PART_KINDS.some((k) => k.kind === kind)) throw new ToolError(`Unknown kind "${kind}"`);
       const sheet = sheetByName(p, a.sheet);
       const spec = makeSymbol(kind, { ...(a.pins ? { pins: num(a.pins, 'pins') } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}), ...(Array.isArray(a.pin_names) ? { pinNames: a.pin_names.map(String) } : {}) });
+      // Pin sides for an IC (S16): same rules as the symbol editor.
+      const layout = typeof a.pin_layout === 'string' ? a.pin_layout : Array.isArray(a.pin_sides) ? 'table' : 'package';
+      if (kind === 'ic' && layout !== 'package') {
+        if (!['auto', 'table'].includes(layout)) throw new ToolError('pin_layout must be package, auto or table');
+        const sides = Array.isArray(a.pin_sides) ? a.pin_sides.map(String) : [];
+        const rows: PinRow[] = spec.pins.map((q, i) => {
+          const side = sides[i];
+          if (side !== undefined && !(PIN_SIDES as readonly string[]).includes(side)) throw new ToolError(`pin_sides[${i}] must be left, right, top or bottom`);
+          return { number: q.number, name: q.name, type: pinTypeFrom('', q.name), ...(side ? { side: side as PinSide } : {}) };
+        });
+        const u = buildSymbolUnits(rows, { layout: layout as PinLayout })[0]!;
+        spec.pins = u.pins;
+        spec.graphics = u.graphics;
+      }
       // Pins land on the 2.54 mm grid, so wires to other parts can run straight.
       const at = pinGridOrigin({ x: num(a.x, 'x'), y: num(a.y, 'y') }, spec.pins.map((q) => q.at), 0, 'none', schematicGrid(p.doc).pin);
       const ref = typeof a.ref === 'string' && a.ref.trim() ? a.ref.trim() : undefined;
@@ -1462,6 +1488,74 @@ export const TOOLS: ToolDef[] = [
       return {
         id: part.id, name: part.name, description: part.description, prefix: part.prefix, value: part.value, footprint: part.footprint, footprints: part.footprints, properties: part.properties, offers: part.offers,
         units: part.units.map((u, i) => ({ unit: i + 1, pins: u.pins.map((x) => `${x.number}${x.name && x.name !== '~' ? ` ${x.name}` : ''} (${x.type})`) })),
+      };
+    },
+  },
+  {
+    name: 'create_symbol',
+    description: 'Create (or update) a symbol for a part that has no library symbol, from its pin table, e.g. pasted from the datasheet. pins: text with one pin per line ("number name type", tab / comma separated, a header line is fine), or pin_list: a list of {number, name, type, side, unit}. Types: input, output, bidirectional, passive, power_in, power_out, open_collector, no_connect … (datasheet words I, O, I/O, P, G, OD also work; missing types are guessed from the names). layout: auto (default: supplies top, grounds bottom, inputs left, outputs right), package (pin order around the package) or table (the side of each pin). power_unit=true puts the power pins in a unit of their own; a unit column (A, B …) splits gates. The part is stored in the project; place it with place_part using the returned id. Calling again with the same name updates the part and every placed copy.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        pins: { type: 'string', description: 'Pin table text, one pin per line' },
+        pin_list: { type: 'array', items: { type: 'object' }, description: 'Instead of pins: a list of {number, name, type, side, unit}' },
+        layout: { type: 'string', enum: ['auto', 'package', 'table'] },
+        order: { type: 'string', enum: ['table', 'number', 'name'], description: 'Order of pins along a side (default: as in the table)' },
+        power_unit: { type: 'boolean' },
+        prefix: { type: 'string', description: 'Reference prefix, default U' },
+        value: { type: 'string' },
+        footprint: { type: 'string' },
+        description: { type: 'string' },
+        mpn: { type: 'string' },
+      },
+      required: ['name'],
+    },
+    run: (p, a) => {
+      let rows: PinRow[];
+      if (a.pins === undefined && Array.isArray(a.pin_list)) a = { ...a, pins: a.pin_list };
+      let skipped: string[] = [];
+      if (typeof a.pins === 'string') ({ rows, skipped } = parsePinTable(a.pins));
+      else if (Array.isArray(a.pins))
+        rows = a.pins.map((x, i) => {
+          const o = (x ?? {}) as Record<string, unknown>;
+          const number = String(o.number ?? '').trim();
+          const name = String(o.name ?? number).trim();
+          const side = o.side === undefined ? undefined : String(o.side);
+          if (side !== undefined && !(PIN_SIDES as readonly string[]).includes(side)) throw new ToolError(`pins[${i}].side must be left, right, top or bottom`);
+          const unit = o.unit === undefined ? undefined : /^(power|pwr)$/i.test(String(o.unit)) ? 0 : parseUnit(String(o.unit), 99);
+          return { number, name, type: pinTypeFrom(String(o.type ?? ''), name), ...(side ? { side: side as PinSide } : {}), ...(unit !== undefined ? { unit } : {}) };
+        });
+      else throw new ToolError('pins must be a pin table (text) or a list of pins');
+      const name = str(a.name, 'name');
+      const id = `project:${name.trim().toLowerCase().replace(/[^a-z0-9.+-]+/g, '-').replace(/^-+|-+$/g, '') || 'symbol'}`;
+      const old = p.doc.meta[`part:${id}`] as ReturnType<typeof symbolPart> | undefined;
+      let def: ReturnType<typeof symbolPart>;
+      try {
+        def = symbolPart({
+          id,
+          name,
+          rows,
+          options: { ...(typeof a.layout === 'string' ? { layout: a.layout as PinLayout } : {}), ...(typeof a.order === 'string' ? { order: a.order as PinOrder } : {}), ...(a.power_unit ? { powerUnit: true } : {}) },
+          ...(typeof a.prefix === 'string' ? { prefix: a.prefix } : old ? { prefix: old.prefix } : {}),
+          ...(typeof a.value === 'string' ? { value: a.value } : {}),
+          ...(typeof a.footprint === 'string' ? { footprint: a.footprint } : old?.footprint ? { footprint: old.footprint } : {}),
+          ...(typeof a.description === 'string' ? { description: a.description } : {}),
+          ...(typeof a.mpn === 'string' ? { properties: { MPN: a.mpn } } : old?.properties ? { properties: old.properties } : {}),
+          version: (old?.version ?? 0) + 1,
+        });
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      const upd = updatePlacedSymbolsOps(p.doc, p.engine, def);
+      apply(p, old ? `Update symbol ${name}` : `Create symbol ${name}`, [{ op: 'setMeta', key: `part:${id}`, value: def }, ...upd.ops]);
+      return {
+        id,
+        ...(old ? { updated: true, placedCopiesRedrawn: upd.updated } : {}),
+        ...(upd.orphans.length ? { warning: `These placed units no longer exist in the symbol: ${upd.orphans.join(', ')}` } : {}),
+        units: def.units.map((u, i) => ({ unit: unitLabel(def, i + 1), pins: u.pins.map((q) => `${q.number} ${q.name} (${q.type})`) })),
+        ...(skipped.length ? { skippedLines: skipped.slice(0, 10) } : {}),
       };
     },
   },
