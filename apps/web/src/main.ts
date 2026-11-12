@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { kicadNetlist, kicadSchematic, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
@@ -645,6 +645,19 @@ $('schKicadBtn').addEventListener('click', () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   app.say(`Exported ${base}-kicad.zip — ${r.sheets} sheet${r.sheets === 1 ? '' : 's'}, ${r.symbols} parts; open ${r.root} in KiCad${r.warnings.length ? ` · ${r.warnings.length} footprint${r.warnings.length === 1 ? '' : 's'} without a KiCad match` : ''}`);
+});
+$('backBtn').addEventListener('click', () => {
+  if (!app.doc || !app.engine) return app.say('Open or create a project first.');
+  const r = planBackAnnotation(app.doc, app.engine);
+  if (!r.changes.length && !r.unexplained.length) return app.say('The schematic already matches the board.');
+  const lines = [
+    ...(r.changes.length ? ['Changes for the schematic:', ...r.changes.map((c) => `  • ${describeBackChange(c)}`)] : ['No renames or swaps to write back.']),
+    ...(r.unexplained.length ? ['', 'Left alone (not a rename or an allowed swap; Update PCB goes the other way):', ...r.unexplained.slice(0, 12).map((u) => `  • ${u}`)] : []),
+  ];
+  if (!r.changes.length) return void alert(lines.join('\n'));
+  if (!confirm(`${lines.join('\n')}\n\nApply? (One undo step.)`)) return;
+  app.apply('Update schematic from PCB', r.ops);
+  app.say(`Updated the schematic from the board: ${r.changes.length} change${r.changes.length === 1 ? '' : 's'}.`);
 });
 $('netExportBtn').addEventListener('click', () => {
   if (!app.doc || !app.engine) return app.say('Open or create a project first.');

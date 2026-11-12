@@ -17,6 +17,7 @@ export * from './schematic.ts';
 export * from './netlist.ts';
 export * from './bus.ts';
 export * from './ercSettings.ts';
+export * from './backAnnotate.ts';
 export * from './kicadNetlist.ts';
 export * from './kicadSchematic.ts';
 export * from './erc.ts';

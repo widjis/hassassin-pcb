@@ -99,6 +99,8 @@ between blocks.
 | add_bus / add_bus_entry | write | A bus named like `DATA[0..7]` or `I2C{SDA SCL}` (local, global or hierarchical), optionally labelling pins with its members in order; a bus entry beside a bus. Members connect by their net labels, across sheet pins in order, and by a global bus label everywhere, as in KiCad |
 | set_sheet_frame / add_note / add_group_box | write | Drawing frame with title block; free text notes; titled boxes around a block of parts |
 | update_pcb | write | Schematic → board sync |
+| back_annotate | write | Board → schematic: renamed references, pin swaps and gate swaps written back (preview with `apply: false`) |
+| swap_pads / swap_gates | write | On the board, swap the nets of two pads within the part's swap groups (`swapGroups`), or of two identical units |
 | move_part / route / refill_pours | write | Board editing |
 | search_parts / get_part | read | Find parts (project, generic, team library, KiCad libraries); `get_part` also takes a placed component's reference (U1) |
 | search_footprints | read | Find footprints (generic, project, KiCad) |

@@ -5,6 +5,10 @@
  */
 import {
   pinPadCheck,
+  planBackAnnotation,
+  describeBackChange,
+  swapGroups,
+  partDefOf,
   ercSettings,
   defaultPinLevel,
   setPinLevelOp,
@@ -1006,6 +1010,72 @@ export const TOOLS: ToolDef[] = [
       apply(p, 'Add sub-sheet', r.ops);
       const sheet = p.doc.nodes.get(r.sheet)!;
       return { sheet: sheetPath(p.doc, sheet), block: r.block, parent: sheetPath(p.doc, parent) };
+    },
+  },
+  {
+    name: 'swap_pads',
+    description: 'On the board, swap the nets of two pads of one component (a pin swap), for example two equivalent GPIOs or the two ends of a resistor, to make routing easier. Only pads in a group the part allows: its swapGroups property (e.g. "1 2; 3 4 5", set with set_property) or both pads of a two-pin passive part. Traces stay where they are, so reroute them; then back_annotate writes the swap into the schematic.',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, a: { type: 'string', description: 'Pad number' }, b: { type: 'string', description: 'Pad number' } }, required: ['ref', 'a', 'b'] },
+    run: (p, a) => {
+      const ref = str(a.ref, 'ref');
+      const [x, y] = [str(a.a, 'a'), str(a.b, 'b')];
+      const el = [...p.doc.nodes.values()].find((n) => n.type === 'element' && n.name === ref);
+      if (!el) throw new ToolError(`No component ${ref} on the board`);
+      const syms = [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && String(n.props.ref ?? n.name) === ref);
+      const groups = swapGroups(p.doc, syms, el);
+      if (!groups.some((g) => g.includes(x) && g.includes(y))) throw new ToolError(`${ref} does not allow swapping pads ${x} and ${y}${groups.length ? ` (allowed: ${groups.map((g) => g.join(' ')).join('; ')})` : '; set its swapGroups property first, e.g. "1 2"'}`);
+      const pad = (n: string) => el.children.map((c) => p.doc.nodes.get(c)).find((q) => q?.type === 'pad' && String(q.props.number ?? q.name) === n);
+      const px = pad(x);
+      const py = pad(y);
+      if (!px || !py) throw new ToolError(`${ref} has no pad ${!px ? x : y}`);
+      apply(p, `Swap ${ref} pads ${x} and ${y}`, [
+        { op: 'setProp', uid: px.uid, key: 'net', value: (py.props.net as string) ?? null },
+        { op: 'setProp', uid: py.uid, key: 'net', value: (px.props.net as string) ?? null },
+      ]);
+      return { ref, [x]: py.props.net ?? null, [y]: px.props.net ?? null, note: 'Reroute the traces of these pads; back_annotate updates the schematic.' };
+    },
+  },
+  {
+    name: 'swap_gates',
+    description: 'On the board, swap two identical units (gates) of a multi-unit part, e.g. two NAND gates of U3: the pads of unit_a take the nets of unit_b and the other way round. Then back_annotate swaps the units in the schematic.',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, unit_a: { type: 'number' }, unit_b: { type: 'number' } }, required: ['ref', 'unit_a', 'unit_b'] },
+    run: (p, a) => {
+      const ref = str(a.ref, 'ref');
+      const ua = num(a.unit_a, 'unit_a');
+      const ub = num(a.unit_b, 'unit_b');
+      const sym = [...p.doc.nodes.values()].find((n) => n.type === 'symbol' && String(n.props.ref ?? n.name) === ref);
+      const def = sym ? partDefOf(p.doc, sym) : null;
+      if (!def) throw new ToolError(`${ref} has no stored part definition, so its units are unknown`);
+      const A = def.units[ua - 1];
+      const B = def.units[ub - 1];
+      if (!A || !B || ua === ub) throw new ToolError(`${ref} has units 1 … ${def.units.length}; give two different ones`);
+      const same = A.pins.length === B.pins.length && A.pins.every((q, i) => q.name === B.pins[i]!.name && q.type === B.pins[i]!.type);
+      if (!same) throw new ToolError(`Units ${ua} and ${ub} of ${ref} are not identical gates, so they cannot be swapped`);
+      const el = [...p.doc.nodes.values()].find((n) => n.type === 'element' && n.name === ref);
+      if (!el) throw new ToolError(`No component ${ref} on the board`);
+      const pad = (n: string) => el.children.map((c) => p.doc.nodes.get(c)).find((q) => q?.type === 'pad' && String(q.props.number ?? q.name) === n);
+      const ops: Op[] = [];
+      A.pins.forEach((qa, i) => {
+        const pa = pad(qa.number);
+        const pb = pad(B.pins[i]!.number);
+        if (!pa || !pb) return;
+        ops.push({ op: 'setProp', uid: pa.uid, key: 'net', value: (pb.props.net as string) ?? null }, { op: 'setProp', uid: pb.uid, key: 'net', value: (pa.props.net as string) ?? null });
+      });
+      apply(p, `Swap ${ref} gates ${ua} and ${ub}`, ops);
+      return { ref, swapped: [ua, ub], pads: ops.length, note: 'Reroute the traces of these pads; back_annotate updates the schematic.' };
+    },
+  },
+  {
+    name: 'back_annotate',
+    description: 'Update the schematic from the board (the reverse of update_pcb): references renamed on the board, pin swaps within a part\'s swap groups and gate swaps are written into the schematic. Differences that are none of these are listed and left alone. apply: false to only preview.',
+    mutates: true,
+    input: { type: 'object', properties: { apply: { type: 'boolean', description: 'Default true; false to preview' } } },
+    run: (p, a) => {
+      const r = planBackAnnotation(p.doc, p.engine);
+      if (a.apply !== false && r.ops.length) apply(p, 'Update schematic from PCB', r.ops);
+      return { changes: r.changes.map(describeBackChange), applied: a.apply !== false && r.ops.length > 0, ...(r.unexplained.length ? { unexplained: r.unexplained } : {}) };
     },
   },
   {
