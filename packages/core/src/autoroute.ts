@@ -21,7 +21,7 @@ export interface AutorouteOptions {
   viaCost?: number;
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
-  /** Stop after this many milliseconds (default 20 s). */
+  /** Stop after this many milliseconds (default 30 s); connections not tried are reported as `time limit`. */
   timeLimitMs?: number;
 }
 

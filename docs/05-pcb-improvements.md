@@ -147,6 +147,19 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     Vitest checks for routed count and 0 DRC errors. These run in `pnpm test`; the benchmark boards do not
     (they are not in the repository).
   - The stated time limit and the code agree (today the comment says 20 s, the code uses 30 s).
+  - *Progress:* harness, fixtures and log replay done (`packages/tools/src/routeBench.ts`,
+    `packages/tools/test/autoroute-fixtures.test.ts`, `apps/cli/bench/autoroute.ts --fixtures`); known gaps
+    are recorded as `it.fails` tests that flip when an item fixes them. Still open: the baselines of the
+    two benchmark boards (their `.data` folders are not on the implementer's machine yet). Fixture
+    baselines on v0.0.3:
+    | Fixture | Routed | Vias | Length | Sharp corners (≥ 90°) | Bends / connection | Failure reason |
+    |---|---|---|---|---|---|---|
+    | qfn-escape (0.5 mm QFN-24 + 0.5 mm supply net) | 0 / 8 | 0 | 0 mm | 0 | 0 | no free path × 8 |
+    | reversed-bus (2 × 8-pin header, reversed) | 8 / 8 | 2 | 211.6 mm | 6 | 5.25 | — |
+    | off-grid (4 resistors off grid, one at 45°) | 4 / 4 | 0 | 48.5 mm | 6 | 3 | — |
+
+    On qfn-escape, routing only the signal nets gives 2 / 6, and all nets at 0.2 mm give 4 / 8: the shared
+    clearance zone is the main blocker (P8b), the rest is pin escape (P8c, P8f).
 - [ ] **P8b. Per-net clearance (clearance field).**
   - The obstacle grid stores, per layer and cell, the distance to the nearest copper and the nearest copper
     of a *different* net than that one (a two-label distance transform, computed once and updated when a

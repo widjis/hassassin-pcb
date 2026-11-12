@@ -1,77 +1,70 @@
 /**
- * Autorouter benchmark (docs/05-pcb-improvements.md, P8).
+ * Autorouter benchmark (docs/05-pcb-improvements.md, P8a).
  *
- *   node apps/cli/bench/autoroute.ts <snapshot.hpcb> [more.hpcb …] [--json]
+ *   node apps/cli/bench/autoroute.ts <board> [more boards …] [--json]
+ *   node apps/cli/bench/autoroute.ts --fixtures [--json]
  *
- * Reads each board (never writes it), rips up the copper of every net that has no pour
- * (traces and vias; pours, pads and poured nets stay), autoroutes, refills pours and runs DRC.
- * Prints one line of figures per board.
+ * A board is a `.hpcb` file or a server project folder (`.data/projects/<id>`): for a folder the
+ * snapshot is read and the transactions logged after it (`log.jsonl`) are replayed, so the figures are
+ * for the board as it is now. Boards are only read, never written: run it on copies.
+ *
+ * For each board: rip up the copper of every net that has no pour (traces and vias; pours, pads and
+ * poured nets stay), autoroute, refill pours, run DRC, and print one line of figures.
+ * `--fixtures` measures the synthetic boards used by the tests instead.
  */
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
-import { computeRatsnest, runDrc, type Op } from '@hassassin/core';
-import { openProject, runTool } from '@hassassin/tools';
+import { basename, join } from 'node:path';
+import { applyOps, parseDoc, stringifyDoc, type Op } from '@hassassin/core';
+import { measureAutoroute, openProject, ripUpUnpoured, ROUTE_FIXTURES, type Project, type RouteFigures } from '@hassassin/tools';
 import { loadGeometry } from '../src/io.ts';
 
-interface Row {
-  board: string;
-  connections: number;
-  routed: number;
-  failed: number;
-  vias: number;
-  length: number;
-  ms: number;
-  unroutedAfter: number;
-  drcErrors: number;
-  drcByKind: Record<string, number>;
-  reasons: Record<string, number>;
+async function readBoard(path: string): Promise<{ name: string; project: Project; replayed: number }> {
+  if (!statSync(path).isDirectory()) {
+    return { name: basename(path), project: openProject([{ name: basename(path), text: await readFile(path, 'utf8') }]), replayed: 0 };
+  }
+  const doc = parseDoc(await readFile(join(path, 'snapshot.hpcb'), 'utf8'));
+  const metaPath = join(path, 'meta.json');
+  const meta = existsSync(metaPath) ? (JSON.parse(await readFile(metaPath, 'utf8')) as { name?: string; snapshotSeq?: number }) : {};
+  let seq = meta.snapshotSeq ?? 0;
+  let replayed = 0;
+  const logPath = join(path, 'log.jsonl');
+  const lines = existsSync(logPath) ? (await readFile(logPath, 'utf8')).split('\n').filter(Boolean) : [];
+  for (const line of lines) {
+    const e = JSON.parse(line) as { seq: number; ops: Op[] };
+    if (e.seq <= seq) continue;
+    try {
+      applyOps(doc, e.ops);
+      replayed++;
+    } catch {
+      /* the server skips entries that do not apply; do the same */
+    }
+    seq = e.seq;
+  }
+  const name = meta.name ? `${meta.name} (${basename(path)})` : basename(path);
+  return { name, project: openProject([{ name: `${basename(path)}.hpcb`, text: stringifyDoc(doc) }]), replayed };
 }
 
-async function bench(path: string): Promise<Row> {
-  const p = openProject([{ name: basename(path), text: await readFile(path, 'utf8') }]);
-  // Rip up: traces and vias of nets without a pour.
-  const poured = new Set<string>();
-  for (const n of p.doc.nodes.values()) if (n.type === 'fill' && n.parent) poured.add(n.parent);
-  const ops: Op[] = [];
-  for (const n of p.doc.nodes.values()) {
-    if (n.type !== 'trace' && n.type !== 'via') continue;
-    const net = n.parent ? p.doc.nodes.get(n.parent) : undefined;
-    if (net?.type === 'net' && poured.has(net.uid)) continue;
-    ops.push({ op: 'remove', uid: n.uid });
-  }
-  if (ops.length) p.history.apply('Rip up', ops);
-  await runTool(p, 'refill_pours', {});
-  const connections = computeRatsnest(p.doc, p.engine, p.copper).lines.length;
-  const r = (await runTool(p, 'autoroute', {})) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number };
-  await runTool(p, 'refill_pours', {});
-  const drc = runDrc(p.doc, p.engine, p.copper).violations;
-  const errors = drc.filter((v) => v.severity === 'error' && v.kind !== 'unrouted');
-  const byKind: Record<string, number> = {};
-  for (const v of errors) byKind[v.kind] = (byKind[v.kind] ?? 0) + 1;
-  return {
-    board: basename(dirname(path)),
-    connections,
-    routed: r.routed,
-    failed: r.failed.length,
-    vias: r.vias,
-    length: r.totalLength,
-    ms: r.ms,
-    unroutedAfter: computeRatsnest(p.doc, p.engine, p.copper).lines.length,
-    drcErrors: errors.length,
-    drcByKind: byKind,
-    reasons: Object.fromEntries([...new Set(r.failed.map((f) => f.reason))].map((k) => [k, r.failed.filter((f) => f.reason === k).length])),
-  };
+function line(name: string, f: RouteFigures, extra = ''): string {
+  return (
+    `${name}: ${f.routed}/${f.connections} routed (${f.failed} failed, ${f.unroutedAfter} unrouted after), ` +
+    `${f.vias} vias, ${f.length} mm, ${f.ms} ms, DRC errors ${f.drcErrors} ${JSON.stringify(f.drcByKind)}, ` +
+    `sharp corners ${f.sharpCorners}, bends/connection ${f.bendsPerConnection}; failed: ${JSON.stringify(f.reasons)}${extra}`
+  );
 }
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
 await loadGeometry();
-for (const f of args.filter((a) => !a.startsWith('--'))) {
-  const row = await bench(f);
-  if (json) console.log(JSON.stringify(row));
-  else
-    console.log(
-      `${row.board}: ${row.routed}/${row.connections} routed (${row.failed} failed, ${row.unroutedAfter} unrouted after), ` +
-        `${row.vias} vias, ${row.length} mm, ${row.ms} ms, DRC errors ${row.drcErrors} ${JSON.stringify(row.drcByKind)}; failed: ${JSON.stringify(row.reasons)}`,
-    );
+if (args.includes('--fixtures')) {
+  for (const [name, make] of Object.entries(ROUTE_FIXTURES)) {
+    const f = await measureAutoroute(await make());
+    console.log(json ? JSON.stringify({ board: name, ...f }) : line(name, f));
+  }
+}
+for (const path of args.filter((a) => !a.startsWith('--'))) {
+  const { name, project, replayed } = await readBoard(path);
+  const ripped = ripUpUnpoured(project);
+  const f = await measureAutoroute(project);
+  console.log(json ? JSON.stringify({ board: name, replayed, ripped, ...f }) : line(name, f, ` [log entries replayed: ${replayed}, items ripped up: ${ripped}]`));
 }
