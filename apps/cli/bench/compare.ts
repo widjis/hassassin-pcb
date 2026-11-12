@@ -2,7 +2,7 @@
  * Side-by-side picture of two routings of one board (docs/05-pcb-improvements.md, P8a): signal traces,
  * vias, pads and the board edge, without the pours that hide them in the editor.
  *
- *   node apps/cli/bench/compare.ts <original.hpcb> <routed.hpcb> <out.html>
+ *   node apps/cli/bench/compare.ts <original.hpcb> <routed.hpcb> <out.html> [left title] [right title] [page title]
  *
  * Use the files `autoroute.ts --save <dir>` writes. Left: every trace of the nets without a pour; right:
  * the autorouted traces of the same nets.
@@ -12,7 +12,7 @@ import { arcPoints, boardOutline, collectCopper, type Vec2 } from '@hassassin/co
 import { openProject } from '@hassassin/tools';
 import { loadGeometry } from '../src/io.ts';
 await loadGeometry();
-const [origPath, routedPath, out] = process.argv.slice(2) as [string, string, string];
+const [origPath, routedPath, out, leftTitle, rightTitle, pageTitle] = process.argv.slice(2) as [string, string, string, string?, string?, string?];
 const svgOf = async (path: string, title: string, onlyAuto: boolean) => {
   const p = openProject([{ name: 'x.hpcb', text: await readFile(path, 'utf8') }]);
   const ob = boardOutline(p.doc, p.engine);
@@ -54,13 +54,13 @@ const svgOf = async (path: string, title: string, onlyAuto: boolean) => {
   const W = x1 - x0 + 4, H = y1 - y0 + 4;
   return { svg: `<svg viewBox="0 0 ${W.toFixed(2)} ${H.toFixed(2)}" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`, title, n, v };
 };
-const a = await svgOf(origPath, 'Original (hand-routed in KiCad)', false);
-const b = await svgOf(routedPath, 'Hassassin autorouter', true);
-await writeFile(out, `<!doctype html><meta charset="utf-8"><title>RGB lamp r6 routing</title><style>
+const a = await svgOf(origPath, leftTitle ?? 'Original (hand-routed in KiCad)', false);
+const b = await svgOf(routedPath, rightTitle ?? 'Hassassin autorouter', true);
+await writeFile(out, `<!doctype html><meta charset="utf-8"><title>${pageTitle ?? 'RGB lamp r6 routing'}</title><style>
 body{margin:0;background:#111;color:#ddd;font:13px system-ui} .row{display:flex;gap:12px;padding:12px} .col{flex:1;min-width:0}
 h2{font-size:14px;margin:4px 0} svg{width:100%;height:auto;background:#1a1a1a;border:1px solid #333}
 .edge{stroke:#e8c547;stroke-width:.15;fill:none} .pad{fill:#777;stroke:none;opacity:.8}
 .top{stroke:#e5533d;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:.9} .bot{stroke:#3d7be5;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
 .via{fill:#d9d9d9;stroke:#555;stroke-width:.1} p{margin:2px 0;color:#aaa}
-</style><div class="row"><div class="col"><h2>${a.title}</h2><p>${a.n} trace segments, ${a.v} vias (signal nets; poured power nets hidden)</p>${a.svg}</div><div class="col"><h2>${b.title}</h2><p>${b.n} trace segments, ${b.v} vias (same nets, ripped up and autorouted)</p>${b.svg}</div></div><p style="padding:0 12px">Red = top (F.Cu), blue = bottom (B.Cu), grey = pads, yellow = board edge.</p>`);
+</style><div class="row"><div class="col"><h2>${a.title}</h2><p>${a.n} trace segments, ${a.v} vias (signal nets; poured power nets hidden)</p>${a.svg}</div><div class="col"><h2>${b.title}</h2><p>${b.n} trace segments, ${b.v} vias (autorouted traces of the same nets)</p>${b.svg}</div></div><p style="padding:0 12px">Red = top (F.Cu), blue = bottom (B.Cu), grey = pads, yellow = board edge.</p>`);
 console.log('ok', out);

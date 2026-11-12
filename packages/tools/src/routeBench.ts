@@ -40,6 +40,8 @@ export interface RouteFigures {
   grid: number;
   /** Pads fanned out before routing (P8f). */
   fanouts: number;
+  /** Connections in a bundle (neighbouring pins at both ends, P8f). */
+  bundled: number;
   /**
    * Share of the straight autorouted length (0–1) that runs against its layer's default direction (P8f:
    * even copper layers horizontal, odd ones vertical); 45° pieces count half.
@@ -184,7 +186,7 @@ export function cornerFigures(doc: Doc, engine: StyleEngine, copper: string[] = 
 export async function measureAutoroute(p: Project, args: Record<string, unknown> = {}): Promise<RouteFigures> {
   await runTool(p, 'refill_pours', {});
   const connections = computeRatsnest(p.doc, p.engine, p.copper).lines.length;
-  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number; grid: number; fanouts: number };
+  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number; grid: number; fanouts: number; bundled: number };
   await runTool(p, 'refill_pours', {});
   const errors = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted');
   const drcByKind: Record<string, number> = {};
@@ -211,6 +213,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     arcs: c.arcs,
     grid: Math.round(r.grid * 1000) / 1000,
     fanouts: r.fanouts,
+    bundled: r.bundled,
     againstDirection: againstDirection(p.doc, p.engine, p.copper),
     offPlane: offPlane(p.doc, p.engine, p.copper),
   };
@@ -274,6 +277,52 @@ export async function fixtureReversedBus(): Promise<Project> {
   await runTool(p, 'add_part', { kind: 'connector', pins: 8, x: 40, y: 0 });
   for (let i = 1; i <= 8; i++) await wire(p, `D${i}`, `J1.${i}`, `J2.${9 - i}`);
   return finish(p, { x: 100, y: 100, width: 30, height: 26 }, [['J1', 106, 113], ['J2', 124, 113]]);
+}
+
+/**
+ * A bus: two 8-pin headers, the second one lower and to the right, pin i to pin i. A person draws the eight
+ * traces as one bundle at a constant spacing round the bend (P8f, bundles).
+ */
+export async function fixtureBus(): Promise<Project> {
+  const p = newProject('fixture-bus');
+  await runTool(p, 'add_part', { kind: 'connector', pins: 8, x: 0, y: 0 });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 8, x: 40, y: 0 });
+  for (let i = 1; i <= 8; i++) await wire(p, `B${i}`, `J1.${i}`, `J2.${i}`);
+  return finish(p, { x: 100, y: 100, width: 40, height: 40 }, [['J1', 106, 112], ['J2', 134, 126]]);
+}
+
+/**
+ * A small MCU board, closer to a real one: a 0.5 mm QFN-32 with its exposed pad, a 2×5 header whose
+ * pin order makes the left-side nets cross, a 1×6 header wired in reverse, an SOIC-8 EEPROM on I2C with
+ * two pull-ups, two decoupling capacitors, an LED with its resistor, VCC as a routed net and GND poured on
+ * B.Cu. For looking at the router's choices on something busier than one bus (P8f).
+ */
+export async function fixtureMcu(): Promise<Project> {
+  const p = newProject('fixture-mcu');
+  await runTool(p, 'add_part', { kind: 'ic', pins: 33, x: 60, y: 0, package: 'qfn-32-5x5-p0.5-ep3.5' });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 10, x: 0, y: 0, package: 'header-2x05-p2.54' });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 6, x: 120, y: 0, package: 'header-1x06-p2.54' });
+  await runTool(p, 'add_part', { kind: 'ic', pins: 8, x: 60, y: -40, package: 'soic-8' });
+  for (let i = 0; i < 2; i++) await runTool(p, 'add_part', { kind: 'resistor', x: 90 + i * 10, y: -40, package: 'chip-0603' });
+  for (let i = 0; i < 2; i++) await runTool(p, 'add_part', { kind: 'capacitor', x: 90 + i * 10, y: 40, package: 'chip-0603' });
+  await runTool(p, 'add_part', { kind: 'led', x: 60, y: 60, package: 'chip-0603' });
+  await runTool(p, 'add_part', { kind: 'resistor', x: 80, y: 60, package: 'chip-0603' });
+  // Left header: J1.1…J1.8 to U1.1…U1.8 (a 2×5 header numbers its pins across the rows, so neighbours swap).
+  for (let i = 1; i <= 8; i++) await wire(p, `IO${i}`, `U1.${i}`, `J1.${i}`);
+  await wire(p, 'VCC', 'J1.9', 'U1.9', 'U1.25', 'U2.8', 'R1.2', 'R2.2', 'C1.1', 'C2.1');
+  await wire(p, 'GND', 'J1.10', 'U1.33', 'U1.16', 'U2.4', 'C1.2', 'C2.2', 'D1.1', 'J2.6');
+  // Right header, reversed: J2.1…J2.5 to U1.21…U1.17.
+  for (let i = 1; i <= 5; i++) await wire(p, `P${i}`, `J2.${i}`, `U1.${22 - i}`);
+  await wire(p, 'SDA', 'U1.28', 'U2.5', 'R1.1');
+  await wire(p, 'SCL', 'U1.29', 'U2.6', 'R2.1');
+  await wire(p, 'LED', 'U1.12', 'R3.1');
+  await wire(p, 'LEDK', 'R3.2', 'D1.2');
+  await finish(p, { x: 100, y: 100, width: 44, height: 34 }, [
+    ['U1', 122, 118], ['J1', 106, 113], ['J2', 139, 111], ['U2', 122, 105, 90], ['R1', 128, 104, 90], ['R2', 130, 104, 90],
+    ['C1', 117, 121, 90], ['C2', 126, 122], ['D1', 120, 129], ['R3', 124, 128],
+  ]);
+  await runTool(p, 'set_rule', { target: 'net#"GND"', rule: 'pourLayers', value: 'B.Cu' });
+  return p;
 }
 
 /**
@@ -379,4 +428,4 @@ export async function fixturePlaneSlot(): Promise<Project> {
 /** Extra `autoroute` arguments per fixture. */
 export const FIXTURE_ARGS: Record<string, Record<string, unknown>> = { channel: { layers: ['F.Cu'] } };
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot } as const;
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot, bus: fixtureBus, mcu: fixtureMcu } as const;

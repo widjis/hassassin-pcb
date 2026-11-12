@@ -322,7 +322,8 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - **Fanout first.** For dense parts (BGA, QFN / QFP with fine pitch, connectors with many pins) the
     router first escapes every pin: a short 45° stub (a "dog-bone") from the pad to a via just outside
     the pad row, or a straight run out of the row, all in one regular pattern under or around the part;
-    the main routing then starts from those escape points. Vias never sit in or touch a pad (as today).
+    the main routing then starts from those escape points. Vias never sit in or touch a pad (as today),
+    except vias of a large pad's own net inside it (thermal vias in an exposed pad).
   - **Reference plane.** A cost for running over a gap in the pour or plane on the neighbouring layer
     (a split), and a stronger one for `high-speed`, `rf` and `diff-pair` nets (P16), so their return
     current has a solid path; nets of one interface keep to one layer where they can.
@@ -391,7 +392,58 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     RF, diff-pair) will set. A whole-plane view (keep one layer for the plane, count the pour islands a
     route would cut off) is left for later. (The `fill … clearance` error some runs show is pour against
     pour, P6, not the router.)
-    Still open in P8f: bundles, and the per-class costs (with P16).
+  - *Progress (2026-11-13), bundles and short pieces:* connections whose pads are neighbours on one part at
+    one end and on one part at the other (centres at most 1.25 × the pad's closest neighbour apart, and at
+    most 2.6 mm) are found as bundle mates and counted (`bundled`; 12 on the RGB lamp), for P16's classes.
+    They get no cost of their own. A bonus for running beside a mate at the bundle's spacing was tried and
+    removed: on fixture `bus` (two 8-pin headers, offset, pin i to pin i) it pulled the routes tighter than the
+    pins' pitch, crossed them and took 3 vias (the owner: "jelek banget"), and on the RGB lamp copy it cost
+    +10 % length at 0.1, 58 vias and +24 % at 0.3, and even as a bare exemption from the proximity cost it
+    ran into the time limit on 3 connections. Proximity and the layer directions already lay the bus side by
+    side at the pins' pitch, so that is what the test checks: 8 bundled, 0 vias, one bend per trace.
+    Owner's findings on the samples: a turn off a fanout stub was still sharp (a 45° piece of 0.07 mm at the
+    grid offset, the stub's end lying between grid lines), and every bus trace had a short jog at the
+    pad it ends on (its 45° run met the pad centre off its line). A clean-up step after smoothing now
+    removes short pieces (shorter than the corner setback) between two long runs:
+    - runs at 45° or 90° to each other: the short pieces go, and the runs meet at their corner; at 90° that
+      corner gets a 45° chamfer as large as fits (the setback, smaller where a neighbouring pad is in the
+      way; GND on `qfn-escape`: 0.67 mm instead of 0.07 mm);
+    - parallel runs with a small offset: the corner before (or after) moves along its run so that one run
+      lies on the other's line; where that corner is a via or the pad itself, the run goes on along its line
+      and ends in the pad off its centre (no more than a quarter of the pad's size from it).
+    Tests check that no 45° piece on `qfn-escape` is shorter than 0.15 mm and that each bus trace is two
+    pieces. RGB lamp: 59 / 59, 35 vias, 882.4 mm, bends per connection 3.36 → 3.10, one sharp corner left
+    (was 2), no new DRC errors. `bench/compare.ts` takes the panel titles as arguments (the fixture samples
+    were labelled as hand routing).
+  - *Progress (2026-11-13), fixture `mcu`:* at the owner's request, a busier board: a 0.5 mm QFN-32 with
+    its exposed pad, a 2×5 header (pins numbered across the rows) and a reversed 1×6 header on the QFN's
+    sides, an SOIC-8 EEPROM on I2C with two pull-ups, two decoupling capacitors, an LED and its resistor, VCC
+    routed and GND poured on B.Cu. It found four faults, fixed here:
+    - a pour whose net still had connections to make was painted as an obstacle for every other net, so
+      the whole poured layer was closed (all routes on F.Cu, VCC round half the board, 387 mm); pours are
+      no obstacles now (they are refilled after routing), and still count as their net's copper to end on;
+    - an SMD pad over its own net's pour on the other layer counted as joined to it (the island of a
+      ratsnest end was looked up on every layer), so the six GND pads were reported routed with no copper;
+      an end on a pad now belongs to that pad's island, and a connection leaves the pad on the pad's layer;
+    - the exposed pad could not be reached at all (vias never sit in a pad, and the QFN's pins fence it in
+      on F.Cu); a large SMD pad (at least 2 mm and twice the widest via across) now takes vias of its own
+      net inside, the usual thermal vias, and other nets' pads still keep their distance;
+    - the clean-up step above cut the corner inside a fanout stub, so a second connection that starts at the
+      stub's end was left open (VCC, 0.9 mm); a stub's end is now never removed or moved.
+    Pours are tested by a raster made once per run instead of their polygons, which took GND from 14.8 s to
+    0.65 s and the board from 21.5 s to 2.3 s. Result: 30 / 32 connections, 15 vias, 323 mm, no DRC errors,
+    every GND pad joined to the pour; a test checks it. The RGB lamp copy is unchanged (35 vias, 882.4 mm).
+    Open, found on this board:
+    - two IO nets of the left bus stay open: the router lays the odd pins' traces through the gaps *below*
+      the header's right-hand pads, which reverses the order against the QFN's pins, so the traces must
+      cross and two even pads are fenced in; rip-up then swaps the same two nets for 30 rounds (each one's
+      route crosses the other's stub exit). Passing *above* those pads keeps the order and needs no via. This
+      wants a view of the bus as a whole (the order of the nets along it), not one connection at a time;
+      more rounds, `order=difficulty` or no proximity cost do not help;
+    - a second connection at a fanned pad starts at the stub's end even when its target lies behind it, so
+      it turns back in two short pieces (a sharp-looking U-turn, GND at U1.16);
+    the corner-style tests skip this fixture until then.
+    Still open in P8f: the per-class costs (with P16).
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.

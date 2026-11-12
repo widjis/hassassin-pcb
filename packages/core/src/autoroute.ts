@@ -62,6 +62,8 @@ export interface AutorouteReport {
   ms: number;
   /** Pads fanned out before routing (P8f). */
   fanouts?: number;
+  /** Connections that belong to a bundle (P8f): their pads neighbour another connection's at both ends. */
+  bundled?: number;
 }
 
 class Heap {
@@ -361,9 +363,16 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   const layerIdx = new Map(layers.map((l, i) => [l, i]));
   // Cells covered by any pad on any layer: a via may never sit in (or touch) a pad, own net
   // included (solder would wick into the hole, and castellated module pads have no room).
+  // Exception: a large SMD pad of a net (an exposed / thermal pad under a QFN, at least 2 mm and twice the
+  // widest via across) takes vias of its own net inside, the usual way to join it to a plane; `thermal`
+  // holds that net's id on its cells.
   const padMask = new Uint8Array(N);
+  const thermal = new Int32Array(N);
+  const maxVia = Math.max(0.6, ...routedNets.map((n) => netRule(n, 'viaDiameter', 0.6)));
   for (const s of shapes) {
     if (s.kind !== 'pad') continue;
+    const big = !s.hole && !!s.net && Math.min(s.box.maxX - s.box.minX, s.box.maxY - s.box.minY) >= Math.max(2, 2 * maxVia);
+    const tid = big ? netId(s.net) : 0;
     for (const ar of s.areas) {
       let y0 = Infinity, y1 = -Infinity;
       for (const ring of ar) for (const q of ring) (y0 = Math.min(y0, q.y)), (y1 = Math.max(y1, q.y));
@@ -382,7 +391,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         for (let k = 0; k + 1 < xs.length; k += 2) {
           const i0 = Math.max(0, Math.floor((xs[k]! - minX) / g));
           const i1 = Math.min(W - 1, Math.ceil((xs[k + 1]! - minX) / g));
-          for (let i = i0; i <= i1; i++) padMask[j * W + i] = 1;
+          for (let i = i0; i <= i1; i++) {
+            const c = j * W + i;
+            if (tid && (!padMask[c] || thermal[c] === tid)) thermal[c] = tid;
+            else thermal[c] = 0;
+            padMask[c] = 1;
+          }
         }
       }
     }
@@ -392,20 +406,25 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const li = layerIdx.get(s.layer);
     if (li === undefined) continue;
     const id = netId(s.net);
-    // Pours of other nets are refilled around new traces, so they are not obstacles.
-    if (s.kind === 'fill' && !(s.net && routedNets.includes(s.net))) continue;
-    paint(li, id, { edges: s.kind === 'fill' ? [] : s.edges, areas: s.kind === 'fill' || s.kind === 'pad' ? s.areas : [] }, clearanceFor(s.keepOut, 'trace'));
+    // Pours are refilled around new traces, so they are no obstacles, also when their own net still has
+    // connections to make (then the pour still counts as that net's copper to start or end on: the islands
+    // are built from the shapes, not from this field). Painting them closed a whole poured layer to every
+    // other net (fixture mcu: GND poured on B.Cu with SMD pads still to join, all routing went to F.Cu).
+    if (s.kind === 'fill') continue;
+    paint(li, id, { edges: s.edges, areas: s.kind === 'pad' ? s.areas : [] }, clearanceFor(s.keepOut, 'trace'));
   }
 
   // Reference plane (P8f): cells covered by a pour, per copper layer (the pours as filled before routing).
   // A trace on layer li has a plane under it where a neighbouring copper layer is covered there and no
   // trace laid by this run cuts that pour (checked during the search).
   const cov = copper.map(() => null as Uint8Array | null);
+  // Each pour rasterised once (cell centres inside it): the islands of a poured net test their cells against
+  // it, not against the pour's polygon (which made every connection of that net scan the whole board).
+  const fillMask = new Map<(typeof shapes)[number], Uint8Array>();
   for (const s of shapes) {
     if (s.kind !== 'fill') continue;
-    const k = copper.indexOf(s.layer);
-    if (k < 0) continue;
-    const m = (cov[k] ??= new Uint8Array(N));
+    const own = new Uint8Array(N);
+    fillMask.set(s, own);
     for (const ar of s.areas) {
       let y0 = Infinity, y1 = -Infinity;
       for (const ring of ar) for (const q of ring) (y0 = Math.min(y0, q.y)), (y1 = Math.max(y1, q.y));
@@ -420,9 +439,13 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
           }
         xs.sort((u, v) => u - v);
         for (let t = 0; t + 1 < xs.length; t += 2)
-          for (let i = Math.max(0, Math.ceil((xs[t]! - minX) / g)); i <= Math.min(W - 1, Math.floor((xs[t + 1]! - minX) / g)); i++) m[j * W + i] = 1;
+          for (let i = Math.max(0, Math.ceil((xs[t]! - minX) / g)); i <= Math.min(W - 1, Math.floor((xs[t + 1]! - minX) / g)); i++) own[j * W + i] = 1;
       }
     }
+    const k = copper.indexOf(s.layer);
+    if (k < 0) continue;
+    const m = (cov[k] ??= new Uint8Array(N));
+    for (let c = 0; c < N; c++) if (own[c]) m[c] = 1;
   }
   /** Per routing layer: its neighbouring copper layers that carry a pour, with their routing-layer index (-1 if not routed). */
   const refAdj = layers.map((l) => {
@@ -453,6 +476,61 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const f = Number(fine.get(b)) - Number(fine.get(a));
     return f || lenOf(b) - lenOf(a);
   });
+  // Bundles (P8f): two connections of different nets whose pads are neighbours on one part at one end and
+  // on one part at the other end (a bus, a row of header pins) are mates; they are counted (`bundled`) for
+  // the signal classes of P16. Neighbours: centres no further apart than 1.25 × the pad's closest neighbour
+  // on its part, and at most 2.6 mm (a 0.1" header). No cost of their own: a bonus for running beside a mate
+  // pulled the routes tighter than the pins' pitch, crossed them and added vias (bus fixture, RGB lamp),
+  // while proximity and the layer directions already lay a bus side by side.
+  const bundled = new Set<(typeof rats)[number]>();
+  {
+    const midOf = (s: (typeof shapes)[number]) => ({ x: (s.box.minX + s.box.maxX) / 2, y: (s.box.minY + s.box.maxY) / 2 });
+    const partPads = new Map<string, Vec2[]>();
+    const padAt = (q: Vec2) => {
+      const s = padShapes.find((x) => x.box.minX - 1e-6 <= q.x && q.x <= x.box.maxX + 1e-6 && x.box.minY - 1e-6 <= q.y && q.y <= x.box.maxY + 1e-6 && (!x.areas[0] || inArea(q, x.areas[0])));
+      const part = s && doc.nodes.get(s.uid)?.parent;
+      return s && part ? { part, m: midOf(s) } : undefined;
+    };
+    for (const s of padShapes) {
+      const part = doc.nodes.get(s.uid)?.parent;
+      if (part) (partPads.get(part) ?? partPads.set(part, []).get(part)!).push(midOf(s));
+    }
+    const nearest = new Map<string, number>();
+    const closest = (part: string, m: Vec2) => {
+      const k = `${part}|${m.x}|${m.y}`;
+      let d = nearest.get(k);
+      if (d === undefined) {
+        d = Infinity;
+        for (const o of partPads.get(part) ?? []) {
+          const x = Math.hypot(o.x - m.x, o.y - m.y);
+          if (x > 1e-6) d = Math.min(d, x);
+        }
+        nearest.set(k, d);
+      }
+      return d;
+    };
+    type End = { part: string; m: Vec2 };
+    const ends = rats.map((r) => [padAt(r.a), padAt(r.b)] as const);
+    const near = (p: End, q: End) => {
+      if (p.part !== q.part) return 0;
+      const d = Math.hypot(p.m.x - q.m.x, p.m.y - q.m.y);
+      return d > 1e-6 && d <= 2.6 && d <= 1.25 * closest(p.part, p.m) + 1e-6 ? d : 0;
+    };
+    for (let x = 0; x < rats.length; x++) {
+      const [a1, b1] = ends[x]!;
+      if (!a1 || !b1 || a1.part === b1.part) continue;
+      for (let y = x + 1; y < rats.length; y++) {
+        if (rats[x]!.net === rats[y]!.net) continue;
+        const [a2, b2] = ends[y]!;
+        if (!a2 || !b2) continue;
+        let da = near(a1, a2), db = near(b1, b2);
+        if (!da || !db) (da = near(a1, b2)), (db = near(b1, a2));
+        if (!da || !db) continue;
+        bundled.add(rats[x]!).add(rats[y]!);
+      }
+    }
+  }
+  report.bundled = bundled.size;
   // Preferred direction per layer (P8f): from the `routeDirection` rule pattern over the copper stack
   // (alternate = top horizontal, next vertical …), overridden per layer by `opts.directions`. 0 = any,
   // 1 = horizontal, 2 = vertical. With a single routing layer there is no preference.
@@ -639,13 +717,19 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) ok = false;
         else if (!soft && dynHits(li, { x: cx(i), y: cy(j) }, viaD / 2, 0)) ok = false;
       }
-      // A via never sits on or touches a pad, the net's own included.
+      // A via never sits on or touches a pad, the net's own included, except inside a thermal pad of its net.
+      const inThermal = thermal[c] === id;
       for (let dj = -viaR; dj <= viaR && ok; dj++)
         for (let di = -viaR; di <= viaR; di++) {
           if (di * di + dj * dj > viaR * viaR) continue;
           const ii = i + di;
           const jj = j + dj;
-          if (ii < 0 || jj < 0 || ii >= W || jj >= H || padMask[jj * W + ii]) {
+          if (ii < 0 || jj < 0 || ii >= W || jj >= H) {
+            ok = false;
+            break;
+          }
+          const cc = jj * W + ii;
+          if (padMask[cc] && !(inThermal && thermal[cc] === id)) {
             ok = false;
             break;
           }
@@ -722,8 +806,14 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     };
     type End = Map<number, { cost: number; pts: Vec2[]; dir?: [number, number]; strict?: boolean }>;
     /** Entry states at end point q: grid state → cost (in cells) and the exact points from q up to (not including) the cell. */
-    const entries = (q: Vec2, out: End, dirOut?: [number, number]) => {
-      const ls = ownLayersAt(q);
+    const entries = (q: Vec2, out: End, dirOut?: [number, number], isl?: Set<number>) => {
+      // Only the layers where the end's own island has copper at q: an SMD pad over a pour of its net on the
+      // other layer is left on the pad's layer, not straight from the pour under it (no via there).
+      let ls = ownLayersAt(q);
+      if (isl) {
+        const onIsl = ls.filter((li) => [...isl].some((k) => memLayers[k]!.has(li) && onMem(mems[k]!, li, q, 1e-6)));
+        if (onIsl.length) ls = onIsl;
+      }
       const rho = padExtentAt(q) + width + cn + 3 * g;
       // A person leaves a pad straight along its long axis: other first directions cost a little more.
       let axis: 'x' | 'y' | null = null;
@@ -822,6 +912,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       for (const sh of m.shapes) {
         if (layerIdx.get(sh.layer) !== li) continue;
         if (q.x < sh.box.minX - extra - 1e-6 || q.x > sh.box.maxX + extra + 1e-6 || q.y < sh.box.minY - extra - 1e-6 || q.y > sh.box.maxY + extra + 1e-6) continue;
+        if (sh.kind === 'fill' && extra === 0) {
+          // Grid tests (island cells, starts and ends): the pour's raster at q's cell.
+          const c = cellOf(q);
+          if (c >= 0 && fillMask.get(sh)![c]) return true;
+          continue;
+        }
         if (sh.kind === 'pad' || sh.kind === 'fill' ? sh.areas.some((ar) => inArea(q, ar)) : sh.edges.some(([a, b, rr]) => distToSegment(q, a, b) <= rr + extra)) return true;
       }
       return false;
@@ -864,7 +960,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
      */
     const islandOf = (q: Vec2): Set<number> => {
       const roots = new Set<number>();
-      for (let k = 0; k < mems.length; k++) if (!mems[k]!.route) for (const li of memLayers[k]!) if (onMem(mems[k]!, li, q, 1e-6)) roots.add(findSet(k));
+      // A ratsnest end on a pad belongs to that pad's island only: an SMD pad over a pour of its net on the
+      // other layer is not joined to it (fixture mcu: every SMD GND pad over the B.Cu pour counted as done).
+      for (let k = 0; k < mems.length; k++) if (mems[k]!.kind === 'pad') for (const li of memLayers[k]!) if (onMem(mems[k]!, li, q, 1e-6)) roots.add(findSet(k));
+      if (!roots.size) for (let k = 0; k < mems.length; k++) if (!mems[k]!.route) for (const li of memLayers[k]!) if (onMem(mems[k]!, li, q, 1e-6)) roots.add(findSet(k));
       if (!roots.size) for (let k = 0; k < mems.length; k++) for (const li of memLayers[k]!) if (onMem(mems[k]!, li, q, 1e-6)) roots.add(findSet(k));
       const out = new Set<number>();
       for (let k = 0; k < mems.length; k++) if (roots.has(findSet(k))) out.add(k);
@@ -928,16 +1027,16 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     for (const st of groupB) if (!fanned(st) && onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
     const fa = fanAt(r.a);
     const fb = fanAt(r.b);
-    entries(fa ? fa.e : r.a, seeds, fa?.out);
-    entries(fb ? fb.e : r.b, goals, fb?.out);
+    entries(fa ? fa.e : r.a, seeds, fa?.out, islA);
+    entries(fb ? fb.e : r.b, goals, fb?.out, islB);
     // No way out of a stub's end: start from the pad after all.
     if (fa && !seeds.size) {
       for (const st of groupA) if (!groupB.has(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
-      entries(r.a, seeds);
+      entries(r.a, seeds, undefined, islA);
     }
     if (fb && !goals.size) {
       for (const st of groupB) if (onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
-      entries(r.b, goals);
+      entries(r.b, goals, undefined, islB);
     }
     if (!seeds.size || !goals.size) return { ok: false, reason: 'no room to leave the pad with the current clearances' };
     run++;
@@ -955,7 +1054,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const j = (c - i) / W;
       const dx = i < gi0 ? gi0 - i : i > gi1 ? i - gi1 : 0;
       const dy = j < gj0 ? gj0 - j : j > gj1 ? j - gj1 : 0;
-      return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
+      return (Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy));
     };
     /**
      * Proximity (P8f): cost of running right next to other nets' copper (fixed copper and run-routes),
@@ -1185,6 +1284,101 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       }
       return merged(out);
     };
+    /**
+     * Short pieces between two long ones (a grid offset at a fanout stub's or pad's end, a small stair) are
+     * replaced by the corner where the two long lines meet: at 45° that corner itself, at 90° a full chamfer
+     * (the setback on each side), so no 45° piece is left too short to see and the turn reads as sharp.
+     */
+    const tidy = (li: number, P: Vec2[]): Vec2[] => {
+      if (style === '90') return P;
+      const len = (a: Vec2, b: Vec2) => Math.hypot(b.x - a.x, b.y - a.y);
+      const dirOf = (a: Vec2, b: Vec2) => ({ x: (b.x - a.x) / len(a, b), y: (b.y - a.y) / len(a, b) });
+      // A fanout stub's end stays: other connections of the pad start there, and the stub is laid only as
+      // part of the first route through it.
+      const fixedPt = (q: Vec2) => myFans.some((f) => Math.hypot(f.e.x - q.x, f.e.y - q.y) < 1e-6);
+      for (let k = 1; k + 1 < P.length; k++) {
+        let j = k;
+        while (j + 1 < P.length - 1 && j - k < 3 && len(P[j]!, P[j + 1]!) < setback - 1e-6) j++;
+        if (j === k) continue;
+        if (P.slice(k, j + 1).some(fixedPt)) continue;
+        const A = P[k - 1]!, V = P[k]!, D = P[j]!, E = P[j + 1]!;
+        const u = dirOf(A, V), w = dirOf(D, E);
+        const dot = u.x * w.x + u.y * w.y;
+        const cross = u.x * w.y - u.y * w.x;
+        const is45 = Math.abs(dot - Math.SQRT1_2) < 1e-6;
+        if (dot > 1 - 1e-9 && Math.abs(cross) < 1e-9) {
+          // A small offset between two parallel runs (typically where a run meets a pad centre off its line):
+          // move the corner before it (or after it) so one run lies on the other's line, and the jog is gone.
+          const meet = (p0: Vec2, d0: Vec2, q0: Vec2, d1: Vec2): Vec2 | undefined => {
+            const c = d0.x * d1.y - d0.y * d1.x;
+            if (Math.abs(c) < 1e-9) return undefined;
+            const t2 = ((q0.x - p0.x) * d1.y - (q0.y - p0.y) * d1.x) / c;
+            return { x: p0.x + d0.x * t2, y: p0.y + d0.y * t2 };
+          };
+          let done = false;
+          if (k - 2 >= 0 && !fixedPt(A)) {
+            const Z = P[k - 2]!;
+            const z = dirOf(Z, A);
+            const A2 = meet(Z, z, E, w);
+            if (A2 && (A2.x - Z.x) * z.x + (A2.y - Z.y) * z.y > 1e-6 && (E.x - A2.x) * w.x + (E.y - A2.y) * w.y > 1e-6 && clearPath(li, [Z, A2, E])) {
+              P = [...P.slice(0, k - 1), A2, ...P.slice(j + 1)];
+              done = true;
+            }
+          }
+          if (!done && j + 2 < P.length && !fixedPt(E)) {
+            const F = P[j + 2]!;
+            const f = dirOf(E, F);
+            const E2 = meet(A, u, E, f);
+            if (E2 && (E2.x - A.x) * u.x + (E2.y - A.y) * u.y > 1e-6 && (F.x - E2.x) * f.x + (F.y - E2.y) * f.y > 1e-6 && clearPath(li, [A, E2, F])) {
+              P = [...P.slice(0, k), E2, ...P.slice(j + 2)];
+              done = true;
+            }
+          }
+          // At the path's start or end on a pad (the corner there is a via or the pad itself): run on along the
+          // first line and end in the pad off its centre, close enough to it to count as connected.
+          const inOwnPad = (q: Vec2, c: Vec2) =>
+            padShapes.some((x) => x.net === r.net && x.layer === layers[li] && x.areas[0] && inArea(c, x.areas[0]) && inArea(q, x.areas[0]) && Math.hypot(q.x - c.x, q.y - c.y) <= 0.25 * Math.min(x.box.maxX - x.box.minX, x.box.maxY - x.box.minY));
+          if (!done && j + 1 === P.length - 1 && !fixedPt(E)) {
+            const s2 = (E.x - A.x) * u.x + (E.y - A.y) * u.y;
+            const Y = { x: A.x + u.x * s2, y: A.y + u.y * s2 };
+            if (s2 > len(A, V) && inOwnPad(Y, E) && clearPath(li, [A, Y])) {
+              P = [...P.slice(0, k), Y];
+              done = true;
+            }
+          }
+          if (!done && k - 1 === 0 && !fixedPt(A)) {
+            const s2 = (A.x - E.x) * w.x + (A.y - E.y) * w.y;
+            const Y = { x: E.x + w.x * s2, y: E.y + w.y * s2 };
+            if (s2 < 0 && -s2 > len(D, E) && inOwnPad(Y, A) && clearPath(li, [Y, E])) {
+              P = [Y, ...P.slice(j + 1)];
+              done = true;
+            }
+          }
+          if (done) k = Math.max(0, k - 2);
+          continue;
+        }
+        if (!(is45 || Math.abs(dot) < 1e-6) || Math.abs(cross) < 1e-9) continue;
+        // X = A + t·u = D + s·w.
+        const t = ((D.x - A.x) * w.y - (D.y - A.y) * w.x) / cross;
+        const X = { x: A.x + u.x * t, y: A.y + u.y * t };
+        const tx = len(A, X), sx = len(X, E);
+        if (t <= 1e-6 || (E.x - X.x) * w.x + (E.y - X.y) * w.y <= 1e-6) continue;
+        let pts: Vec2[] | undefined;
+        if (is45) pts = clearPath(li, [A, X, E]) ? [X] : undefined;
+        else {
+          // The old 45° piece's leg, if the short pieces are one 45° piece: a chamfer must beat it.
+          const old = j === k + 1 && Math.abs(Math.abs(dirOf(V, D).x) - Math.SQRT1_2) < 1e-6 ? len(V, D) / Math.SQRT2 : 0;
+          let sb = Math.min(setback, k - 1 === 0 ? tx : tx / 2, j + 1 === P.length - 1 ? sx : sx / 2);
+          for (let tries = 0; tries < 4 && sb > Math.max(old + 1e-6, Math.min(0.05, width / 4)) && !pts; tries++, sb /= 1.5) {
+            const c = [{ x: X.x - u.x * sb, y: X.y - u.y * sb }, { x: X.x + w.x * sb, y: X.y + w.y * sb }];
+            if (clearPath(li, [A, ...c, E])) pts = c;
+          }
+        }
+        if (!pts) continue;
+        P = [...P.slice(0, k), ...pts, ...P.slice(j + 1)];
+      }
+      return merged(P);
+    };
     /** Corner pass by style: pieces (straight, or an arc with a mid point) along P. */
     const soften = (li: number, P: Vec2[]): { a: Vec2; b: Vec2; mid?: Vec2 }[] => {
       const out: { a: Vec2; b: Vec2; mid?: Vec2 }[] = [];
@@ -1279,7 +1473,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       return P;
     };
     for (const [ri, sgm] of raw.entries()) {
-      const pieces = soften(sgm.layer, smooth(sgm.layer, trimEnds(sgm.layer, merged(sgm.pts), ri === 0, ri === raw.length - 1)));
+      const pieces = soften(sgm.layer, tidy(sgm.layer, smooth(sgm.layer, trimEnds(sgm.layer, merged(sgm.pts), ri === 0, ri === raw.length - 1))));
       for (const pc of pieces) {
         const w = segWidth(pc.a, pc.b);
         if (pc.mid) {

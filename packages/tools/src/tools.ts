@@ -1464,7 +1464,7 @@ export const TOOLS: ToolDef[] = [
         ...(a.plane_gap_cost !== undefined ? { planeGapCost: Math.max(0, num(a.plane_gap_cost, 'plane_gap_cost')) } : {}),
       });
       apply(p, 'Autoroute', ops);
-      return { routed: report.routed.length, failed: report.failed, grid: report.grid, ms: report.ms, fanouts: report.fanouts ?? 0, totalLength: +report.routed.reduce((s, r) => s + r.length, 0).toFixed(2), vias: report.routed.reduce((s, r) => s + r.vias, 0) };
+      return { routed: report.routed.length, failed: report.failed, grid: report.grid, ms: report.ms, fanouts: report.fanouts ?? 0, bundled: report.bundled ?? 0, totalLength: +report.routed.reduce((s, r) => s + r.length, 0).toFixed(2), vias: report.routed.reduce((s, r) => s + r.vias, 0) };
     },
   },
   {
