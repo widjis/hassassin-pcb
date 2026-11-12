@@ -177,12 +177,23 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     the search checks at the neck width; segments touching it are emitted at that width. Run time on
     `reversed-bus` went from 1.7 s to 2.4 s (the distance field is heavier than the old halo); P8d / P8g
     look at speed again. The benchmark boards are still to be measured.
-- [ ] **P8c. Route per net, to any copper of the net.**
+- [x] **P8c. Route per net, to any copper of the net.**
   - A net is routed as a set of connected copper groups (pads, traces, vias already on the board): the
     search starts from every cell of one group and ends on any cell of another, until the net is one group.
     This replaces routing each ratsnest line to its fixed end point.
   - Off-grid pads are entered with a short exact segment from the nearest legal grid cell; the entry is
     checked against the real geometry.
+  - *Done:* a connection starts from every cell of the copper group at one end (flooded on the grid and
+    checked against the real copper with the connectivity rules) and ends on any cell of the group at
+    the other end; connections already joined by copper laid earlier in the run are counted as routed.
+    Pad entries are exact 0° / 45° / 90° runs out of the pad with at most one 45° or straight jog onto the
+    grid, each piece checked against the real copper. Fixtures: `qfn-escape` 4 / 8 → 8 / 8; `off-grid`
+    off-angle stubs 6 → 0 (a new test keeps every autorouted segment on the 45° directions); new `tee`
+    fixture, the third pad joins the routed trace beside it: 17.8 mm → 6.8 mm. The cell tests are memoised
+    per connection (`reversed-bus` 3.2 s → 1.9 s). Note: the collaboration test "keeps two editors in step
+    under concurrent edits" (`apps/server/test/sync.test.ts`, a fixed 10 s window) fails now and then when
+    the whole suite runs, more often with the added routing tests; it passes on its own. Outside the PM2
+    files, so left for the owner.
 - [ ] **P8d. Rip-up and retry by negotiated congestion.**
   - Method: negotiated congestion routing as published by McMurchie and Ebeling (PathFinder, 1995),
     written from the paper. All nets are routed with cells allowed to be shared; shared cells get a present

@@ -6,7 +6,8 @@
  * that test starts passing, Vitest reports it, and it is moved to the first block in the same commit.
  */
 import { describe, expect, it } from 'vitest';
-import { measureAutoroute, ROUTE_FIXTURES, type RouteFigures } from '@hassassin/tools';
+import { planAutoroute } from '@hassassin/core';
+import { fixtureTee, measureAutoroute, ROUTE_FIXTURES, type RouteFigures } from '@hassassin/tools';
 
 const cache = new Map<string, Promise<RouteFigures>>();
 const figures = (name: keyof typeof ROUTE_FIXTURES) => {
@@ -36,19 +37,34 @@ describe('autoroute fixtures: invariants', { timeout: 60_000 }, () => {
     expect(f.failed).toBe(0);
     expect(f.drcErrors).toBe(0);
   });
+  // P8c: entries into pads off the routing grid are exact 0° / 45° / 90° runs, so the 0.5 mm QFN
+  // (pad centres between grid points) routes completely (v0.0.3: 0 / 8, after P8b: 4 / 8).
+  it('qfn-escape: every connection routed (P8c)', async () => {
+    const f = await figures('qfn-escape');
+    expect(f.failed).toBe(0);
+    expect(f.drcErrors).toBe(0);
+  });
+  it('no autorouted segment off the 45° directions, pads off the grid included (P8c)', async () => {
+    for (const name of Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[]) expect([name, (await figures(name)).offAngle]).toEqual([name, 0]);
+  });
+  // P8c: a connection may end on any copper of its net. The third pad of net T sits 3 mm beside the
+  // routed T trace; the ratsnest points to a far pad (v0.0.3 / P8b: 17.8 mm), the router joins the trace.
+  it('tee: joins the existing trace next to the pad instead of the far pad (P8c)', async () => {
+    const p = await fixtureTee();
+    const { report } = planAutoroute(p.doc, p.engine, p.copper);
+    const t = report.routed.filter((r) => r.net === 'T');
+    expect(t).toHaveLength(1);
+    expect(t[0]!.length).toBeLessThan(10);
+    expect(report.failed).toEqual([]);
+  });
 });
 
-describe('autoroute fixtures: known gaps (v0.0.3)', { timeout: 60_000 }, () => {
-  // P8c: the 0.5 mm pitch pad centres fall between the 0.1 mm grid points, so traces cannot leave
-  // the pads straight (with a 0.05 mm grid all 8 route). v0.0.3: 0 / 8; after P8b: 4 / 8.
-  it.fails('qfn-escape: every connection routed (P8c)', async () => {
-    expect((await figures('qfn-escape')).failed).toBe(0);
-  });
-  // P8e: right-angle and acute corners come out of the search.
-  it.fails('reversed-bus: no corner of 90° or sharper (P8e)', async () => {
-    expect((await figures('reversed-bus')).sharpCorners).toBe(0);
-  });
-  it.fails('off-grid: no corner of 90° or sharper (P8e)', async () => {
-    expect((await figures('off-grid')).sharpCorners).toBe(0);
+describe('autoroute fixtures: known gaps', { timeout: 60_000 }, () => {
+  // P8e: right-angle and acute corners come out of the search. Checked over all fixtures together, so a
+  // fixture that happens to route without one does not flip the test.
+  it.fails('no corner of 90° or sharper on any fixture (P8e)', async () => {
+    let sharp = 0;
+    for (const name of Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[]) sharp += (await figures(name)).sharpCorners;
+    expect(sharp).toBe(0);
   });
 });

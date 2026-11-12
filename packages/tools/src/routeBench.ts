@@ -28,6 +28,8 @@ export interface RouteFigures {
   sharpCorners: number;
   /** Direction changes of autorouted copper per routed connection. */
   bendsPerConnection: number;
+  /** Autorouted segments that are not at a multiple of 45° (off-angle stubs). */
+  offAngle: number;
 }
 
 /** Remove traces and vias of every net that has no pour (pads, pours and poured nets stay). */
@@ -53,9 +55,10 @@ const key = (p: Vec2) => `${Math.round(p.x * 1e4)},${Math.round(p.y * 1e4)}`;
  * meet (and nothing else does), the turn between them. Returns the number of turns of 90° or more and
  * the number of turns of any size.
  */
-export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; bends: number } {
+export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; bends: number; offAngle: number } {
   const ends = new Map<string, { dir: Vec2; auto: boolean }[]>();
   const blocked = new Set<string>();
+  let offAngle = 0;
   for (const n of doc.nodes.values()) {
     if (n.type === 'via') {
       const p = vec(engine.get(n.uid, 'position')?.value);
@@ -70,6 +73,10 @@ export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; b
     if (len < 1e-9) continue;
     const layer = String(engine.get(n.uid, 'layer')?.value ?? '');
     const auto = n.props.autorouted === true;
+    if (auto) {
+      const deg = (((Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI) % 45 + 45) % 45;
+      if (Math.min(deg, 45 - deg) > 0.01) offAngle++;
+    }
     // Direction pointing away from the joint, for each end.
     const add = (at: Vec2, to: Vec2) => {
       const k = `${n.parent}|${layer}|${key(at)}`;
@@ -91,7 +98,7 @@ export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; b
     bends++;
     if (turn >= 90 - 0.5) sharp++;
   }
-  return { sharp, bends };
+  return { sharp, bends, offAngle };
 }
 
 /** Autoroute what is unrouted, refill pours, run DRC and measure. Changes the project. */
@@ -119,6 +126,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     reasons,
     sharpCorners: c.sharp,
     bendsPerConnection: r.routed ? Math.round((c.bends / r.routed) * 100) / 100 : 0,
+    offAngle: c.offAngle,
   };
 }
 
@@ -201,4 +209,21 @@ export async function fixtureOffGrid(): Promise<Project> {
   ]);
 }
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid } as const;
+/**
+ * A net already routed between two headers, and a third pad of the same net 3 mm beside that trace.
+ * The ratsnest joins the third pad to a far pad; a router that may end on any copper of the net joins
+ * it to the trace next to it instead (P8c).
+ */
+export async function fixtureTee(): Promise<Project> {
+  const p = newProject('fixture-tee');
+  await runTool(p, 'add_part', { kind: 'connector', pins: 2, x: 0, y: 0 });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 2, x: 20, y: 0 });
+  await runTool(p, 'add_part', { kind: 'resistor', value: '1k', x: 40, y: 0 });
+  await wire(p, 'T', 'J1.1', 'J2.1', 'R1.1');
+  await wire(p, 'U', 'J1.2', 'J2.2', 'R1.2');
+  await finish(p, { x: 100, y: 100, width: 40, height: 20 }, [['J1', 104, 108], ['J2', 136, 108], ['R1', 120, 113]]);
+  await runTool(p, 'route', { from: 'J1.1', to: 'J2.1' });
+  return p;
+}
+
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee } as const;

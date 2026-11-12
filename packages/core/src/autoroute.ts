@@ -297,6 +297,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   const from = new Int32Array(N * L);
   const stamp = new Int32Array(N * L);
   let run = 0;
+  // Per-connection memo of the cell tests (value = 2 * run + result; stale runs read as unknown).
+  const usableMemo = new Int32Array(N * L);
+  const viaMemo = new Int32Array(N);
+  let conn = 0;
+  /** Copper laid by this run (for the exact checks of pad entries): capsules per layer, with owner and clearance. */
+  const added: { li: number; a: Vec2; b: Vec2; r: number; id: number; cl: number }[] = [];
   const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]] as const;
 
   for (const r of order) {
@@ -345,12 +351,16 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     };
     const halfFull = width / 2;
     const slackFull = slackFor(halfFull + cn);
-    // The end cells are always allowed (they sit in the net's own pads); every other cell must have
-    // room for the trace, necked down near narrow end pads.
-    let endA = -1;
-    let endB = -1;
+    conn++;
+    /** Every cell on the path must have room for the trace, necked down near narrow end pads. */
     const usable = (li: number, c: number) => {
-      if (c === endA || c === endB) return core[li]![c] === id;
+      const m = usableMemo[li * N + c]!;
+      if (m >> 1 === conn) return (m & 1) === 1;
+      const ok = usableRaw(li, c);
+      usableMemo[li * N + c] = (conn << 1) | (ok ? 1 : 0);
+      return ok;
+    };
+    const usableRaw = (li: number, c: number) => {
       const k = core[li]![c]!;
       if (k !== 0 && k !== id) return false;
       if (!necks.length) return clear(li, c, halfFull, slackFull);
@@ -359,6 +369,13 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       return w === width ? clear(li, c, halfFull, slackFull) : clear(li, c, w / 2, slackFor(w / 2 + cn));
     };
     const viaOk = (c: number) => {
+      const m = viaMemo[c]!;
+      if (m >> 1 === conn) return (m & 1) === 1;
+      const ok = viaOkRaw(c);
+      viaMemo[c] = (conn << 1) | (ok ? 1 : 0);
+      return ok;
+    };
+    const viaOkRaw = (c: number) => {
       for (let li = 0; li < L; li++) {
         const k = core[li]![c]!;
         if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) return false;
@@ -375,45 +392,194 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         }
       return true;
     };
-    // Endpoints: the layers where the net's copper sits at each end.
-    const ends = (p: Vec2) => {
-      const c = toJ(p.y) * W + toI(p.x);
-      const ls: number[] = [];
-      for (let li = 0; li < L; li++) if (core[li]![c] === id) ls.push(li);
-      return { c, ls };
+    /** Width of a segment: necked down if any part of it lies in a neck zone. */
+    const segWidth = (a: Vec2, b: Vec2) => {
+      let w = width;
+      for (const n of necks) if (segmentHitsBox(a, b, n.box)) w = Math.min(w, n.w);
+      return w;
     };
-    const A = ends(r.a);
-    const B = ends(r.b);
-    endA = A.c;
-    endB = B.c;
-    if (!A.ls.length || !B.ls.length || toI(r.a.x) < 0 || toI(r.b.x) >= W) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'endpoint is blocked by nearby copper' });
+
+    // ---- Ends (P8c). A connection starts and ends on any copper of its net: every cell of the copper
+    // group at each end (found by flooding the net's copper on the grid) that has room for the trace, and
+    // short exact entries from the end point itself (a straight 0° / 45° / 90° run out of the pad, then at
+    // most one 45° or straight jog onto the grid), so pads off the grid are entered cleanly.
+    const cellOf = (q: Vec2) => {
+      const i = toI(q.x);
+      const j = toJ(q.y);
+      return i < 0 || j < 0 || i >= W || j >= H ? -1 : j * W + i;
+    };
+    /**
+     * Layers where this net's copper covers point q, by the same tests the connectivity check uses
+     * (inside a pad or pour, on a trace or via): a trace may only start or end where this holds.
+     */
+    const ownShapes = shapes.filter((sh) => sh.net === r.net);
+    const ownLayersAt = (q: Vec2) => {
+      const out = new Set<number>();
+      for (const sh of ownShapes) {
+        const li = layerIdx.get(sh.layer);
+        if (li === undefined || out.has(li) || q.x < sh.box.minX - 1e-6 || q.x > sh.box.maxX + 1e-6 || q.y < sh.box.minY - 1e-6 || q.y > sh.box.maxY + 1e-6) continue;
+        const on = sh.kind === 'pad' || sh.kind === 'fill' ? sh.areas.some((ar) => inArea(q, ar)) : sh.edges.some(([a, b, rr]) => distToSegment(q, a, b) <= rr);
+        if (on) out.add(li);
+      }
+      for (const e of added) if (e.id === id && distToSegment(q, e.a, e.b) <= e.r + 1e-6) out.add(e.li);
+      return [...out];
+    };
+    /** Half-extent of the net's pad under q (how far an entry may run before it is out of the pad row). */
+    const padExtentAt = (q: Vec2) => {
+      let ext = 0;
+      for (const sh of shapes) if (sh.kind === 'pad' && sh.net === r.net && sh.areas[0] && inArea(q, sh.areas[0])) ext = Math.max(ext, (sh.box.maxX - sh.box.minX) / 2, (sh.box.maxY - sh.box.minY) / 2);
+      return ext;
+    };
+    /** Exact check of a short piece of trace against foreign copper on layer li. */
+    const pieceClear = (li: number, a: Vec2, b: Vec2) => {
+      const half = segWidth(a, b) / 2;
+      const ca = cellOf(a);
+      const cb = cellOf(b);
+      if (ca < 0 || cb < 0 || core[li]![ca] === -1 || core[li]![cb] === -1) return false;
+      for (const sh of nearShapes) {
+        if (sh.layer !== layers[li] || sh.net === r.net || sh.kind === 'fill') continue;
+        const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace')) - 1e-6;
+        if (sh.box.minX - need > Math.max(a.x, b.x) || sh.box.maxX + need < Math.min(a.x, b.x) || sh.box.minY - need > Math.max(a.y, b.y) || sh.box.maxY + need < Math.min(a.y, b.y)) continue;
+        for (const [e0, e1, er] of sh.edges) if (segSegDist(a, b, e0, e1) - er < need) return false;
+        if (sh.kind === 'pad' && sh.areas[0] && (inArea(a, sh.areas[0]) || inArea(b, sh.areas[0]))) return false;
+      }
+      for (const e of added) if (e.li === li && e.id !== id && segSegDist(a, b, e.a, e.b) - e.r < half + Math.max(cn, e.cl) - 1e-6) return false;
+      return true;
+    };
+    let nearShapes = shapes;
+    type End = Map<number, { cost: number; pts: Vec2[] }>;
+    /** Entry states at end point q: grid state → cost (in cells) and the exact points from q up to (not including) the cell. */
+    const entries = (q: Vec2, out: End) => {
+      const ls = ownLayersAt(q);
+      const rho = padExtentAt(q) + width + cn + 3 * g;
+      nearShapes = shapes.filter((sh) => sh.box.maxX >= q.x - rho - reach && sh.box.minX <= q.x + rho + reach && sh.box.maxY >= q.y - rho - reach && sh.box.minY <= q.y + rho + reach);
+      const offer = (li: number, pts: Vec2[], cell: Vec2) => {
+        const c = cellOf(cell);
+        if (c < 0 || !usable(li, c)) return;
+        const path = [...pts, cell];
+        let len = 0;
+        for (let k = 0; k + 1 < path.length; k++) {
+          const a = path[k]!;
+          const b = path[k + 1]!;
+          const l = Math.hypot(b.x - a.x, b.y - a.y);
+          if (l < 1e-9) continue;
+          if (!pieceClear(li, a, b)) return;
+          len += l;
+        }
+        const st = li * N + c;
+        const cost = len / g + (pts.length > 1 ? 0.1 : 0);
+        const cur = out.get(st);
+        if (!cur || cur.cost > cost) out.set(st, { cost, pts: pts.filter((x, k) => k === 0 || Math.hypot(x.x - pts[k - 1]!.x, x.y - pts[k - 1]!.y) > 1e-9) });
+      };
+      const steps = Math.ceil(rho / g) + 1;
+      const i0 = Math.round((q.x - minX) / g);
+      const j0 = Math.round((q.y - minY) / g);
+      for (const li of ls) {
+        for (let k = -steps; k <= steps; k++) {
+          const i = i0 + k;
+          const j = j0 + k;
+          // Horizontal run along y = q.y to x = column - |dy|, then a 45° jog onto row j.
+          for (const jj of [Math.floor((q.y - minY) / g), Math.ceil((q.y - minY) / g)]) {
+            const dy = cy(jj) - q.y;
+            const sx = Math.sign(cx(i) - q.x) || 1;
+            const tx = cx(i) - sx * Math.abs(dy);
+            if ((tx - q.x) * sx >= -1e-9) offer(li, [q, { x: tx, y: q.y }], { x: cx(i), y: cy(jj) });
+          }
+          // Vertical run along x = q.x, then a 45° jog onto column ii.
+          for (const ii of [Math.floor((q.x - minX) / g), Math.ceil((q.x - minX) / g)]) {
+            const dx = cx(ii) - q.x;
+            const sy = Math.sign(cy(j) - q.y) || 1;
+            const ty = cy(j) - sy * Math.abs(dx);
+            if ((ty - q.y) * sy >= -1e-9) offer(li, [q, { x: q.x, y: ty }], { x: cx(ii), y: cy(j) });
+          }
+          // 45° runs to column i, then a straight jog onto the nearest rows.
+          const ddx = cx(i) - q.x;
+          for (const sy of [-1, 1]) {
+            const ty = q.y + sy * Math.abs(ddx);
+            for (const jj of [Math.floor((ty - minY) / g), Math.ceil((ty - minY) / g)]) offer(li, [q, { x: cx(i), y: ty }], { x: cx(i), y: cy(jj) });
+          }
+        }
+      }
+      nearShapes = shapes;
+    };
+    /** The net's copper group around q, flooded on the grid (4-neighbour, layers joined where copper is on both). */
+    const group = (q: Vec2): Set<number> => {
+      const seen = new Set<number>();
+      const stack: number[] = [];
+      const c0 = cellOf(q);
+      if (c0 < 0) return seen;
+      for (let li = 0; li < L; li++) if (core[li]![c0] === id) (seen.add(li * N + c0), stack.push(li * N + c0));
+      while (stack.length && seen.size < 60000) {
+        const st = stack.pop()!;
+        const li = Math.floor(st / N);
+        const c = st - li * N;
+        const i = c % W;
+        const j = (c - i) / W;
+        const next = (ns: number) => {
+          if (!seen.has(ns)) (seen.add(ns), stack.push(ns));
+        };
+        if (i > 0 && core[li]![c - 1] === id) next(st - 1);
+        if (i < W - 1 && core[li]![c + 1] === id) next(st + 1);
+        if (j > 0 && core[li]![c - W] === id) next(st - W);
+        if (j < H - 1 && core[li]![c + W] === id) next(st + W);
+        for (let lj = 0; lj < L; lj++) if (lj !== li && core[lj]![c] === id) next(lj * N + c);
+      }
+      return seen;
+    };
+    const groupA = group(r.a);
+    const cB = cellOf(r.b);
+    if (cB >= 0 && [...Array(L).keys()].some((li) => groupA.has(li * N + cB))) {
+      // Already joined by copper laid earlier in this run.
+      report.routed.push({ net: r.net, from: r.a, to: r.b, length: 0, vias: 0 });
+      continue;
+    }
+    const groupB = group(r.b);
+    const seeds: End = new Map();
+    const goals: End = new Map();
+    // A group cell is a start or end only if its centre is really on the net's copper (the grid marks
+    // cells whose centre is on a pad's edge too) and the trace has room there.
+    const onOwn = (st: number) => {
+      const li = Math.floor(st / N);
+      const c = st % N;
+      const i = c % W;
+      return usable(li, c) && ownLayersAt({ x: cx(i), y: cy((c - i) / W) }).includes(li);
+    };
+    for (const st of groupA) if (onOwn(st)) seeds.set(st, { cost: 0, pts: [] });
+    for (const st of groupB) if (onOwn(st)) goals.set(st, { cost: 0, pts: [] });
+    entries(r.a, seeds);
+    entries(r.b, goals);
+    if (!seeds.size || !goals.size) {
+      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'no room to leave the pad with the current clearances' });
       continue;
     }
     run++;
     const heap = new Heap();
-    const bi = B.c % W;
-    const bj = (B.c - bi) / W;
+    // Heuristic: octile distance to the box around the goal cells (never more than the true distance).
+    let gi0 = Infinity, gi1 = -Infinity, gj0 = Infinity, gj1 = -Infinity;
+    for (const st of goals.keys()) {
+      const c = st % N;
+      const i = c % W;
+      const j = (c - i) / W;
+      (gi0 = Math.min(gi0, i)), (gi1 = Math.max(gi1, i)), (gj0 = Math.min(gj0, j)), (gj1 = Math.max(gj1, j));
+    }
     const hcost = (c: number) => {
       const i = c % W;
       const j = (c - i) / W;
-      const dx = Math.abs(i - bi);
-      const dy = Math.abs(j - bj);
+      const dx = i < gi0 ? gi0 - i : i > gi1 ? i - gi1 : 0;
+      const dy = j < gj0 ? gj0 - j : j > gj1 ? j - gj1 : 0;
       return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
     };
-    for (const li of A.ls) {
-      const s = li * N + A.c;
-      stamp[s] = run;
-      cost[s] = 0;
-      from[s] = -1;
-      heap.push(hcost(A.c), s);
+    for (const [st, e] of seeds) {
+      stamp[st] = run;
+      cost[st] = e.cost;
+      from[st] = -1;
+      heap.push(e.cost + hcost(st % N), st);
     }
-    const goal = new Set(B.ls.map((li) => li * N + B.c));
     let found = -1;
     let expanded = 0;
     while (heap.size) {
       const s = heap.pop();
-      if (goal.has(s)) {
+      if (goals.has(s)) {
         found = s;
         break;
       }
@@ -459,13 +625,13 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     }
     // Walk back.
     const cells: { li: number; c: number }[] = [];
-    for (let s = found; s >= 0; s = from[s]!) cells.push({ li: Math.floor(s / N), c: s % N });
+    let first = found;
+    for (let s = found; s >= 0; s = from[s]!) (cells.push({ li: Math.floor(s / N), c: s % N }), (first = s));
     cells.reverse();
-    // Claim the path so later connections keep clear of it.
     const pts = (k: number) => ({ x: cx(cells[k]!.c % W), y: cy(Math.floor(cells[k]!.c / W)) });
     const segs: { layer: number; pts: Vec2[] }[] = [];
     const vias: Vec2[] = [];
-    let cur: { layer: number; pts: Vec2[] } = { layer: cells[0]!.li, pts: [r.a] };
+    let cur: { layer: number; pts: Vec2[] } = { layer: cells[0]!.li, pts: [...seeds.get(first)!.pts] };
     for (let k = 0; k < cells.length; k++) {
       const p = pts(k);
       if (cells[k]!.li !== cur.layer) {
@@ -475,15 +641,9 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         cur = { layer: cells[k]!.li, pts: [p] };
       } else cur.pts.push(p);
     }
-    cur.pts.push(r.b);
+    cur.pts.push(...goals.get(found)!.pts.slice().reverse());
     segs.push(cur);
 
-    /** Width of a segment: necked down if any part of it lies in a neck zone. */
-    const segWidth = (a: Vec2, b: Vec2) => {
-      let w = width;
-      for (const n of necks) if (segmentHitsBox(a, b, n.box)) w = Math.min(w, n.w);
-      return w;
-    };
     const node = netNode.get(r.net);
     if (!node) {
       report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'net object missing (run update_pcb)' });
@@ -516,11 +676,15 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         if (w < width) rules.push({ name: 'traceWidth', value: w });
         ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
         paint(sgm.layer, id, { edges: [[a, b, w / 2]], areas: [] }, cn);
+        added.push({ li: sgm.layer, a, b, r: w / 2, id, cl: cn });
       }
     });
     for (const v of vias) {
       ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('via'), type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
-      for (let li = 0; li < L; li++) paint(li, id, { edges: [[v, v, viaD / 2]], areas: [] }, cn);
+      for (let li = 0; li < L; li++) {
+        paint(li, id, { edges: [[v, v, viaD / 2]], areas: [] }, cn);
+        added.push({ li, a: v, b: v, r: viaD / 2, id, cl: cn });
+      }
     }
     report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(length * 1000) / 1000, vias: vias.length });
   }
@@ -547,4 +711,15 @@ function segmentHitsBox(a: Vec2, b: Vec2, box: { minX: number; minY: number; max
     return true;
   };
   return clip(-dx, a.x - box.minX) && clip(dx, box.maxX - a.x) && clip(-dy, a.y - box.minY) && clip(dy, box.maxY - a.y);
+}
+
+/** Shortest distance between segments a–b and c–d. */
+function segSegDist(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
+  const cross = (o: Vec2, p: Vec2, q: Vec2) => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(distToSegment(a, c, d), distToSegment(b, c, d), distToSegment(c, a, b), distToSegment(d, a, b));
 }
