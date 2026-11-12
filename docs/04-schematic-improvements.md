@@ -414,7 +414,22 @@ only when all of its criteria pass.
     changed and reset.
   - A pin-type matrix that can be changed per project, and the ability to waive a specific violation
     with a recorded reason (shown in Review and kept in the project).
-- [ ] **S18. PCB → schematic back-annotation.**
+- [x] **S18. PCB → schematic back-annotation.** — `e3a8478`
+  - Delivered: `packages/core/src/backAnnotate.ts`, the reverse of Update PCB. Board components are
+    matched to their symbols by an import's link, else by value and the nets on their pads (nets are
+    compared by what they connect, so a net renamed in the schematic is not a change). A component
+    renamed on the board renames its symbol (every unit). Two identical units whose pads traded nets
+    swap units in the schematic, in place. Pins whose pads traded or rotated nets within a group the part
+    allows (`swapGroups` property, e.g. `1 2; 3 4 5`; both pins of a two-pin passive part by default)
+    trade number and name in place, so every wire keeps its net and reaches the right pad. Anything else
+    is listed and left alone. Editor: **Update from PCB** next to Update PCB (list of changes, then one
+    undo step). Tools: `back_annotate` (with a preview), and on the board `swap_pads` and `swap_gates`,
+    which refuse swaps outside the part's groups or between gates that are not identical.
+  - Tests: `packages/tools/test/schematic-s18.test.ts` (a resistor pin swap, a three-pin group on an MCU,
+    a gate swap on a dual op-amp and a renamed reference, written back and checked pad by pad; one undo;
+    refused swaps; a pad moved by hand is only reported). Browser check on the RGB sleep lamp: right after
+    loading, "The schematic already matches the board"; after swapping R1's pads and renaming R2 to R99
+    on the board, the dialog lists exactly those two changes and applies them.
   - Pin swaps and gate swaps made on the board (within groups allowed by the part) are written back to
     the schematic; reference changes on the board are reflected too.
 
