@@ -9,9 +9,10 @@ import {
   type Ruleset,
 } from '@hassassin/core';
 import type { App } from '../app.ts';
-import { partDefOf, placeUnitOps, renameRefOps, setPartPropsOps, switchUnitOps, unitLetter, unitsOf, type Op } from '@hassassin/core';
+import { partDefOf, placeUnitOps, renameRefOps, setPartPropsOps, switchUnitOps, unitLetter, unitsOf, type FootprintSpec, type Op } from '@hassassin/core';
 import { clear, h } from './dom.ts';
 import { openSymbolEditor } from './symbolEditor.ts';
+import { openFootprintGenerator } from './footprintGen.ts';
 
 const ORDER = [...RULE_DEFS.keys()];
 const label = (name: string) => RULE_DEFS.get(name)?.label ?? name;
@@ -152,6 +153,16 @@ export function mountInspector(app: App, root: HTMLElement): void {
         form.append(h('label', { class: 'k' }, 'Not placed'), row);
       }
     }
+    // Footprint generator (S19): make one for this part, or edit the generated one it uses.
+    const fpName = String(n.props.Footprint ?? '');
+    const genFp = fpName ? (doc.meta[`fp:${fpName}`] as FootprintSpec | undefined) : undefined;
+    form.append(
+      h('label', { class: 'k' }, 'Land pattern'),
+      h('div', { class: 'unit-buttons' },
+        h('button', { title: 'Generate a footprint from datasheet dimensions and use it for this part', onclick: () => openFootprintGenerator(app, { ref }) }, 'New footprint…'),
+        genFp?.generator ? h('button', { title: `Change the generated footprint ${fpName}`, onclick: () => openFootprintGenerator(app, { fp: genFp, ref }) }, 'Edit footprint…') : null,
+      ),
+    );
     const def = partDefOf(doc, n);
     if (def) form.append(h('label', { class: 'k' }, 'Symbol'), h('button', { title: 'Change pins, sides and units; every placed copy follows', onclick: () => openSymbolEditor(app, { def }) }, 'Edit symbol…'));
     return h('div', {}, h('strong', {}, 'Part'), form, h('div', { class: 'dim', style: 'font-size:11.5px;margin:-4px 0 8px' }, 'Changes apply to every unit and to the board component; a new footprint reaches the board on Update PCB.'));

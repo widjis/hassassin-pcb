@@ -387,3 +387,11 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 @media (max-width: 720px) {
   .symbol-editor .sym-fields, .symbol-editor .sym-body { grid-template-columns: 1fr; }
 }
+
+/* Footprint generator (S19). */
+.footprint-gen .fp-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+.footprint-gen .fp-fields label { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.footprint-gen .fp-fields .wide { grid-column: 1 / -1; }
+.footprint-gen .fp-fields textarea { font: 12px ui-monospace, Menlo, monospace; }
+.footprint-gen canvas { width: 100%; height: 320px; border: 1px solid var(--border, #2a2e37); border-radius: 6px; display: block; }
+.footprint-gen .fp-info { font-size: 11.5px; margin-top: 4px; }

@@ -4,6 +4,9 @@
  * project is live, shared with collaborators).
  */
 import {
+  generateFootprint,
+  genericFootprint,
+  type FootprintParams,
   parsePinTable,
   pinTypeFrom,
   buildSymbolUnits,
@@ -1668,6 +1671,68 @@ export const TOOLS: ToolDef[] = [
       }
       const unplaced = part.units.length > 1 ? part.units.map((_, i) => i + 1).filter((u) => !placed.uids.some((x) => Number(p.doc.nodes.get(x)!.props.unit) === u)).map((u) => unitLabel(part, u)) : [];
       return { ref: placed.ref, units: placed.uids.length, ...(unplaced.length ? { notPlacedYet: unplaced } : {}), footprint: chosen ?? null, footprintFound: !!fp, pins };
+    },
+  },
+  {
+    name: 'create_footprint',
+    description: `Make a footprint from datasheet dimensions when search_footprints has none. family: two-row (SOIC / TSSOP / DIP / headers), four-side (QFP / QFN), grid (BGA / LGA), castellated (module with edge pads, ESP-12F style) or pads (a free list). Give the recommended land pattern (pad: {length, width} with rowSpacing / spanX = pad centre to pad centre across the package), or leads: {span, length, width, type: gullwing | nolead | jlead} from the package drawing and the pads are derived (margins toe / heel / side: gullwing 0.35/0.35/0.05, nolead 0.30/0/0, jlead 0.10/0.60/0.05 mm). drill (+ padDiameter) makes through-hole pins. ep: exposed pad {w, h, vias?}; holes: mounting holes [{x, y, drill, pad?}]; body: {w, h}. Pin 1 is top-left, numbering counter-clockwise (two-row: numbering around or zigzag for headers). The footprint is stored in the project; ref assigns it to a part.`,
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'e.g. qfn-24-4x4-ep2.6 or esp-12f' },
+        family: { type: 'string', enum: ['two-row', 'four-side', 'grid', 'castellated', 'pads'] },
+        pins: { type: 'number' },
+        pitch: { type: 'number' },
+        numbering: { type: 'string', enum: ['around', 'zigzag'] },
+        rowSpacing: { type: 'number', description: 'two-row: pad centre to pad centre across the package' },
+        spanX: { type: 'number', description: 'four-side: pad centre to pad centre, left to right' },
+        spanY: { type: 'number', description: 'four-side: pad centre to pad centre, top to bottom (default spanX)' },
+        pinsX: { type: 'number', description: 'four-side: pins on the left (and right) side, when the sides differ' },
+        pad: { type: 'object', description: '{length, width, shape?} of one pad (length along the lead)' },
+        leads: { type: 'object', description: '{span, length, width, type?} from the package drawing (maximum values)' },
+        leadsY: { type: 'object', description: 'four-side: leads of the top / bottom sides when they differ' },
+        drill: { type: 'number' },
+        padDiameter: { type: 'number' },
+        rows: { type: 'number' },
+        cols: { type: 'number' },
+        ball: { type: 'number', description: 'grid: pad diameter' },
+        shape: { type: 'string', enum: ['circle', 'rect'] },
+        skip: { type: 'array', items: { type: 'string' }, description: 'grid: positions without a ball, e.g. ["A1"]' },
+        left: { type: 'number' },
+        right: { type: 'number' },
+        bottom: { type: 'number' },
+        top: { type: 'number' },
+        leftStart: { type: 'number', description: 'castellated: centre of pad 1 below the body top (default: column centred)' },
+        bottomStart: { type: 'number', description: 'castellated: centre of the first bottom pad from the body left (default: row centred)' },
+        outside: { type: 'number', description: 'castellated: how far each pad reaches beyond the body edge (default half its length)' },
+        pads: { type: 'array', items: { type: 'object' }, description: 'pads family: [{number, x, y, w, h, shape?, drill?, rot?}]' },
+        body: { type: 'object', description: '{w, h} package body' },
+        ep: { type: 'object', description: 'exposed pad {w, h, x?, y?, number?, vias?: {drill, rows, cols, pitch}}' },
+        holes: { type: 'array', items: { type: 'object' }, description: 'mounting holes [{x, y, drill, pad?}]' },
+        courtyard: { type: 'number' },
+        description: { type: 'string' },
+        ref: { type: 'string', description: 'Assign the new footprint to this part' },
+      },
+      required: ['name', 'family'],
+    },
+    run: async (p, a, ctx) => {
+      const { ref, ...params } = a;
+      let fp: FootprintSpec;
+      try {
+        fp = generateFootprint(params as unknown as FootprintParams);
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      if (genericFootprint(fp.name)) throw new ToolError(`"${fp.name}" is the name of a generic footprint; choose another name`);
+      apply(p, `Footprint ${fp.name}`, [{ op: 'setMeta', key: fpKey(fp.name), value: fp }]);
+      const out: Record<string, unknown> = {
+        footprint: fp.name,
+        description: fp.description,
+        pads: fp.pads.filter((q) => q.number !== '').map((q) => `${q.number} @ ${q.at.x},${q.at.y} ${q.size.x}×${q.size.y}${q.drill !== undefined ? ` drill ${typeof q.drill === 'number' ? q.drill : `${q.drill.x}×${q.drill.y}`}` : ''}`),
+      };
+      if (typeof ref === 'string' && ref.trim()) out.assigned = await runTool(p, 'assign_footprint', { ref: ref.trim(), footprint: fp.name }, ctx);
+      return out;
     },
   },
   {

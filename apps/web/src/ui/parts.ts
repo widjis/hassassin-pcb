@@ -26,6 +26,7 @@ import type { App } from '../app.ts';
 import { library, serverLibrary } from '../library.ts';
 import { clear, h } from './dom.ts';
 import { openSymbolEditor } from './symbolEditor.ts';
+import { openFootprintGenerator } from './footprintGen.ts';
 
 const SRC_LABEL: Record<string, string> = { generic: 'generic', project: 'project', kicad: 'KiCad', team: 'team' };
 
@@ -186,7 +187,7 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
   const detailEl = h('div', {});
   const bomEl = h('div', {});
   root.append(
-    h('div', { class: 'section-title' }, h('span', {}, 'Library'), h('button', { class: 'btn', title: 'Make a symbol from a pin table (e.g. pasted from a datasheet)', onclick: () => openSymbolEditor(app, { onPlace: (def) => hooks.place(def, []) }) }, 'New symbol…')),
+    h('div', { class: 'section-title' }, h('span', {}, 'Library'), h('button', { class: 'btn', title: 'Make a symbol from a pin table (e.g. pasted from a datasheet)', onclick: () => openSymbolEditor(app, { onPlace: (def) => hooks.place(def, []) }) }, 'New symbol…'), h('button', { class: 'btn', title: 'Make a footprint from datasheet dimensions (two rows, four sides, grid, castellated module, pad list)', onclick: () => openFootprintGenerator(app) }, 'New footprint…')),
     searchBox,
     status,
     resultsEl,

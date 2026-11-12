@@ -40,6 +40,8 @@ export interface FootprintSpec {
   graphics: FpGraphic[];
   /** Where it came from: "generic", "kicad:<lib>", "project". */
   source?: string;
+  /** Parameters it was generated from (footprint generator), for editing. */
+  generator?: unknown;
 }
 
 const SMD_TOP = ['F.Cu', 'F.Paste', 'F.Mask'];
@@ -67,11 +69,11 @@ function bbox(pads: FpPad[], extra: Vec2[] = []) {
 const r2 = (n: number) => Math.round(n * 1000) / 1000;
 
 /** Body outline on silk + fab, courtyard around everything, reference text above. */
-function finish(name: string, description: string, pads: FpPad[], body: { w: number; h: number }, opts: { pin1?: Vec2; tags?: string[] } = {}): FootprintSpec {
+function finish(name: string, description: string, pads: FpPad[], body: { w: number; h: number }, opts: { pin1?: Vec2; tags?: string[]; courtyard?: number } = {}): FootprintSpec {
   const bw = body.w / 2;
   const bh = body.h / 2;
   const b = bbox(pads, [{ x: -bw, y: -bh }, { x: bw, y: bh }]);
-  const m = 0.25;
+  const m = opts.courtyard ?? 0.25;
   const g: FpGraphic[] = [
     { kind: 'rect', layer: 'F.Fab', w: 0.1, a: { x: -bw, y: -bh }, b: { x: bw, y: bh } },
     { kind: 'rect', layer: 'F.CrtYd', w: CRT, a: { x: r2(b.minX - m), y: r2(b.minY - m) }, b: { x: r2(b.maxX + m), y: r2(b.maxY + m) } },
@@ -104,6 +106,9 @@ function finish(name: string, description: string, pads: FpPad[], body: { w: num
   if (opts.pin1) g.push({ kind: 'circle', layer: 'F.SilkS', w: SILK, c: opts.pin1, r: 0.15, fill: true });
   return { name, description, pads, graphics: g, source: 'generic', tags: opts.tags ?? [] };
 }
+
+/** Outlines (fab, silk around the pads, courtyard), pin-1 mark and reference / value texts. */
+export const finishFootprint = finish;
 
 const smd = (number: string, x: number, y: number, w: number, h: number, shape: PadShape = 'roundrect'): FpPad => ({
   number, at: { x: r2(x), y: r2(y) }, size: { x: w, y: h }, shape, type: 'smd', layers: SMD_TOP, ...(shape === 'roundrect' ? { cornerRatio: 0.25 } : {}),
