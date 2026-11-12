@@ -195,7 +195,17 @@ only when all of its criteria pass.
     SVG in the browser, both downloads from the dialog.
   - Export of one sheet or all sheets, vector output, readable when printed on A4 / A3, light background
     option.
-- [ ] **S11. Create hierarchical sub-sheets in the editor.**
+- [x] **S11. Create hierarchical sub-sheets in the editor.** — `3c0412b`
+  - Delivered: **Sub-sheet** button (block at the cursor, or right of the drawing), double-click to enter,
+    U to go up; the label dialog offers local, global and hierarchical (with direction). Each hierarchical
+    label adds a sheet pin on the block edge (inputs left, outputs right, block grows as needed); a pin
+    whose label is gone is removed, unless a wire still ends on it. Blocks move with their pins and wires,
+    and can be deleted (with confirmation). Wires route around blocks and never run along their edges.
+    ERC `hierMismatch`: label without pin, pin without label, hierarchical label on a top-level sheet.
+    Tools: `add_sheet`, `add_label kind=hier shape=…`, block pins as `Block:NAME` in `connect_pins`.
+  - Tests: `packages/tools/test/schematic-s11.test.ts` (pins follow labels, nets across levels, orphan pins,
+    nested sheets, imported pins untouched); the existing KiCad hierarchy import test still passes.
+    Browser check: sub-sheet with C1 and label IN, pin IN on the block, wire from R1, ERC clean for it.
   - Create a sub-sheet block, enter it, add hierarchical labels; matching sheet pins appear on the block.
   - Netlist and ERC behave as for imported KiCad hierarchies (existing tests keep passing).
 - [ ] **S12. Switch units of multi-unit symbols.**
