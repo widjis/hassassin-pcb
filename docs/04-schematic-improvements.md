@@ -185,7 +185,14 @@ only when all of its criteria pass.
   - Each sheet can have a frame with a title block (title, revision, date, author, sheet number), filled
     from project data where possible.
   - Free text notes and rectangles for grouping blocks ("Power", "MCU", "Sensors"), also available as tools.
-- [ ] **S10. PDF and SVG export of the schematic.**
+- [x] **S10. PDF and SVG export of the schematic.** — `00ca5ca`
+  - Delivered: **Export…** in the schematic toolbar and the `export_schematic` tool / CLI command. PDF has one
+    page per sheet (built-in Courier font, nothing embedded); SVG is one file per sheet (a ZIP for several).
+    Colours: light (default, for printing), black and white, or dark as on screen. The page is the sheet
+    frame (S9) or the drawing plus a margin; "fit to A4 … A0" scales a sheet to that paper.
+  - Tests: `packages/tools/test/schematic-s10.test.ts` (PDF structure and cross-reference offsets, pages and
+    sizes, escaping, themes, tool output). Checked on the RGB sleep lamp project: PDF rendered by macOS,
+    SVG in the browser, both downloads from the dialog.
   - Export of one sheet or all sheets, vector output, readable when printed on A4 / A3, light background
     option.
 - [ ] **S11. Create hierarchical sub-sheets in the editor.**
