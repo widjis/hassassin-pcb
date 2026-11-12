@@ -197,7 +197,61 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
 
   serverLibrary.check().then((ok) => {
     status.textContent = ok ? `Sources: project · generic · ${serverLibrary.sources.map((s) => SRC_LABEL[s] ?? s).join(' · ')}` : 'Sources: project · generic (start the server for the team library and installed KiCad libraries)';
+    if (ok) void kicadOffer();
   });
+
+  // Official KiCad libraries on demand (S21): offered when the server has none.
+  const kicadBox = h('div', { class: 'kicad-offer' });
+  status.after(kicadBox);
+  type KicadStatus = { available: boolean; origin: string | null; canDownload: boolean; downloaded?: { version: string }; download: { stage: string; bytes: number; files: number; version?: string; error?: string } | null; repositories: string[]; license: { name: string; summary: string; url: string } };
+  const kicadStatus = async (): Promise<KicadStatus | null> => {
+    try {
+      const r = await fetch('/api/library/kicad');
+      return r.ok ? ((await r.json()) as KicadStatus) : null;
+    } catch {
+      return null;
+    }
+  };
+  const kicadOffer = async (): Promise<void> => {
+    const st = await kicadStatus();
+    clear(kicadBox);
+    if (!st) return;
+    const job = st.download;
+    if (job && !['done', 'error'].includes(job.stage)) {
+      kicadBox.append(h('div', { class: 'dim' }, `Downloading KiCad libraries${job.version ? ` ${job.version}` : ''}: ${job.stage}, ${(job.bytes / 1e6).toFixed(1)} MB, ${job.files} files…`));
+      setTimeout(() => void kicadOffer(), 1000);
+      return;
+    }
+    if (job?.stage === 'error') kicadBox.append(h('div', { class: 'err-text' }, `KiCad library download failed: ${job.error ?? 'unknown error'}`));
+    if (st.available) {
+      if (job?.stage === 'done') {
+        kicadBox.append(h('div', { class: 'dim' }, `KiCad libraries ${job.version ?? ''} ready (${job.files} files).`));
+        await serverLibrary.check(true);
+        status.textContent = `Sources: project · generic · ${serverLibrary.sources.map((s) => SRC_LABEL[s] ?? s).join(' · ')}`;
+        void search();
+      }
+      return;
+    }
+    if (!st.canDownload) {
+      kicadBox.append(h('div', { class: 'dim' }, 'No KiCad libraries on the server. They can be downloaded from the computer the server runs on.'));
+      return;
+    }
+    kicadBox.append(
+      h('div', {}, 'The official KiCad symbol and footprint libraries are not on this computer.'),
+      h('button', {
+        class: 'btn',
+        onclick: async () => {
+          const ok = confirm(
+            `Download the official KiCad libraries?\n\nFrom: ${st.repositories.join('\n      ')}\n(tens of MB, into a local cache on this computer; never into your project files)\n\nLicense: ${st.license.name}\n${st.license.summary}\n${st.license.url}`,
+          );
+          if (!ok) return;
+          const r = await fetch('/api/library/kicad/download', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+          if (!r.ok) app.say(`Could not start the download: ${((await r.json().catch(() => ({}))) as { error?: string }).error ?? r.status}`);
+          void kicadOffer();
+        },
+      }, 'Download KiCad libraries…'),
+    );
+  };
 
   const select = async (s: PartSummary) => {
     selected = await library.getPart(app.doc, s.id);
@@ -243,6 +297,7 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
         { class: 'part-detail' },
         h('div', {}, h('strong', {}, p.name), p.units.length > 1 ? h('span', { class: 'dim' }, ` · ${p.units.length} units`) : null),
         p.description ? h('div', { class: 'dim', style: 'font-size:11.5px' }, p.description) : null,
+        h('div', { class: 'dim part-source', style: 'font-size:11px' }, `From: ${p.source?.startsWith('kicad') ? `KiCad library ${p.id.split(':')[1] ?? ''}` : (SRC_LABEL[(p.source ?? 'project').split(':')[0]!] ?? p.source)}${p.license ? ` · License: ${p.license}` : ''}${selFp?.license && selFp.license !== p.license ? ` · footprint: ${selFp.license}` : ''}`),
         h('div', { class: 'previews' }, symC, fpC),
         h('div', { class: 'dim', style: 'font-size:11.5px' }, `${p.units.reduce((n, u) => n + u.pins.length, 0)} pins · footprint `, fpSel.options.length ? fpSel : h('em', {}, 'none')),
         p.footprint && !selFp ? h('div', { class: 'err-text', style: 'font-size:11.5px' }, 'Footprint not found here; the board will get a placeholder until you choose one.') : null,

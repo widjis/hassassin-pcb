@@ -78,13 +78,20 @@ describe('collaboration server', () => {
     b.state.history.apply('Add', [{ op: 'add', parent: comps, index: 1, tree: { nodes: [{ uid: 'el-b', type: 'element', name: 'RB', props: {}, rules: [], parent: comps, children: [] }] } }]);
     await a.sc.flush();
     await b.sc.flush();
-    await until(() => canon(a.state.doc) === canon(b.state.doc));
+    // Both editors and the server's copy end up the same (polled: a busy machine is slow).
+    const serverCopy = async () => {
+      const server = (await (await fetch(`${base}/api/projects/${id}/file?token=${tokens.view}`)).json()) as Record<string, unknown>;
+      delete server.savedAt;
+      return JSON.stringify(server);
+    };
+    let server = '';
+    const end = Date.now() + 3000;
+    do {
+      await until(() => canon(a.state.doc) === canon(b.state.doc));
+      server = await serverCopy();
+    } while ((server !== canon(a.state.doc) || canon(a.state.doc) !== canon(b.state.doc)) && Date.now() < end && (await new Promise((r) => setTimeout(r, 30)), true));
     expect(canon(a.state.doc)).toBe(canon(b.state.doc));
-    // The server's copy agrees too.
-    const file = await (await fetch(`${base}/api/projects/${id}/file?token=${tokens.view}`)).json();
-    const server = JSON.parse(JSON.stringify(file));
-    delete server.savedAt;
-    expect(JSON.stringify(server)).toBe(canon(a.state.doc));
+    expect(server).toBe(canon(a.state.doc));
     // A third client joining later sees the same document.
     const c = makeClient(id, tokens.view, 'Citra');
     await c.sc.connect();

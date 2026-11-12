@@ -22,6 +22,7 @@ export interface FootprintSummary {
   name: string;
   description?: string;
   source: string;
+  license?: string;
 }
 
 /** An extra place to find parts and footprints. All methods may be slow (disk, network). */
@@ -149,8 +150,15 @@ const prop = (chunk: string, key: string): string | undefined => {
   return m?.[1] || undefined;
 };
 
+/** License of the official KiCad libraries, shown with every part and footprint taken from them. */
+export const KICAD_LICENSE = 'CC BY-SA 4.0 with the KiCad libraries exception (designs using them are not affected)';
+
 export class KicadSystemLibrary implements LibrarySource {
   name = 'kicad';
+  /** Installed with KiCad, or downloaded on demand (S21). */
+  origin: 'installed' | 'downloaded';
+  readonly symbolsDir: string;
+  readonly footprintsDir: string;
   private fs: LibFs;
   private symDir: string;
   private fpDir: string;
@@ -160,7 +168,10 @@ export class KicadSystemLibrary implements LibrarySource {
   private building: Promise<KicadIndex> | null = null;
   private fileCache = new Map<string, Map<string, string>>();
 
-  constructor(opts: { fs: LibFs; symbolsDir: string; footprintsDir: string; cachePath?: string; writeCache?: (path: string, text: string) => Promise<void> }) {
+  constructor(opts: { fs: LibFs; symbolsDir: string; footprintsDir: string; cachePath?: string; writeCache?: (path: string, text: string) => Promise<void>; origin?: 'installed' | 'downloaded' }) {
+    this.origin = opts.origin ?? 'installed';
+    this.symbolsDir = opts.symbolsDir;
+    this.footprintsDir = opts.footprintsDir;
     this.fs = opts.fs;
     this.symDir = opts.symbolsDir;
     this.fpDir = opts.footprintsDir;
@@ -221,7 +232,7 @@ export class KicadSystemLibrary implements LibrarySource {
     const idx = await this.getIndex();
     const scored: [number, PartSummary][] = [];
     for (const e of idx.symbols) {
-      const s: PartSummary & { keywords?: string[] } = { id: `kicad:${e.lib}:${e.name}`, name: e.name, category: e.lib, source: 'kicad', ...(e.d ? { description: e.d } : {}), ...(e.f ? { footprint: e.f } : {}), ...(e.k ? { keywords: e.k.split(/\s+/) } : {}) };
+      const s: PartSummary & { keywords?: string[] } = { id: `kicad:${e.lib}:${e.name}`, name: e.name, category: e.lib, source: 'kicad', license: KICAD_LICENSE, ...(e.d ? { description: e.d } : {}), ...(e.f ? { footprint: e.f } : {}), ...(e.k ? { keywords: e.k.split(/\s+/) } : {}) };
       const sc = scorePart(s, q);
       if (sc > 0) {
         const { keywords: _k, ...rest } = s;
@@ -237,7 +248,7 @@ export class KicadSystemLibrary implements LibrarySource {
     const out: FootprintSummary[] = [];
     for (const f of idx.footprints) {
       const full = `${f.lib}:${f.name}`;
-      if (words.every((w) => full.toLowerCase().includes(w))) out.push({ name: full, source: 'kicad' });
+      if (words.every((w) => full.toLowerCase().includes(w))) out.push({ name: full, source: 'kicad', license: KICAD_LICENSE });
     }
     return out.sort((a, b) => a.name.length - b.name.length).slice(0, limit);
   }
@@ -268,7 +279,8 @@ export class KicadSystemLibrary implements LibrarySource {
       lists.push(parseSExpr(c));
       ext = /\(extends "([^"]+)"\)/.exec(c)?.[1];
     }
-    return partsFromSymbolLists(lists, m[1]!, new Set([m[2]!])).parts[0] ?? null;
+    const part = partsFromSymbolLists(lists, m[1]!, new Set([m[2]!])).parts[0];
+    return part ? { ...part, license: KICAD_LICENSE } : null;
   }
 
   async getFootprint(name: string): Promise<FootprintSpec | null> {
@@ -276,6 +288,6 @@ export class KicadSystemLibrary implements LibrarySource {
     if (!m) return null;
     const path = `${this.fpDir}/${m[1]}.pretty/${m[2]}.kicad_mod`;
     if (!(await this.fs.exists(path))) return null;
-    return parseKicadFootprint(await this.fs.readText(path), m[1]);
+    return { ...parseKicadFootprint(await this.fs.readText(path), m[1]), license: KICAD_LICENSE };
   }
 }

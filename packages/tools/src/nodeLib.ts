@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { KicadSystemLibrary, type LibFs } from './library.ts';
+import { downloadedKicadDirsSync } from './kicadDownload.ts';
 
 export const nodeLibFs: LibFs = {
   readText: (p) => readFile(p, 'utf8'),
@@ -16,12 +17,15 @@ export const nodeLibFs: LibFs = {
   mtime: async (p) => (await stat(p)).mtimeMs,
 };
 
-/** KiCad symbol/footprint folders: env vars first, then the usual install places. */
-export function findKicadDirs(env: NodeJS.ProcessEnv = process.env): { symbols: string; footprints: string } | null {
+/**
+ * KiCad symbol/footprint folders: env vars first, then the usual install places, then the official
+ * libraries downloaded on demand (S21).
+ */
+export function findKicadDirs(env: NodeJS.ProcessEnv = process.env): { symbols: string; footprints: string; origin: 'installed' | 'downloaded' } | null {
   const symEnv = Object.entries(env).find(([k]) => /^KICAD\d*_SYMBOL_DIR$/.test(k))?.[1];
   const fpEnv = Object.entries(env).find(([k]) => /^KICAD\d*_FOOTPRINT_DIR$/.test(k))?.[1];
   if (env.HASSASSIN_NO_KICAD) return null;
-  if (symEnv && fpEnv && existsSync(symEnv) && existsSync(fpEnv)) return { symbols: symEnv, footprints: fpEnv };
+  if (symEnv && fpEnv && existsSync(symEnv) && existsSync(fpEnv)) return { symbols: symEnv, footprints: fpEnv, origin: 'installed' };
   const roots = [
     '/Applications/KiCad/KiCad.app/Contents/SharedSupport',
     '/usr/share/kicad',
@@ -32,12 +36,19 @@ export function findKicadDirs(env: NodeJS.ProcessEnv = process.env): { symbols: 
   for (const r of roots) {
     const s = join(r, 'symbols');
     const f = join(r, 'footprints');
-    if (existsSync(s) && existsSync(f)) return { symbols: symEnv ?? s, footprints: fpEnv ?? f };
+    if (existsSync(s) && existsSync(f)) return { symbols: symEnv ?? s, footprints: fpEnv ?? f, origin: 'installed' };
   }
-  return null;
+  if (env.HASSASSIN_NO_KICAD_DOWNLOAD) return null;
+  const dl = downloadedKicadDirsSync();
+  return dl ? { ...dl, origin: 'downloaded' } : null;
 }
 
 let shared: KicadSystemLibrary | null | undefined;
+
+/** Forget the cached library, e.g. after a download, so the next call finds the new folders. */
+export function resetKicadSystemLibrary(): void {
+  shared = undefined;
+}
 
 /** The installed KiCad libraries (index cached under ~/.cache/hassassin), or null. */
 export function kicadSystemLibrary(): KicadSystemLibrary | null {
@@ -47,6 +58,7 @@ export function kicadSystemLibrary(): KicadSystemLibrary | null {
   const cachePath = join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'hassassin', 'kicad-index.json');
   shared = new KicadSystemLibrary({
     fs: nodeLibFs,
+    origin: dirs.origin,
     symbolsDir: dirs.symbols,
     footprintsDir: dirs.footprints,
     cachePath,

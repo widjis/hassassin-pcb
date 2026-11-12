@@ -53,6 +53,8 @@ export interface PartDef {
   offers?: Offer[];
   source?: string;
   version?: number;
+  /** License of a part taken from a published library (e.g. the KiCad libraries). */
+  license?: string;
 }
 
 export interface PartSummary {
@@ -63,6 +65,7 @@ export interface PartSummary {
   footprint?: string;
   source: string;
   mpn?: string;
+  license?: string;
 }
 
 export const partSummary = (p: PartDef): PartSummary => ({
@@ -73,6 +76,7 @@ export const partSummary = (p: PartDef): PartSummary => ({
   ...(p.footprint ? { footprint: p.footprint } : {}),
   source: p.source ?? 'project',
   ...(p.properties?.MPN ? { mpn: p.properties.MPN } : {}),
+  ...(p.license ? { license: p.license } : {}),
 });
 
 const DEFAULT_FP: Record<PartKind, string> = {

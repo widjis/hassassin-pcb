@@ -14,6 +14,9 @@
  *   GET  /api/library/footprints?q=         search
  *   GET  /api/library/footprint?name=       → footprint
  *   POST /api/library/parts  {part, footprint?, author, project, token}  publish (needs an edit link)
+ *   GET  /api/library/kicad                 KiCad libraries: installed / downloaded / none, download progress
+ *   POST /api/library/kicad/download {version?}  download the official libraries (this machine only, after
+ *                                           the user agreed in the app)
  * WebSocket: /ws  (messages in @hassassin/sync/protocol)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -23,8 +26,9 @@ import { fromFile, toFile, type DocFile } from '@hassassin/core';
 import { opsAllowed, type ClientMsg, type Presence, type Role, type ServerMsg, type User } from '@hassassin/sync';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { Store, type LiveProject } from './store.ts';
-import { Library, type LibrarySource } from '@hassassin/tools';
-import { kicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
+import { KicadSystemLibrary, Library, type LibrarySource } from '@hassassin/tools';
+import { kicadSystemLibrary, nodeLibFs, resetKicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
+import { downloadKicadLibraries, downloadedKicadLibraries, KICAD_LIBRARY_LICENSE, KICAD_REPOS, type DownloadProgress } from '../../../packages/tools/src/kicadDownload.ts';
 import { TeamLibrary } from './teamLib.ts';
 import { AgentSession, runTool, TOOLS, type AgentEvent, type AgentMode, type ModelCall } from '@hassassin/tools';
 import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
@@ -48,6 +52,8 @@ export interface ServerOptions {
   log?: (msg: string) => void;
   /** Serve the KiCad libraries installed on this machine (default true). */
   kicad?: boolean;
+  /** Where downloaded KiCad libraries go, and the fetch used (tests). */
+  kicadDownload?: { root?: string; fetchImpl?: (url: string, init?: { signal?: AbortSignal }) => Promise<Response> };
   /** Model for the in-app agent (default: Claude through the Anthropic SDK, if credentials exist). */
   agentModel?: ModelCall | null;
 }
@@ -80,6 +86,8 @@ export async function startServer(opts: ServerOptions) {
   const team = new TeamLibrary(opts.dataDir);
   const kicad = opts.kicad === false ? null : kicadSystemLibrary();
   const library = new Library([team, ...(kicad ? [kicad] : [])] as LibrarySource[]);
+  // KiCad libraries on demand (S21): one download at a time, progress kept for the status call.
+  let kicadJob: (DownloadProgress & { started: string }) | null = null;
 
   const agentModel: ModelCall | null = opts.agentModel !== undefined ? opts.agentModel : hasAnthropicCredentials() ? anthropicModel() : null;
   const chats = new Map<string, Chat>();
@@ -233,6 +241,50 @@ export async function startServer(opts: ServerOptions) {
     if (req.method === 'GET' && what === 'footprint') {
       const f = await library.getFootprint(null, url.searchParams.get('name') ?? '');
       return f ? json(res, 200, f) : json(res, 404, { error: 'No such footprint' });
+    }
+    if (what === 'kicad') {
+      const lib = library.sources.find((s): s is KicadSystemLibrary => s instanceof KicadSystemLibrary) ?? null;
+      if (req.method === 'GET' && !url.pathname.split('/')[4]) {
+        const dl = await downloadedKicadLibraries(opts.kicadDownload?.root);
+        return json(res, 200, {
+          available: !!lib,
+          origin: lib?.origin ?? null,
+          ...(lib ? { symbols: lib.symbolsDir, footprints: lib.footprintsDir } : {}),
+          ...(dl ? { downloaded: { version: dl.version, date: dl.date } } : {}),
+          download: kicadJob,
+          canDownload: isLocal(req),
+          repositories: [KICAD_REPOS.symbols, KICAD_REPOS.footprints],
+          license: KICAD_LIBRARY_LICENSE,
+        });
+      }
+      if (req.method === 'POST' && url.pathname.split('/')[4] === 'download') {
+        // Fetches tens of megabytes for the machine the server runs on: only from that machine.
+        if (!isLocal(req)) return json(res, 403, { error: 'The KiCad libraries can only be downloaded from the computer the server runs on.' });
+        if (kicadJob && !['done', 'error'].includes(kicadJob.stage)) return json(res, 409, { error: 'A download is already running.', download: kicadJob });
+        const b = await body(req).catch(() => ({}) as Record<string, unknown>);
+        kicadJob = { stage: 'version', bytes: 0, files: 0, started: new Date().toISOString() };
+        const started = kicadJob.started;
+        log('downloading the official KiCad libraries');
+        void downloadKicadLibraries({
+          ...(typeof b.version === 'string' && /^\d+\.\d+\.\d+$/.test(b.version) ? { version: b.version } : {}),
+          ...(opts.kicadDownload?.root ? { root: opts.kicadDownload.root } : {}),
+          ...(opts.kicadDownload?.fetchImpl ? { fetchImpl: opts.kicadDownload.fetchImpl } : {}),
+          // "done" is announced only once the new library is in use (below).
+          onProgress: (p) => (kicadJob = { ...p, ...(p.stage === 'done' ? { stage: 'footprints' as const } : {}), started }),
+        })
+          .then((dl) => {
+            // Use them now, unless KiCad itself is installed (that copy wins).
+            if (!lib || lib.origin === 'downloaded') {
+              const fresh = new KicadSystemLibrary({ fs: nodeLibFs, symbolsDir: dl.symbols, footprintsDir: dl.footprints, origin: 'downloaded' });
+              library.sources = [...library.sources.filter((s) => !(s instanceof KicadSystemLibrary)), fresh];
+              resetKicadSystemLibrary();
+            }
+            kicadJob = { ...(kicadJob ?? { bytes: 0, files: 0 }), stage: 'done', version: dl.version, started };
+            log(`KiCad libraries ${dl.version} ready (${kicadJob.files} files)`);
+          })
+          .catch((e) => log(`KiCad library download failed: ${(e as Error).message}`));
+        return json(res, 202, { download: kicadJob });
+      }
     }
     if (req.method === 'POST' && what === 'parts') {
       const b = await body(req);

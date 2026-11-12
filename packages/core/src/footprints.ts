@@ -42,6 +42,8 @@ export interface FootprintSpec {
   source?: string;
   /** Parameters it was generated from (footprint generator), for editing. */
   generator?: unknown;
+  /** License of a footprint taken from a published library. */
+  license?: string;
 }
 
 const SMD_TOP = ['F.Cu', 'F.Paste', 'F.Mask'];

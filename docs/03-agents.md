@@ -17,6 +17,7 @@ pnpm hassassin set-rule board.hpcb "net#GND" pourLayers "F.Cu B.Cu"
 pnpm hassassin refill-pours board.hpcb
 pnpm hassassin run-drc board.hpcb --fail-on-error           # exit code 2 when there are errors (for CI)
 pnpm hassassin export-fab board.hpcb -o fab.zip
+pnpm hassassin kicad-libraries status          # or: kicad-libraries download (official KiCad libraries into a local cache)
 pnpm hassassin export-schematic board.hpcb -o schematic.pdf --paper A4   # or .svg / .zip; --theme light|mono|dark
 ```
 

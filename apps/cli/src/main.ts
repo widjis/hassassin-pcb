@@ -108,6 +108,7 @@ function usage(): string {
     '  new <out.hpcb>                          start an empty project',
     '  import <board.kicad_pcb> [sch…] -o <out.hpcb>   convert a KiCad project (sibling .kicad_sch files are picked up)',
     '  mcp                                     run as an MCP server (stdio)',
+    '  kicad-libraries [status|download] [--version x.y.z]   official KiCad symbol / footprint libraries for machines without KiCad (downloaded from gitlab.com/kicad into a local cache)',
     '  agent <project> "<request>" [--mode ask] [-o out.hpcb]   let the AI agent work on the project (needs Anthropic credentials)',
     '  <tool> <project> [positional…] [--arg value] [--json \'{…}\'] [-o out.hpcb] [--fail-on-error]',
     '',
@@ -163,6 +164,7 @@ export async function main(argv: string[]): Promise<void> {
   }
 
   if (cmd === 'agent') return agentCommand(positional, flags);
+  if (cmd === 'kicad-libraries') return kicadLibrariesCommand(positional[0] ?? 'status', flags);
 
   const tool = TOOL_MAP.get(snake(cmd));
   if (!tool) fail(`Unknown command "${cmd}". Run "hassassin help".`);
@@ -253,3 +255,27 @@ async function agentCommand(positional: string[], flags: Record<string, string |
 }
 
 main(process.argv.slice(2)).catch((e) => fail(e instanceof ToolError ? e.message : (e as Error).message ?? String(e)));
+
+/** Status of the KiCad libraries, or download the official ones (typing the command is the user's go-ahead). */
+async function kicadLibrariesCommand(action: string, flags: Record<string, string | true>): Promise<void> {
+  const { findKicadDirs } = await import('../../../packages/tools/src/nodeLib.ts');
+  const dl = await import('../../../packages/tools/src/kicadDownload.ts');
+  if (action === 'status') {
+    const dirs = findKicadDirs();
+    const got = await dl.downloadedKicadLibraries();
+    return print({ available: !!dirs, ...(dirs ? dirs : {}), ...(got ? { downloaded: { version: got.version, date: got.date } } : {}), cache: dl.kicadCacheRoot(), license: dl.KICAD_LIBRARY_LICENSE });
+  }
+  if (action !== 'download') fail('Usage: hassassin kicad-libraries [status|download] [--version x.y.z]');
+  const version = typeof flags.version === 'string' ? flags.version : undefined;
+  process.stderr.write(`Downloading the official KiCad libraries from ${dl.KICAD_REPOS.symbols} and ${dl.KICAD_REPOS.footprints}\nLicense: ${dl.KICAD_LIBRARY_LICENSE.name} (${dl.KICAD_LIBRARY_LICENSE.url})\n`);
+  let last = 0;
+  const r = await dl.downloadKicadLibraries({
+    ...(version ? { version } : {}),
+    onProgress: (p) => {
+      if (Date.now() - last < 1000 && p.stage !== 'done') return;
+      last = Date.now();
+      process.stderr.write(`  ${p.stage}${p.version ? ` ${p.version}` : ''}: ${(p.bytes / 1e6).toFixed(1)} MB, ${p.files} files\n`);
+    },
+  });
+  print({ version: r.version, symbols: r.symbols, footprints: r.footprints, license: r.license });
+}

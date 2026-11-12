@@ -17,8 +17,9 @@ export class ServerLibrary implements LibrarySource {
   available: boolean | null = null;
   sources: string[] = [];
 
-  async check(): Promise<boolean> {
-    if (this.available !== null) return this.available;
+  /** `fresh` asks the server again (its sources change after a KiCad library download). */
+  async check(fresh = false): Promise<boolean> {
+    if (this.available !== null && !fresh) return this.available;
     const info = await get<{ sources: string[] }>('/api/library/info');
     this.sources = info?.sources ?? [];
     return (this.available = !!info);
