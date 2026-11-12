@@ -324,6 +324,52 @@ Known limitations:
   sub-sheets, multi-unit switching, symbol editor, footprint generator, pin ↔ pad check, KiCad libraries
   on demand).
 
+## Schematic improvements, milestone M2 (v0.0.3)
+
+Done under the work agreement [docs/04-schematic-improvements.md](04-schematic-improvements.md)
+(S7–S12, S16, S19–S21), so schematics come out tidy and can be shared, and parts missing from every
+library can be made in the app:
+
+- **Wires that avoid symbols and pins (S7):** `connect_pins` and the wire tool route at right angles
+  around symbol bodies and never touch pins, wires or labels of other nets; with no clean path they say so
+  and suggest a label. ERC warns about a pin in the middle of a wire and a wire through a part body.
+- **Compact, aligned layout (S8):** align / distribute for a selection, `place_relative` (for example
+  decoupling capacitors below U1), `compact_blocks` packs blocks into rows, `tidy_wires` moves small parts
+  so jogs straighten, texts never overlap, and a configurable schematic grid (pin grid 1.27 / 2.54 /
+  5.08 mm, wire grid). On the RGB sleep lamp benchmark the sheet area dropped 49.8 % and short jogs 90 %
+  against v0.0.1, with no overlapping texts and a clean ERC.
+- **Sheet frame, title block, notes and group boxes (S9)**, and **vector PDF / SVG export (S10):** one
+  page per sheet, light, black-and-white or dark, fit to A4 … A0.
+- **Hierarchical sub-sheets created in the editor (S11):** sheet pins follow hierarchical labels; ERC
+  checks labels against pins.
+- **Multi-unit parts (S12):** switch a placed unit, place the missing ones; ERC reports a missing power
+  unit.
+- **Symbol editor (S16):** paste a datasheet pin table, choose sides and order, split units, live
+  preview; stored in the project, publishable to the team library.
+- **Footprint generator (S19):** two-row, four-side, grid, castellated module and free pad lists, from the
+  land pattern or from lead dimensions; exposed pads with thermal vias, mounting holes, courtyard,
+  silkscreen and fab layers. Standard packages match the KiCad library footprints within 0.1 mm.
+- **Pin ↔ pad check (S20):** ERC, Review and Update PCB report pins without a pad and pads without a pin;
+  mechanical pads can be listed per part.
+- **Official KiCad libraries on demand (S21):** without a KiCad install, the symbol and footprint
+  libraries can be downloaded into a local cache after the user agrees, or installed from archives
+  fetched in a browser (`hassassin kicad-libraries install`). KiCad 10's one-file-per-symbol sources are
+  joined at install. Every part shows its source and license.
+
+| Benchmark schematic, A3 frame and title block (PDF / SVG export) | Symbol editor from a pin table | Footprint generator |
+|---|---|---|
+| ![The RGB sleep lamp schematic made by the agent, compacted, with power symbols, an A3 frame and title block, exported as SVG](media/m2-schematic-frame.jpg) | ![New symbol dialog: a pasted TPS54302 pin table, pin types and sides, and the live preview](media/m2-symbol-editor.jpg) | ![New footprint dialog: a QFN-24 4 × 4 mm with exposed pad and 3 × 3 thermal vias, with dimensions in the preview](media/m2-footprint-generator.jpg) |
+
+Known limitations:
+- gitlab.com refuses the automatic library download from Node (`406`); the app then explains how to
+  fetch the two archives in a browser and install them. How the download should identify itself is
+  still open.
+- Two wires crossing a part body were fixed after the last agent re-run (S8); not yet confirmed by a new
+  agent run.
+- Wires keep their place when a unit is switched (as in KiCad), so they may need re-drawing.
+- Next: milestone M3 (KiCad netlist and `.kicad_sch` export, buses, configurable ERC, PCB → schematic
+  back-annotation).
+
 ## Out of scope (for now)
 
 SPICE simulation, mechanical / enclosure design, firmware, wire harnesses, ordering from fabricators.

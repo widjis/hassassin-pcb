@@ -72,7 +72,7 @@ between blocks.
 | Tool | Read/write | What it does |
 |---|---|---|
 | project_status | read | Overview, check results, stage gates, requirements, board size |
-| query | read | Find objects with a selector |
+| query | read | Find objects with a selector; quote names with ( ) : , or spaces, e.g. `net#"Net-(U1-SW1)" > trace` |
 | inspect | read | Every computed rule and where its value comes from |
 | list_parts | read | Parts in the schematic and on the board |
 | netlist | read | Schematic nets with their pins |
@@ -90,9 +90,14 @@ between blocks.
 | move_symbol | write | Move / rotate / mirror a symbol; wires follow; refused if connections would change |
 | duplicate | write | Copy parts with their wires, power symbols and labels to an offset; new references |
 | annotate | write | Renumber references in reading order (keep or reset, whole design or one sheet) |
+| align / place_relative | write | Align or spread symbols; place a block of parts relative to an anchor (e.g. decoupling capacitors below U1) |
+| compact_blocks | write | Pack the blocks of a sheet into rows, closer together; connections stay |
+| tidy_wires | write | Move small parts so jogs straighten and re-route bends; connections are checked and never change |
+| set_schematic_grid | write | Pin grid (1.27 / 2.54 / 5.08 mm) and wire grid of the project |
+| set_sheet_frame / add_note / add_group_box | write | Drawing frame with title block; free text notes; titled boxes around a block of parts |
 | update_pcb | write | Schematic → board sync |
 | move_part / route / refill_pours | write | Board editing |
-| search_parts / get_part | read | Find parts (project, generic, team library, installed KiCad libraries) |
+| search_parts / get_part | read | Find parts (project, generic, team library, KiCad libraries); `get_part` also takes a placed component's reference (U1) |
 | search_footprints | read | Find footprints (generic, project, KiCad) |
 | bom | read | BOM and price for N boards; parts without MPN, price or stock |
 | place_part | write | Place a library part (every unit) on the schematic |

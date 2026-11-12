@@ -309,6 +309,12 @@ only when all of its criteria pass.
     to fetch the two archives in a browser, and `hassassin kicad-libraries install <archives>` installs
     them (tested with local archives). Open: how the automatic download should identify itself to
     gitlab.com is the owner's decision.
+    Real archives (2026-11-12, KiCad 10.0.8, fetched with curl): the symbol sources keep one file per
+    symbol in `<Lib>.kicad_symdir/` (KiCad's own build joins them for its installers), so the first
+    install had footprints but no symbols. Install now joins each folder into one `<Lib>.kicad_sym`
+    (`794658d`). Checked with the real archives: 155 footprint libraries, 223 symbol libraries with
+    22,911 symbols; `search-parts AMS1117` finds it, and AMS1117-3.3 (an `extends` symbol) places with
+    its pins and the SOT-223 footprint.
   - Without KiCad installed, the app can download the official symbol and footprint libraries from
     KiCad's public repository into a local cache, after the user agrees.
   - They are never stored in this repository. The UI shows where each part came from and its license
