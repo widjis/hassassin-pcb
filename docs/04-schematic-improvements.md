@@ -374,7 +374,25 @@ only when all of its criteria pass.
   - A schematic made in Hassassin opens in KiCad 9/10 with the same symbols, wires, labels and power
     symbols; KiCad's ERC on it matches ours for the test projects.
   - Round trip: import → export → import gives the same netlist.
-- [ ] **S15. Buses.**
+- [x] **S15. Buses.** — `86cb61f`
+  - Delivered: `packages/core/src/bus.ts`. Buses (`bus` segments) named by a label: vectors
+    `DATA[0..7]` (also descending, `A[3..0]`) and groups `I2C{SDA SCL}` / `{SDA SCL}` (members `I2C.SDA`,
+    `SDA`; vectors inside groups); bus entries (`busEntry`). What connects, as KiCad decides it (found
+    first with small test schematics read by kicad-cli): a wire is a member through its net label;
+    within a sheet, members connect by name; through a sheet pin the parent bus and the sheet's bus join
+    member by member in order, named from the parent (`X[0..1]` on the parent, `D[0..1]` inside → `/X0`,
+    `/X1`); a global label on a bus makes its members global. Bus labels are not nets. Editor: **Bus** (B)
+    and **Entry** (E) tools; buses drawn thick and blue; they select, move, copy and delete like wires;
+    PDF / SVG export draws them. ERC: bus labels count as attached, wires on entries are not dangling, and
+    `netNotBusMember` warns about a wire on an entry that is not a member (KiCad's `net_not_bus_member`).
+    KiCad import and export of `bus` and `bus_entry`. Tools `add_bus` (name, corners, kind, optional pins
+    labelled with the members in order) and `add_bus_entry`.
+  - Tests: `packages/tools/test/schematic-s15.test.ts` (names, hierarchy by position, global bus, ERC,
+    KiCad round trip; with KiCad installed, kicad-cli's netlist of our export equals ours). Probe: eight
+    hand-written KiCad schematics with buses (one sheet, hierarchy with the same and another name, a
+    wider parent bus, groups with and without a prefix, global bus labels, a sub-sheet without one),
+    imported here: our nets equal kicad-cli's in all eight. Browser check: a bus drawn with two clicks,
+    two entries with E, on the grid, undoable.
   - Bus wires and bus labels such as `DATA[0..7]`, with bus entries; the netlist connects the members.
 - [ ] **S17. Configurable ERC.**
   - A pin-type matrix that can be changed per project, and the ability to waive a specific violation
