@@ -394,7 +394,24 @@ only when all of its criteria pass.
     imported here: our nets equal kicad-cli's in all eight. Browser check: a bus drawn with two clicks,
     two entries with E, on the grid, undoable.
   - Bus wires and bus labels such as `DATA[0..7]`, with bus entries; the netlist connects the members.
-- [ ] **S17. Configurable ERC.**
+- [x] **S17. Configurable ERC.** — `642e80d`
+  - Delivered: `packages/core/src/ercSettings.ts`, kept in the project (undoable, shared with
+    collaborators, saved). A pin-type matrix for the 12 pin types, checked on every net pair by pair:
+    two driving pins → `driverConflict`, a no-connect pin connected → `noConnectConnected`, any other
+    pair the matrix marks → new `pinConflict`. The built-in levels match KiCad 10's: all 78 pairs were
+    built as a test schematic, exported (S14) and judged by kicad-cli's ERC, and now agree. Per check, a
+    project can report it as error, warning or not at all. Option *power symbols need a source* (off by
+    default): a net with power symbols but no power output or PWR_FLAG is an error, as in KiCad (left
+    open in S14). Waivers: one violation (by its id) is accepted with a reason; it then no longer counts
+    (badge, Review, the schematic gate) and Review lists it under **Waived** with its reason and an
+    **Unwaive** button. Editor: **ERC settings…** in Review (clickable matrix, checks, option, reset to
+    defaults) and **Waive** on every ERC item. Tools: `set_erc_rule`, `set_erc_check`, `set_erc_option`,
+    `waive_violation`, `unwaive_violation`; `run_erc` lists ids and the waived ones.
+  - Tests: `packages/tools/test/schematic-s17.test.ts` (matrix, overrides and undo, power option,
+    waiver kept through save / open and the gate; with KiCad installed, the 78 pairs against kicad-cli).
+    The solar MPPT project still has 0 ERC errors and warnings; the RGB sleep lamp keeps its 4 warnings.
+    Browser check: waived RADAR_RX on the lamp (moved to Waived with its reason, ERC 4 → 3), a matrix cell
+    changed and reset.
   - A pin-type matrix that can be changed per project, and the ability to waive a specific violation
     with a recorded reason (shown in Review and kept in the project).
 - [ ] **S18. PCB → schematic back-annotation.**
