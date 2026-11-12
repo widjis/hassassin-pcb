@@ -57,6 +57,11 @@ const canon = (d: Doc) => {
   return JSON.stringify(f);
 };
 const settle = () => new Promise((r) => setTimeout(r, 120));
+/** Wait until `ok()` holds (polling), so a busy machine does not fail the test; gives up after 3 s. */
+const until = async (ok: () => boolean, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (!ok() && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+};
 
 describe('collaboration server', () => {
   it('keeps two editors in step under concurrent edits', async () => {
@@ -73,7 +78,7 @@ describe('collaboration server', () => {
     b.state.history.apply('Add', [{ op: 'add', parent: comps, index: 1, tree: { nodes: [{ uid: 'el-b', type: 'element', name: 'RB', props: {}, rules: [], parent: comps, children: [] }] } }]);
     await a.sc.flush();
     await b.sc.flush();
-    await settle();
+    await until(() => canon(a.state.doc) === canon(b.state.doc));
     expect(canon(a.state.doc)).toBe(canon(b.state.doc));
     // The server's copy agrees too.
     const file = await (await fetch(`${base}/api/projects/${id}/file?token=${tokens.view}`)).json();
@@ -86,7 +91,7 @@ describe('collaboration server', () => {
     expect(canon(c.state.doc)).toBe(canon(a.state.doc));
     // Presence is shared.
     a.sc.sendPresence({ space: 'layout', x: 5, y: 6 }, ['el-r1']);
-    await settle();
+    await until(() => [...b.sc.peers.values()].some((p) => p.user.name === 'Ana' && p.cursor?.x === 5));
     expect([...b.sc.peers.values()].find((p) => p.user.name === 'Ana')?.cursor).toEqual({ space: 'layout', x: 5, y: 6 });
     [a, b, c].forEach((x) => x.sc.close());
   });
