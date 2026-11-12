@@ -272,7 +272,18 @@ only when all of its criteria pass.
     generated pads with the matching footprint in the KiCad libraries installed on the machine. The
     libraries are read only while the test runs and never copied into the repository; the test is
     skipped when KiCad is not installed.
-- [ ] **S20. Pin ↔ pad check.**
+- [x] **S20. Pin ↔ pad check.** — `49b5b34`
+  - Delivered: `packages/core/src/pinPad.ts`. All units of a part count together; one pad number may have
+    several pads (exposed pad with vias); unnumbered pads, bare holes and pads named MP… / SH… / MH… / TAB…
+    are mechanical; others can be listed in the part's **Mechanical pads** (inspector,
+    `set_part_info mechanical_pads`). The board's copy is checked when the part is on the board, the
+    schematic's footprint when it was changed and not synced yet. ERC `pinPadMismatch`: error for pins
+    without a pad, warning for pads without a pin, both with the pin and pad counts; Review lists them.
+    Update PCB reports it (tool result `pinPad`, message in the editor); `assign_footprint` returns the
+    check at once and the agent is told to read and fix it.
+  - Tests: `packages/tools/test/schematic-s20.test.ts`. Browser check: Review shows a 10-pin symbol on
+    SOIC-8 (error) and a QFN exposed pad without a pin (warning); Mechanical pads = 25 clears the warning;
+    Update PCB names the part.
   - ERC (and Update PCB) reports symbol pins with no matching footprint pad, pads with no pin (unless
     marked mechanical / no-connect), and pin counts that differ.
   - The agent runs it after `assign_footprint`; Review lists the findings.
