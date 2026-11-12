@@ -25,7 +25,7 @@ import { extname, join, normalize } from 'node:path';
 import { fromFile, toFile, type DocFile } from '@hassassin/core';
 import { opsAllowed, type ClientMsg, type Presence, type Role, type ServerMsg, type User } from '@hassassin/sync';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { Store, type LiveProject } from './store.ts';
+import { Store, agentEdits, planUndo, type LiveProject } from './store.ts';
 import { KicadSystemLibrary, Library, type LibrarySource } from '@hassassin/tools';
 import { kicadSystemLibrary, nodeLibFs, resetKicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
 import { downloadKicadLibraries, downloadedKicadLibraries, KICAD_LIBRARY_LICENSE, KICAD_REPOS, type DownloadProgress } from '../../../packages/tools/src/kicadDownload.ts';
@@ -71,6 +71,10 @@ interface Chat {
   /** Who started it, and the transcript so far (for people who open the project later). */
   by: string;
   events: Record<string, unknown>[];
+  /** Name the agent's edits carry in the log (as the collaboration server stores it). */
+  agentUser: string;
+  /** Each reply's range of transactions, so its edits can be undone together. */
+  turns: Map<string, { from: number; to: number; undone: boolean }>;
 }
 
 /** Requests from this machine (the CLI backends and sign-in act on the local user's accounts). */
@@ -151,6 +155,29 @@ export async function startServer(opts: ServerOptions) {
       chats.get(String(b.chat ?? ''))?.abort?.abort();
       return json(res, 200, { ok: true });
     }
+    if (parts[3] === 'undo') {
+      // Undo every edit one agent reply made, as one change (POST {chat, turn}).
+      if (role !== 'edit') return json(res, 403, { error: 'Only editors can undo changes.' });
+      const ch = chats.get(String(b.chat ?? ''));
+      const turn = ch?.project === id ? ch.turns.get(String(b.turn ?? '')) : undefined;
+      if (!ch || !turn) return json(res, 410, { error: 'This reply is no longer known to the server (it restarted). Restore a version from History instead.' });
+      if (turn.undone) return json(res, 409, { error: 'Already undone.' });
+      if (ch.session.running) return json(res, 409, { error: 'Wait until the agent has finished.' });
+      const plan = planUndo(lp, turn.from, turn.to, ch.agentUser);
+      if ('error' in plan) return json(res, 409, plan);
+      const who = String((b.user as { name?: string } | undefined)?.name ?? 'Someone').slice(0, 40);
+      const user: User = { id: 'agent-undo', name: who, color: '#999999', kind: 'person' };
+      const label = 'Undo agent changes';
+      try {
+        const seq = await store.commit(lp, user, label, plan.ops);
+        broadcast(lp, { t: 'tx', seq, clientId: 'server', user, label, ops: plan.ops });
+      } catch (e) {
+        return json(res, 409, { error: `Could not undo: ${(e as Error).message}` });
+      }
+      turn.undone = true;
+      log(`${who} undid ${plan.count} agent change(s) on ${id}`);
+      return json(res, 200, { ok: true, undone: plan.count });
+    }
     if (parts[3] === 'chats') {
       // Recent agent conversations on this project, newest last.
       const list = [...chats.values()].filter((c) => c.project === id).sort((x, y) => x.lastUsed - y.lastUsed).slice(-5);
@@ -174,15 +201,16 @@ export async function startServer(opts: ServerOptions) {
           model: agentModel!,
           runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
         });
-        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [] };
+        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: agentName.slice(0, 40), turns: new Map() };
       } else {
         const st = await cliStatus(backend);
         if (!st.installed) return json(res, 503, { error: `${CLI_LABEL[backend]} is not installed here (run pnpm install).` });
         if (!st.loggedIn) return json(res, 401, { error: `${CLI_LABEL[backend]} is not signed in yet: use Sign in in the Agent tab.` });
         const tokenFor = (r: string) => Object.entries(lp.meta.tokens).find(([, v]) => v === r)?.[0];
         const link = (t: string | undefined) => `http://127.0.0.1:${boundPort}/?p=${id}&t=${t ?? tok}`;
-        const session = new CliAgentSession({ cli: backend, editLink: link(role === 'edit' ? tok : undefined), viewLink: link(tokenFor('view') ?? tok), workDir: join(opts.dataDir, 'agent-work', chatId), agentName: `${agentName} · ${backend === 'claude' ? 'Claude Code' : 'Codex'}` });
-        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [] };
+        const cliName = `${agentName} · ${backend === 'claude' ? 'Claude Code' : 'Codex'}`;
+        const session = new CliAgentSession({ cli: backend, editLink: link(role === 'edit' ? tok : undefined), viewLink: link(tokenFor('view') ?? tok), workDir: join(opts.dataDir, 'agent-work', chatId), agentName: cliName });
+        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: cliName.slice(0, 40), turns: new Map() };
       }
       chats.set(chatId, chat);
     }
@@ -196,7 +224,7 @@ export async function startServer(opts: ServerOptions) {
       if (c0.events.length > 1200) c0.events.splice(0, c0.events.length - 1200);
       broadcast(lp, { t: 'agent', chat: chatId, by: c0.by, backend, event: e });
     };
-    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend }) => {
+    const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend } | { type: 'edits'; turn: string; count: number; labels: string[] }) => {
       res.write(`data: ${JSON.stringify(e)}\n\n`);
       if (e.type !== 'chat') mirror(e as Record<string, unknown>);
     };
@@ -207,11 +235,19 @@ export async function startServer(opts: ServerOptions) {
     chat.abort = abort;
     req.on('close', () => !res.writableEnded && abort.abort());
     log(`agent (${backend}, ${mode}) on ${id}: ${prompt.slice(0, 80)}`);
+    const turnId = `t${Date.now().toString(36)}`;
+    const from = lp.seq;
     try {
       await chat.session.send(prompt, send, abort.signal);
     } catch (e) {
       send({ type: 'error', message: (e as Error).message });
     } finally {
+      // The edits of this reply, so the person can undo them together.
+      const made = agentEdits(lp, from, lp.seq, chat.agentUser);
+      if (made.length) {
+        chat.turns.set(turnId, { from, to: lp.seq, undone: false });
+        send({ type: 'edits', turn: turnId, count: made.length, labels: [...new Set(made.map((e) => e.label))].slice(0, 6) });
+      }
       chat.abort = null;
       chat.lastUsed = Date.now();
       mirror({ type: 'end' });

@@ -429,3 +429,8 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .agent-intro { padding: 20px 16px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .agent-intro-title { font-size: 15px; font-weight: 700; }
 .agent-intro p { margin: 0; color: var(--dim); line-height: 1.5; }
+
+.msg.edits { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); font-size: 12.5px; }
+.msg.edits > span { flex: 1; min-width: 0; color: var(--dim); }
+.msg.edits.undone > span { text-decoration: line-through; }
+.msg.edits .err-text { flex-basis: 100%; }

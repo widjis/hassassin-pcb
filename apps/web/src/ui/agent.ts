@@ -28,7 +28,9 @@ type Item =
   | { kind: 'agent'; text: string }
   | { kind: 'steps'; steps: Step[] }
   | { kind: 'note'; text: string }
-  | { kind: 'error'; text: string };
+  | { kind: 'error'; text: string }
+  /** The edits one reply made, with a button to undo them together. */
+  | { kind: 'edits'; chat: string; turn: string; count: number; labels: string[]; state?: 'busy' | 'undone'; error?: string };
 
 interface Task {
   title: string;
@@ -186,6 +188,13 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   const renderItem = (it: Item): HTMLElement => {
     if (it.kind === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, it.text));
     if (it.kind === 'error') return h('div', { class: 'msg error' }, it.text);
+    if (it.kind === 'edits') {
+      const what = `${it.count} change${it.count === 1 ? '' : 's'}${it.labels.length ? `: ${it.labels.join(', ')}` : ''}`;
+      if (it.state === 'undone') return h('div', { class: 'msg edits undone' }, h('span', {}, `Undone · ${what}`));
+      const btn = h('button', { class: 'btn', disabled: it.state === 'busy', title: 'Undo everything the agent changed in this reply, as one step' }, it.state === 'busy' ? 'Undoing…' : 'Undo these changes');
+      btn.addEventListener('click', () => void undoEdits(it));
+      return h('div', { class: 'msg edits' }, h('span', {}, `Agent made ${what}`), btn, it.error ? h('div', { class: 'err-text' }, it.error) : null);
+    }
     if (it.kind === 'note') {
       const d = h('details', { class: 'msg note' }, h('summary', {}, 'Thinking'), h('div', { class: 'note-body' }, it.text));
       return d;
@@ -411,6 +420,30 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     setBusy(busy);
   };
 
+  // ---------------------------------------------------------------- undo one reply's edits
+  const undoEdits = async (it: Extract<Item, { kind: 'edits' }>) => {
+    if (!collab.session || it.state) return;
+    it.state = 'busy';
+    delete it.error;
+    updateItem(it);
+    try {
+      const r = await fetch(`/api/agent/${collab.session.id}/undo?token=${encodeURIComponent(collab.session.token)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chat: it.chat, turn: it.turn, user: { name: collab.user.name } }),
+      });
+      const d = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(d.error ?? `HTTP ${r.status}`);
+      it.state = 'undone';
+      app.say('Undid the agent’s changes from that reply.');
+    } catch (e) {
+      delete it.state;
+      it.error = (e as Error).message;
+    }
+    updateItem(it);
+    persist();
+  };
+
   // ---------------------------------------------------------------- sending
   const send = async () => {
     const prompt = input.value.trim();
@@ -481,6 +514,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
             usage.input += e.input;
             usage.output += e.output;
             usage.cacheRead += e.cacheRead;
+          } else if (e.type === 'edits' && chat) {
+            push({ kind: 'edits', chat, turn: e.turn, count: e.count, labels: e.labels ?? [] });
           } else if (e.type === 'error') push({ kind: 'error', text: e.message });
         }
       }
