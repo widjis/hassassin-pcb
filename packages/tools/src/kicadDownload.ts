@@ -12,7 +12,7 @@
 import { createGunzip } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -151,9 +151,36 @@ export interface DownloadProgress {
 }
 
 const KEEP = {
-  symbols: (p: string) => /^[^/]+\.kicad_sym$/.test(p) || p === 'LICENSE.md',
+  // Released sources keep one file per symbol in <Lib>.kicad_symdir/ (KiCad 9 and later).
+  symbols: (p: string) => /^[^/]+\.kicad_sym$/.test(p) || /^[^/]+\.kicad_symdir\/[^/]+\.kicad_sym$/.test(p) || p === 'LICENSE.md',
   footprints: (p: string) => /^[^/]+\.pretty\/[^/]+\.kicad_mod$/.test(p) || p === 'LICENSE.md',
 } as const;
+
+/**
+ * Join each <Lib>.kicad_symdir folder (one symbol per file, as the KiCad sources keep them) into one
+ * <Lib>.kicad_sym library file, as KiCad's own build does for its installers. Returns the libraries made.
+ */
+export async function assembleSymbolDirs(dir: string): Promise<number> {
+  let made = 0;
+  for (const d of (await readdir(dir).catch(() => [] as string[])).filter((x) => x.endsWith('.kicad_symdir')).sort()) {
+    const chunks: string[] = [];
+    let version = '20241209';
+    for (const f of (await readdir(join(dir, d))).filter((x) => x.endsWith('.kicad_sym')).sort()) {
+      const text = await readFile(join(dir, d, f), 'utf8');
+      version = /\(version (\d+)\)/.exec(text)?.[1] ?? version;
+      // Every top-level symbol of the file: from its "(symbol" line to the library's closing bracket.
+      const start = text.search(/\n\t\(symbol "/);
+      const end = text.lastIndexOf(')');
+      if (start >= 0 && end > start) chunks.push(text.slice(start + 1, end).replace(/\s+$/, ''));
+    }
+    if (chunks.length) {
+      await writeFile(join(dir, d.replace(/\.kicad_symdir$/, '.kicad_sym')), `(kicad_symbol_lib\n\t(version ${version})\n\t(generator "hassassin_pcb")\n${chunks.join('\n')}\n)\n`);
+      made++;
+    }
+    await rm(join(dir, d), { recursive: true, force: true });
+  }
+  return made;
+}
 
 /** Unpack both archives (symbols, then footprints) into the cache and make them current. */
 async function installArchives(
@@ -173,6 +200,7 @@ async function installArchives(
         bytes = base + b;
         progress({ stage: a.what, bytes, files, version });
       });
+      if (a.what === 'symbols') await assembleSymbolDirs(join(tmp, 'symbols'));
       files += n;
       if (!n) throw new Error(`No ${a.what} found in ${a.label}`);
       progress({ stage: a.what, bytes, files, version });

@@ -102,6 +102,28 @@ describe('S21: KiCad libraries on demand', () => {
     await expect(installKicadArchives([join(dir, 'kicad-symbols-9.9.9.tar.gz')], { root: r2 })).rejects.toThrow(/kicad-footprints/);
   });
 
+  it('KiCad 10 sources (one file per symbol in <Lib>.kicad_symdir/) are joined into one library file', async () => {
+    const one = (name: string, body: string) =>
+      `(kicad_symbol_lib\n\t(version 20251024)\n\t(generator "kicad_symbol_editor")\n\t(generator_version "10.0")\n\t(symbol "${name}"\n${body}\n\t)\n)\n`;
+    const base = SYM.split('\n').slice(2, -2).join('\n');
+    const derived = `\t\t(extends "TESTCHIP")\n\t\t(property "Value" "TESTCHIP-B" (at 0 0 0))`;
+    const dir = mkdtempSync(join(tmpdir(), 'hkicad-symdir-'));
+    writeFileSync(join(dir, 'kicad-symbols-10.0.0.tar.gz'), gzipSync(tar({
+      'kicad-symbols-10.0.0/Dir_Lib.kicad_symdir/TESTCHIP.kicad_sym': one('TESTCHIP', base),
+      'kicad-symbols-10.0.0/Dir_Lib.kicad_symdir/TESTCHIP-B.kicad_sym': one('TESTCHIP-B', derived),
+      'kicad-symbols-10.0.0/LICENSE.md': 'license',
+    })));
+    writeFileSync(join(dir, 'kicad-footprints-10.0.0.tar.gz'), ARCHIVES['kicad-footprints']!);
+    const got = await installKicadArchives([join(dir, 'kicad-symbols-10.0.0.tar.gz'), join(dir, 'kicad-footprints-10.0.0.tar.gz')], { root: mkdtempSync(join(tmpdir(), 'hkicad-r10-')) });
+    expect(existsSync(join(got.symbols, 'Dir_Lib.kicad_symdir'))).toBe(false);
+    const lib = readFileSync(join(got.symbols, 'Dir_Lib.kicad_sym'), 'utf8');
+    expect(lib).toMatch(/^\(kicad_symbol_lib\n\t\(version 20251024\)/);
+    expect(lib.match(/^\t\(symbol "/gm)).toEqual(['\t(symbol "', '\t(symbol "']);
+    expect(lib).toContain('\t(symbol "TESTCHIP-B"\n\t\t(extends "TESTCHIP")');
+    expect(lib).toContain('(name "OUT"');
+    expect(lib.trimEnd().endsWith('\t)\n)')).toBe(true);
+  });
+
   const root = mkdtempSync(join(tmpdir(), 'hkicad-cache-'));
   let srv: Awaited<ReturnType<typeof startServer>>;
   afterAll(() => srv?.close());
