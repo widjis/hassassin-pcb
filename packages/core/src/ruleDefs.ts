@@ -69,6 +69,8 @@ const defs: RuleDef[] = [
   { name: 'mirror', label: 'Mirror', kind: 'enum', inheritable: false, options: ['none', 'x', 'y'], help: 'Mirror a schematic symbol about its X or Y axis.' },
   { name: 'pinLength', label: 'Pin length', kind: 'length', inheritable: false, help: 'Length of a schematic pin line.' },
   { name: 'autoPlacePriority', label: 'Auto-place priority', kind: 'number', inheritable: true, help: 'Higher numbers get placed or routed first.' },
+  { name: 'cornerStyle', label: 'Corner style', kind: 'enum', inheritable: true, options: ['45', 'arc', '90'], help: 'How routed traces turn: 45 = two 45° bends instead of a right angle, arc = rounded, 90 = right angles allowed. Never acute.' },
+  { name: 'cornerSetback', label: 'Corner setback', kind: 'length', inheritable: true, help: 'How far before a corner its 45° piece or arc starts (default: 2 × trace width).' },
 ];
 
 export const RULE_DEFS: ReadonlyMap<string, RuleDef> = new Map(defs.map((d) => [d.name, d]));

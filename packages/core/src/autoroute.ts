@@ -16,7 +16,7 @@ import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea } from './copper.ts';
 import { computeRatsnest } from './connectivity.ts';
-import { distToSegment, pointInPolygon } from './geom.ts';
+import { arcPoints, distToSegment, pointInPolygon } from './geom.ts';
 
 export interface AutorouteOptions {
   /** Only these nets (default: every net with unrouted connections). */
@@ -27,6 +27,8 @@ export interface AutorouteOptions {
   viaCost?: number;
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
+  /** Corner style for every net, overriding the `cornerStyle` rule (P8e). */
+  cornerStyle?: '45' | 'arc' | '90';
   /** Rounds of rip-up and retry (default 30; 1 = route once, no rip-up). */
   rounds?: number;
   /** Stop after this many milliseconds (default 30 s); connections not tried are reported as `time limit`. */
@@ -299,6 +301,9 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   const cost = new Float32Array(N * L);
   const from = new Int32Array(N * L);
   const stamp = new Int32Array(N * L);
+  // States already expanded in the current search: a state is expanded once (later, stale heap entries
+  // of it are skipped), so a search that finds nothing ends after at most one pass over the board.
+  const closed = new Int32Array(N * L);
   let run = 0;
   // Per-call memo of the cell tests (value = 2 * call + result; stale calls read as unknown).
   const usableMemo = new Int32Array(N * L);
@@ -321,7 +326,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   // ripped up: capsules in buckets of BK mm per layer; a capsule is filed in every bucket within `reach`
   // of it, so the bucket of a point holds every capsule that can matter there.
   interface Cap { li: number; a: Vec2; b: Vec2; r: number; id: number; cl: number; route: number }
-  interface Route { key: number; conn: number; net: string; id: number; caps: Cap[]; segs: { li: number; a: Vec2; b: Vec2; w: number }[]; vias: Vec2[]; length: number; deps: Set<number> }
+  interface Route { key: number; conn: number; net: string; id: number; caps: Cap[]; segs: { li: number; a: Vec2; b: Vec2; w: number; mid?: Vec2 }[]; vias: Vec2[]; length: number; deps: Set<number> }
   const BK = Math.max(1, reach * 2);
   const BW = Math.ceil((maxX - minX) / BK) + 2;
   const buckets = layers.map(() => new Map<number, Cap[]>());
@@ -359,6 +364,14 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const cn = netClear(r.net);
     const viaR = Math.ceil((viaD / 2 + cn - width / 2) / g);
     const soft = pres !== Infinity;
+    // Corner style (P8e): 45 = soften right angles into two 45° turns, arc = round every turn, 90 = keep
+    // right angles. Acute corners are never made in any style.
+    const styleRule = netNode.get(r.net) ? engine.get(netNode.get(r.net)!.uid, 'cornerStyle')?.value : undefined;
+    const style: '45' | 'arc' | '90' = opts.cornerStyle ?? (styleRule === 'arc' || styleRule === '90' ? styleRule : '45');
+    const setback = netRule(r.net, 'cornerSetback', 2 * width);
+    // The corner pass softens right angles afterwards, so in the search they only cost a little more
+    // than a 45° turn (a high price here makes the search wander and slows it down a lot).
+    const turn90 = 0.3;
     // Pads of this net at the two ends that are narrower than the trace: inside a zone around them
     // (the pad grown by half the width plus the clearance) the trace necks down to the pad's width.
     const minTrace = netRule(r.net, 'traceWidthMin', 0.15);
@@ -510,11 +523,19 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       if (!soft) for (const cp of capsAlong(li, a, b)) if (cp.id !== id && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl) - 1e-6) return false;
       return true;
     };
-    type End = Map<number, { cost: number; pts: Vec2[] }>;
+    type End = Map<number, { cost: number; pts: Vec2[]; dir?: [number, number] }>;
     /** Entry states at end point q: grid state → cost (in cells) and the exact points from q up to (not including) the cell. */
     const entries = (q: Vec2, out: End) => {
       const ls = ownLayersAt(q);
       const rho = padExtentAt(q) + width + cn + 3 * g;
+      // A person leaves a pad straight along its long axis: other first directions cost a little more.
+      let axis: 'x' | 'y' | null = null;
+      for (const sh of ownShapes) {
+        if (sh.kind !== 'pad' || !sh.areas[0] || !inArea(q, sh.areas[0])) continue;
+        const bw = sh.box.maxX - sh.box.minX;
+        const bh = sh.box.maxY - sh.box.minY;
+        if (Math.abs(bw - bh) > 0.05) axis = bw > bh ? 'x' : 'y';
+      }
       nearShapes = shapes.filter((sh) => sh.box.maxX >= q.x - rho - reach && sh.box.minX <= q.x + rho + reach && sh.box.maxY >= q.y - rho - reach && sh.box.minY <= q.y + rho + reach);
       const offer = (li: number, pts: Vec2[], cell: Vec2) => {
         const c = cellOf(cell);
@@ -530,9 +551,23 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
           len += l;
         }
         const st = li * N + c;
-        const cost = len / g + (pts.length > 1 ? 0.1 : 0);
+        const kept = path.filter((x, k) => k === 0 || Math.hypot(x.x - path[k - 1]!.x, x.y - path[k - 1]!.y) > 1e-9);
+        if (kept.length < 2) {
+          const cur = out.get(st);
+          if (!cur || cur.cost > len / g) out.set(st, { cost: len / g, pts: [q] });
+          return;
+        }
+        // Turns inside the entry may not be acute; the first piece should follow the pad's long axis.
+        for (let k = 1; k + 1 < kept.length; k++) if (dirDot(kept[k - 1]!, kept[k]!, kept[k + 1]!) < -1e-9) return;
+        const f0 = kept[0]!;
+        const f1 = kept[1]!;
+        const offAxis = axis === 'x' ? Math.abs(f1.y - f0.y) > 1e-9 : axis === 'y' ? Math.abs(f1.x - f0.x) > 1e-9 : false;
+        const cost = len / g + (kept.length > 2 ? 0.1 : 0) + (offAxis ? 1 : 0);
+        const l0 = kept[kept.length - 2]!;
+        const l1 = kept[kept.length - 1]!;
+        const dir: [number, number] = [Math.sign(Math.round((l1.x - l0.x) * 1e4)), Math.sign(Math.round((l1.y - l0.y) * 1e4))];
         const cur = out.get(st);
-        if (!cur || cur.cost > cost) out.set(st, { cost, pts: pts.filter((x, k) => k === 0 || Math.hypot(x.x - pts[k - 1]!.x, x.y - pts[k - 1]!.y) > 1e-9) });
+        if (!cur || cur.cost > cost) out.set(st, { cost, pts: kept.slice(0, -1), dir });
       };
       const steps = Math.ceil(rho / g) + 1;
       const i0 = Math.round((q.x - minX) / g);
@@ -633,6 +668,29 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     };
     /** Extra cost of entering a cell: run-routes in the way (soft only) and the cell's history. */
     const extra = (li: number, c: number) => (soft ? pres * crowd(li, c) : 0) + hist[li * N + c]!;
+    /** Direction of the last step into state s (grid units), or null after a via or at a plain start. */
+    const predDir = (s: number, li: number, i: number, j: number): [number, number] | null => {
+      const p = from[s]!;
+      if (p < 0) return seeds.get(s)?.dir ?? null;
+      const pli = Math.floor(p / N);
+      if (pli !== li) return null;
+      const pc = p - pli * N;
+      const pi = pc % W;
+      return [i - pi, j - (pc - pi) / W];
+    };
+    /** A goal reached through an entry is accepted only if the turn onto the entry is not acute. */
+    const goalOk = (s: number) => {
+      const e = goals.get(s)!;
+      if (!e.pts.length) return true;
+      const li = Math.floor(s / N);
+      const c = s - li * N;
+      const i = c % W;
+      const j = (c - i) / W;
+      const pd = predDir(s, li, i, j);
+      if (!pd) return true;
+      const t = e.pts[e.pts.length - 1]!;
+      return pd[0] * (t.x - cx(i)) + pd[1] * (t.y - cy(j)) >= -1e-9;
+    };
     for (const [st, e] of seeds) {
       stamp[st] = run;
       cost[st] = e.cost + extra(Math.floor(st / N), st % N);
@@ -643,7 +701,9 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     let expanded = 0;
     while (heap.size) {
       const s = heap.pop();
-      if (goals.has(s)) {
+      if (closed[s] === run) continue;
+      closed[s] = run;
+      if (goals.has(s) && goalOk(s)) {
         found = s;
         break;
       }
@@ -653,7 +713,16 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const base = cost[s]!;
       const i = c % W;
       const j = (c - i) / W;
+      const pd = predDir(s, li, i, j);
       for (const [di, dj, w] of DIRS) {
+        // Turns: straight is free, 45° costs little, 90° a little more, acute never.
+        let turn = 0;
+        if (pd) {
+          const dot = pd[0] * di + pd[1] * dj;
+          if (dot < 0) continue;
+          if (dot === 0) turn = turn90;
+          else if (pd[0] !== di || pd[1] !== dj) turn = 0.1;
+        }
         const ii = i + di;
         const jj = j + dj;
         if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
@@ -662,7 +731,6 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         // No corner cutting past blocked cells on diagonals.
         if (di && dj && (!usable(li, j * W + ii) || !usable(li, jj * W + i))) continue;
         const ns = li * N + nc;
-        const turn = from[s]! >= 0 && from[s]! !== s - (dj * W + di) ? 0.1 : 0;
         const nCost = base + w + turn + extra(li, nc);
         if (stamp[ns] === run && cost[ns]! <= nCost) continue;
         stamp[ns] = run;
@@ -707,31 +775,185 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     raw.push(cur);
     const key = ++routeKey;
     const route: Route = { key, conn: -1, net: r.net, id, caps: [], segs: [], vias, length: 0, deps: new Set() };
-    for (const sgm of raw) {
-      // Merge collinear runs.
+    // ---- Clean-up (P8e): smooth the grid path into long 0° / 45° / 90° runs, then soften its corners
+    // by style. Every new piece is checked against the real copper before it replaces the old ones.
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const sg of raw) for (const q of sg.pts) (x0 = Math.min(x0, q.x)), (y0 = Math.min(y0, q.y)), (x1 = Math.max(x1, q.x)), (y1 = Math.max(y1, q.y));
+    const m = reach + setback + 1;
+    nearShapes = shapes.filter((sh) => sh.box.maxX >= x0 - m && sh.box.minX <= x1 + m && sh.box.maxY >= y0 - m && sh.box.minY <= y1 + m);
+    const merged = (pts: Vec2[]) => {
       const simple: Vec2[] = [];
-      for (const p of sgm.pts) {
+      for (const p of pts) {
         if (simple.length && Math.hypot(p.x - simple[simple.length - 1]!.x, p.y - simple[simple.length - 1]!.y) < 1e-6) continue;
         if (simple.length >= 2) {
           const a = simple[simple.length - 2]!;
           const b = simple[simple.length - 1]!;
           const cross = (b.x - a.x) * (p.y - b.y) - (b.y - a.y) * (p.x - b.x);
-          if (Math.abs(cross) < 1e-9) {
+          if (Math.abs(cross) < 1e-9 && (b.x - a.x) * (p.x - b.x) + (b.y - a.y) * (p.y - b.y) >= 0) {
             simple[simple.length - 1] = p;
             continue;
           }
         }
         simple.push(p);
       }
-      for (let k = 0; k + 1 < simple.length; k++) {
-        const a = simple[k]!;
-        const b = simple[k + 1]!;
-        const w = segWidth(a, b);
-        route.length += Math.hypot(b.x - a.x, b.y - a.y);
-        route.segs.push({ li: sgm.layer, a, b, w });
-        route.caps.push({ li: sgm.layer, a, b, r: w / 2, id, cl: cn, route: key });
+      return simple;
+    };
+    const clearPath = (li: number, pts: Vec2[]) => {
+      for (let k = 0; k + 1 < pts.length; k++) if (Math.hypot(pts[k + 1]!.x - pts[k]!.x, pts[k + 1]!.y - pts[k]!.y) > 1e-9 && !pieceClear(li, pts[k]!, pts[k + 1]!)) return false;
+      return true;
+    };
+    /** Octilinear ways from a to b: straight if a–b is at 0° / 45° / 90°, else a 45° piece and a straight one (either order). */
+    const connectors = (a: Vec2, b: Vec2): Vec2[][] => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const ax = Math.abs(dx);
+      const ay = Math.abs(dy);
+      if (ax < 1e-9 || ay < 1e-9 || Math.abs(ax - ay) < 1e-9) return [[]];
+      const d = Math.min(ax, ay);
+      const sx = Math.sign(dx);
+      const sy = Math.sign(dy);
+      return [[{ x: a.x + sx * d, y: a.y + sy * d }], [{ x: b.x - sx * d, y: b.y - sy * d }]];
+    };
+    const smooth = (li: number, P: Vec2[]): Vec2[] => {
+      if (P.length < 4) return P;
+      const out: Vec2[] = [P[0]!, P[1]!];
+      let i = 1;
+      const last = P.length - 1;
+      while (i < last) {
+        let done = false;
+        // Keep the first piece (the pad entry) and the last one; join point i to the farthest point it can reach.
+        for (let j = Math.min(last - 1, i + 60); j > i + 1 && !done; j--) {
+          for (const mids of connectors(P[i]!, P[j]!)) {
+            const path = [P[i]!, ...mids, P[j]!];
+            const before = out[out.length - 2]!;
+            if (dirDot(before, P[i]!, path[1]!) < -1e-9 || dirDot(path[path.length - 2]!, P[j]!, P[j + 1]!) < -1e-9) continue;
+            if (mids.length && dirDot(P[i]!, mids[0]!, P[j]!) < -1e-9) continue;
+            if (!clearPath(li, path)) continue;
+            out.push(...mids, P[j]!);
+            i = j;
+            done = true;
+            break;
+          }
+        }
+        if (!done) {
+          out.push(P[i + 1]!);
+          i++;
+        }
+      }
+      return merged(out);
+    };
+    /** Corner pass by style: pieces (straight, or an arc with a mid point) along P. */
+    const soften = (li: number, P: Vec2[]): { a: Vec2; b: Vec2; mid?: Vec2 }[] => {
+      const out: { a: Vec2; b: Vec2; mid?: Vec2 }[] = [];
+      let cur = P[0]!;
+      const n = P.length - 1;
+      for (let k = 1; k < n; k++) {
+        const A = P[k - 1]!;
+        const V = P[k]!;
+        const B = P[k + 1]!;
+        const lin = Math.hypot(V.x - A.x, V.y - A.y);
+        const lout = Math.hypot(B.x - V.x, B.y - V.y);
+        const u = { x: (V.x - A.x) / lin, y: (V.y - A.y) / lin };
+        const v = { x: (B.x - V.x) / lout, y: (B.y - V.y) / lout };
+        const theta = Math.acos(Math.max(-1, Math.min(1, u.x * v.x + u.y * v.y)));
+        const deg = (theta * 180) / Math.PI;
+        const want = style === 'arc' ? deg > 0.5 : style === '45' ? deg >= 89.5 : false;
+        let doneHere = false;
+        // A short Z jog (90°, a short piece, 90° back to the first direction) becomes one 45° piece that
+        // replaces both corners, as a person would draw it; too short for two chamfers of its own.
+        if (style !== '90' && deg >= 89.5 && k + 2 <= n && lout < 2 * setback) {
+          const C = P[k + 2]!;
+          const lc = Math.hypot(C.x - B.x, C.y - B.y);
+          const w2 = { x: (C.x - B.x) / lc, y: (C.y - B.y) / lc };
+          const half = lout / 2;
+          if (Math.abs(w2.x - u.x) < 1e-6 && Math.abs(w2.y - u.y) < 1e-6 && Math.hypot(V.x - cur.x, V.y - cur.y) > half + 1e-6 && lc > half + 1e-6) {
+            const P1 = { x: V.x - u.x * half, y: V.y - u.y * half };
+            const P2 = { x: B.x + u.x * half, y: B.y + u.y * half };
+            if (pieceClear(li, P1, P2)) {
+              out.push({ a: cur, b: P1 }, { a: P1, b: P2 });
+              cur = P2;
+              k++;
+              continue;
+            }
+          }
+        }
+        if (want) {
+          // Room on each side: what is left of the incoming piece, and the outgoing piece: half of it when the
+          // next corner will be cut too, all of it when it will not (or it runs into the end point).
+          const roomIn = Math.hypot(V.x - cur.x, V.y - cur.y) - 1e-6;
+          let nextCut = false;
+          if (k + 1 < n) {
+            const C = P[k + 2]!;
+            const lc = Math.hypot(C.x - B.x, C.y - B.y);
+            const dn = (Math.acos(Math.max(-1, Math.min(1, (v.x * (C.x - B.x) + v.y * (C.y - B.y)) / lc))) * 180) / Math.PI;
+            nextCut = style === 'arc' ? dn > 0.5 : dn >= 89.5;
+          }
+          const roomOut = (nextCut ? lout / 2 : lout) - 1e-6;
+          let sb = Math.min(setback, roomIn, roomOut);
+          // A chamfer shorter than this is pointless; an arc may be tiny (a grid offset next to a pad).
+          const minSb = style === 'arc' ? 0.002 : Math.min(0.05, width / 4);
+          for (let tries = 0; tries < 3 && sb > minSb && !doneHere; tries++, sb /= 2) {
+            const P1 = { x: V.x - u.x * sb, y: V.y - u.y * sb };
+            const P2 = { x: V.x + v.x * sb, y: V.y + v.y * sb };
+            if (style === '45') {
+              if (!pieceClear(li, P1, P2)) continue;
+              if (Math.hypot(P1.x - cur.x, P1.y - cur.y) > 1e-6) out.push({ a: cur, b: P1 });
+              out.push({ a: P1, b: P2 });
+              cur = P2;
+              doneHere = true;
+            } else {
+              const R = sb / Math.tan(theta / 2);
+              const bx = v.x - u.x;
+              const by = v.y - u.y;
+              const bl = Math.hypot(bx, by);
+              const vc = R / Math.cos(theta / 2);
+              const mid = { x: V.x + (bx / bl) * (vc - R), y: V.y + (by / bl) * (vc - R) };
+              if (!clearPath(li, arcPoints(P1, mid, P2))) continue;
+              if (Math.hypot(P1.x - cur.x, P1.y - cur.y) > 1e-6) out.push({ a: cur, b: P1 });
+              out.push({ a: P1, b: P2, mid });
+              cur = P2;
+              doneHere = true;
+            }
+          }
+        }
+        if (!doneHere) {
+          out.push({ a: cur, b: V });
+          cur = V;
+        }
+      }
+      if (Math.hypot(P[n]!.x - cur.x, P[n]!.y - cur.y) > 1e-9) out.push({ a: cur, b: P[n]! });
+      return out;
+    };
+    /**
+     * Drop a short first or last piece whose inner end is already on the net's own copper (typically the
+     * jog from a grid cell inside a large pad to the pad's centre): the trace still ends on its copper,
+     * and no needless corner is left inside the pad.
+     */
+    const trimEnds = (li: number, P: Vec2[], first: boolean, last: boolean) => {
+      const short = (a: Vec2, b: Vec2) => Math.hypot(b.x - a.x, b.y - a.y) < Math.max(setback, width);
+      if (first && P.length > 2 && short(P[0]!, P[1]!) && ownLayersAt(P[1]!).includes(li)) P = P.slice(1);
+      if (last && P.length > 2 && short(P[P.length - 2]!, P[P.length - 1]!) && ownLayersAt(P[P.length - 2]!).includes(li)) P = P.slice(0, -1);
+      return P;
+    };
+    for (const [ri, sgm] of raw.entries()) {
+      const pieces = soften(sgm.layer, smooth(sgm.layer, trimEnds(sgm.layer, merged(sgm.pts), ri === 0, ri === raw.length - 1)));
+      for (const pc of pieces) {
+        const w = segWidth(pc.a, pc.b);
+        if (pc.mid) {
+          const poly = arcPoints(pc.a, pc.mid, pc.b);
+          for (let k = 0; k + 1 < poly.length; k++) {
+            route.length += Math.hypot(poly[k + 1]!.x - poly[k]!.x, poly[k + 1]!.y - poly[k]!.y);
+            route.caps.push({ li: sgm.layer, a: poly[k]!, b: poly[k + 1]!, r: w / 2, id, cl: cn, route: key });
+          }
+          route.segs.push({ li: sgm.layer, a: pc.a, b: pc.b, w, mid: pc.mid });
+        } else {
+          route.length += Math.hypot(pc.b.x - pc.a.x, pc.b.y - pc.a.y);
+          route.segs.push({ li: sgm.layer, a: pc.a, b: pc.b, w });
+          route.caps.push({ li: sgm.layer, a: pc.a, b: pc.b, r: w / 2, id, cl: cn, route: key });
+        }
       }
     }
+    nearShapes = shapes;
     for (const v of vias) for (let li = 0; li < L; li++) route.caps.push({ li, a: v, b: v, r: viaD / 2, id, cl: cn, route: key });
     // Run-routes of this net that the new route starts or ends on: it depends on them.
     const ends = [route.segs[0]?.a, route.segs[route.segs.length - 1]?.b];
@@ -844,6 +1066,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const width = netRule(r.net, 'traceWidth', 0.25);
     for (const s of route.segs) {
       const rules: RuleDecl[] = [{ name: 'start', value: s.a }, { name: 'end', value: s.b }, { name: 'layer', value: layers[s.li]! }];
+      if (s.mid) rules.push({ name: 'mid', value: s.mid });
       if (s.w < width) rules.push({ name: 'traceWidth', value: s.w });
       ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
     }
@@ -885,4 +1108,12 @@ function segSegDist(a: Vec2, b: Vec2, c: Vec2, d: Vec2): number {
   const d4 = cross(a, b, d);
   if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
   return Math.min(distToSegment(a, c, d), distToSegment(b, c, d), distToSegment(c, a, b), distToSegment(d, a, b));
+}
+
+/** Dot product of the directions a→b and b→c (unit vectors): below 0 means an acute corner at b. */
+function dirDot(a: Vec2, b: Vec2, c: Vec2): number {
+  const l1 = Math.hypot(b.x - a.x, b.y - a.y);
+  const l2 = Math.hypot(c.x - b.x, c.y - b.y);
+  if (l1 < 1e-9 || l2 < 1e-9) return 1;
+  return ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y)) / (l1 * l2);
 }

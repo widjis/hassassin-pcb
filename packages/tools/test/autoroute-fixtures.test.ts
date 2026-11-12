@@ -83,12 +83,34 @@ describe('autoroute fixtures: invariants', { timeout: 60_000 }, () => {
   });
 });
 
-describe('autoroute fixtures: known gaps', { timeout: 60_000 }, () => {
-  // P8e: right-angle and acute corners come out of the search. Checked over all fixtures together, so a
-  // fixture that happens to route without one does not flip the test.
-  it.fails('no corner of 90° or sharper on any fixture (P8e)', async () => {
-    let sharp = 0;
-    for (const name of Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[]) sharp += (await figures(name)).sharpCorners;
-    expect(sharp).toBe(0);
+// P8e: corner styles. `45` (default): no corner of 90° or sharper. `arc`: every bend is an arc.
+// `90`: right angles allowed. In every style: no acute corner, no off-angle segment, no collinear joint.
+describe('autoroute fixtures: corner styles (P8e)', { timeout: 120_000 }, () => {
+  const names = Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[];
+  const styled = async (name: keyof typeof ROUTE_FIXTURES, style: '45' | 'arc' | '90') => {
+    const p = await ROUTE_FIXTURES[name]();
+    await runTool(p, 'set_rule', { target: 'net', rule: 'cornerStyle', value: style });
+    return measureAutoroute(p, FIXTURE_ARGS[name] ?? {});
+  };
+  it('45: no corner of 90° or sharper on any fixture', async () => {
+    for (const name of names) {
+      const f = await figures(name);
+      expect([name, f.sharpCorners, f.acuteCorners, f.collinear, f.offAngle]).toEqual([name, 0, 0, 0, 0]);
+    }
+  });
+  it('arc: every bend of autorouted copper is an arc, still legal and complete', async () => {
+    for (const name of names) {
+      const f = await styled(name, 'arc');
+      expect([name, f.failed, f.unroutedAfter, f.bendsPerConnection, f.offAngle, f.collinear]).toEqual([name, 0, 0, 0, 0, 0]);
+      expect(f.drcByKind).toEqual({});
+      if (f.routed) expect(f.arcs).toBeGreaterThan(0);
+    }
+  });
+  it('90: right angles allowed but never an acute corner, still legal and complete', async () => {
+    for (const name of names) {
+      const f = await styled(name, '90');
+      expect([name, f.failed, f.unroutedAfter, f.acuteCorners, f.offAngle, f.collinear, f.arcs]).toEqual([name, 0, 0, 0, 0, 0, 0]);
+      expect(f.drcByKind).toEqual({});
+    }
   });
 });

@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
-| Version | 0.3 |
-| Status | **Approved on 2026-11-12 (0.3) — in progress** |
+| Version | 0.4 |
+| Status | **Approved on 2026-11-12 (0.4) — in progress** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |
@@ -213,31 +213,50 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     tool takes `layers` and `rounds`. New fixture `channel` (one layer, net A blocks net B): 1 / 2
     without rip-up, 2 / 2 with it, 0 DRC errors. `reversed-bus` 1.9 s → 2.3 s. The benchmark boards are
     still to be measured.
-- [ ] **P8e. Clean traces and soft corners (human-like routing).**
-  - *Owner's finding (2026-11-12):* routed traces still bend sharply. Every change of direction must be
-    soft: no 90° corners and no acute corners. Today the search may turn by 45°, 90° or 135° at one cell
-    for the same small cost (0.1), so right-angle and acute corners come out of it.
-  - The search keeps the direction it came from as part of its state and may turn by at most 45° at a
-    vertex; a change of 90° is two 45° turns with a straight piece between them of at least the corner
-    setback; acute turns are impossible. The cost of a turn grows with its angle.
-  - Finished paths are smoothed by string-pulling against the clearance field, restricted to 0° / 45° /
-    90° directions (octilinear): grid stair steps become straight and 45° runs, needless bends are
-    removed, and every new segment is checked against the obstacles before it replaces the old ones.
-  - A final corner pass: any remaining 90° corner is chamfered with a 45° piece, or rounded with an arc,
-    following two new rules, `cornerStyle` (`45` default, `arc`) and `cornerSetback` (default: 2 × trace
-    width), settable per net or net class (P16). If the chamfer or arc would break clearance, the corner
-    is re-routed; if that fails, the connection is reported, never left with a right angle.
-  - Pad entry as a person would draw it: the trace leaves a pad along the pad's long axis (or straight
-    out of a fine-pitch row) for at least the setback before it turns, and never meets a pad edge at an
-    acute angle.
-  - Acceptance: on the benchmark boards and fixtures, autorouted copper has 0 corners of 90° or sharper
-    (checked by a test over every pair of joined segments), no two consecutive segments of one trace are
-    collinear, and the number of bends per routed connection is lower than at P8d.
+- [x] **P8e. Clean traces and corner styles (human-like routing).**
+  - *Owner's finding (2026-11-12):* routed traces still bend sharply. Today the search may turn by 45°,
+    90° or 135° at one cell for the same small cost (0.1), so right-angle and acute corners come out of it.
+  - *Owner's revision (0.4):* the corner style is a choice, as layout editors commonly offer (behaviour
+    observed as a user; nothing copied). New rule `cornerStyle`, settable for the board, per net or per
+    signal class (P16):
+    | `cornerStyle` | Result |
+    |---|---|
+    | `45` (default) | Every turn is at most 45°; a change of 90° is two 45° turns with a straight piece of at least `cornerSetback` between them. |
+    | `arc` | Every turn is a tangent arc whose straight cut-back is `cornerSetback` (for RF and fast signals). |
+    | `90` | Right angles are allowed as they come (orthogonal style). |
+    In every style an acute corner (sharper than 90°) is never made. `cornerSetback` defaults to 2 × the
+    trace width.
+  - The search knows the direction it came from: acute turns are not allowed, and a turn costs more the
+    larger it is (with `90`, right angles cost little).
+  - Finished paths are smoothed against the real copper, in 0° / 45° / 90° directions only: grid stair
+    steps become straight and 45° runs, needless bends are removed, and every new piece is checked
+    against the obstacles before it replaces the old ones.
+  - A final corner pass by style: `45` chamfers every remaining corner of 90° with a 45° piece; `arc`
+    replaces every corner with an arc. If the full setback does not fit the clearance, a shorter one is
+    tried; a corner that cannot be softened at all is left and counted (reported by the benchmark).
+  - Pad entry as a person would draw it: the trace leaves a pad straight, preferably along the pad's long
+    axis, and never meets a pad edge at an acute angle.
+  - Acceptance on the fixtures (and the benchmark boards when measured): with `45`, 0 corners of 90° or
+    sharper; with `arc`, every bend of autorouted copper is an arc; with `90`, no corner sharper than 90°;
+    in all styles no autorouted segment off the 45° directions and no two consecutive collinear segments,
+    and the bends per routed connection lower than at P8d.
   - Method sources: direction-aware A* and octilinear (45°) routing as described in the published
     gridless and shape-based routing literature (e.g. Schiele et al., "A gridless router for industrial
     design rules", DAC 1990). Fully topological "rubber-band" routing (Dayan, UCSC thesis 1997; the SURF
     system by Staepelaere, Jue, Dayan and Dai), which gives the most hand-drawn look, is a rewrite of the
     router and stays out of PM2; it is noted for a later agreement.
+  - *Done:* the search keeps the direction of the last step (acute turns refused, 90° turns cost a little
+    more than 45°) and now expands each state once (a closed set: the search had been expanding stale
+    heap entries again and again; `reversed-bus` 2.3 s → 0.36 s). Paths are smoothed into long 0° / 45° /
+    90° runs; the corner pass chamfers (`45`) or rounds (`arc`, trace `mid` point) corners, shortens the
+    setback when it does not fit, turns a short Z jog into one 45° piece, and drops a short end piece
+    that only joins a grid cell already inside the net's pad to the pad's centre. Pad entries prefer the
+    pad's long axis. Rules `cornerStyle` and `cornerSetback`; option `cornerStyle` for the whole run.
+    Fixtures, style `45`: sharp corners 0 on all six (P8d: 15 in all), acute, off-angle and collinear 0;
+    style `arc`: every bend an arc; style `90`: no acute corner; all routed with 0 DRC errors in every
+    style. Bends per connection vs P8d: qfn-escape 3.75 → 2.5, qfn-fine 3 → 2.38, reversed-bus 6 → 4.5,
+    off-grid 2.5 → 1.75, tee 2.33 → 1.67, channel 3 → 3 (equal). The benchmark boards are still to be
+    measured.
 - [ ] **P16. Signal classes from pins (pin metadata that drives the layout rules).**
   - *Owner's request (2026-11-12):* a part should carry, per pin, what that pin needs (for example high
     frequency, so the high-frequency routing rules apply; a signal, so the signal rules apply), and the
@@ -493,6 +512,7 @@ that completes it, and adds the commit id after the item name.
 | 0.1 | 2026-11-12 | First draft | — |
 | 0.2 | 2026-11-12 | Approved as written, with milestone PM2 (automatic placement and routing) done before PM1. Reason: the autorouter was the first request and does not touch files of the schematic work running at the same time. | Owner (widjis), in chat: "Setuju, PM2 dulu" |
 | 0.3 | 2026-11-12 | PM2 detailed after a study of the v0.0.3 code: P8 split into P8a–P8g (harness, per-net clearance, per-net routing, negotiated congestion, smoothing, cost tuning, verification and Web Worker); P9 and P10 limited to the core and the autorouter, their hand-routing parts moved to P4; dependencies on P5 / P6 resolved; RGB lamp baseline recorded; study notes added; working rule 4 for parallel work with the schematic agreement. Owner's findings added: soft corners only (no 90° or acute corners, 45° or arc, human-like pad entry and bundles) in P8e / P8f; new item P16, signal classes from pin metadata driving the layout rules. Owner's revision: perpendicular routing (top horizontal, bottom vertical) with `routeDirection`, fanout first and reference-plane cost in P8f; P10 rewritten with differential-pair rules (impedance width / gap, coupled routing, symmetric vias and breakout, skew as delay per layer, tuning rules, 3W spacing, interface presets); tabbed routing and field solvers out of scope. | Owner (widjis), in chat: "Setuju, commit" |
+| 0.4 | 2026-11-12 | P8e: the corner style becomes a choice, rule `cornerStyle` = `45` (default) / `arc` / `90`, with acute corners never made in any style; acceptance per style. | Owner (widjis), in chat: "harusnya itu optional … pilihan belokan melengkung, 90 degree atau 45 degree", then "ok, lanjut P8e" |
 
 ## Approval
 
@@ -502,6 +522,7 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 |---|---|---|---|
 | Owner | widjis | 2026-11-12 | 0.2 |
 | Owner | widjis | 2026-11-12 | 0.3 |
+| Owner | widjis | 2026-11-12 | 0.4 |
 
 Approval was given by the owner in the working chat ("Setuju, PM2 dulu" — "Agreed, PM2 first")
 and recorded here by the implementer. Version 0.3 was approved in the same chat ("Setuju, commit" —

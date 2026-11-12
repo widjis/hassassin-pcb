@@ -5,7 +5,7 @@
  * Shared by `apps/cli/bench/autoroute.ts` (real boards, on copies) and the Vitest fixtures, so both
  * measure the same way.
  */
-import { computeRatsnest, runDrc, type Doc, type Op, type StyleEngine, type Vec2 } from '@hassassin/core';
+import { collectCopper, computeRatsnest, inArea, runDrc, type Doc, type Op, type StyleEngine, type Vec2 } from '@hassassin/core';
 import { newProject, type Project } from './project.ts';
 import { runTool } from './tools.ts';
 
@@ -30,6 +30,12 @@ export interface RouteFigures {
   bendsPerConnection: number;
   /** Autorouted segments that are not at a multiple of 45° (off-angle stubs). */
   offAngle: number;
+  /** Joints of autorouted segments sharper than 90° (never wanted, whatever the corner style). */
+  acuteCorners: number;
+  /** Joints of two autorouted segments that run on in the same direction (should have been one segment). */
+  collinear: number;
+  /** Autorouted arcs (corner style `arc`). */
+  arcs: number;
 }
 
 /** Remove traces and vias of every net that has no pour (pads, pours and poured nets stay). */
@@ -52,13 +58,14 @@ const key = (p: Vec2) => `${Math.round(p.x * 1e4)},${Math.round(p.y * 1e4)}`;
 
 /**
  * Corner figures of autorouted copper: where exactly two autorouted segments of one net on one layer
- * meet (and nothing else does), the turn between them. Returns the number of turns of 90° or more and
- * the number of turns of any size.
+ * meet (and nothing else does: not at a via, not inside a pad, where separate connections meet), the turn
+ * between them. Returns the number of turns of 90° or more, of any size, and the other counts.
  */
-export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; bends: number; offAngle: number } {
+export function cornerFigures(doc: Doc, engine: StyleEngine, copper: string[] = []): { sharp: number; bends: number; offAngle: number; acute: number; collinear: number; arcs: number } {
   const ends = new Map<string, { dir: Vec2; auto: boolean }[]>();
   const blocked = new Set<string>();
   let offAngle = 0;
+  let arcs = 0;
   for (const n of doc.nodes.values()) {
     if (n.type === 'via') {
       const p = vec(engine.get(n.uid, 'position')?.value);
@@ -68,7 +75,11 @@ export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; b
     if (n.type !== 'trace') continue;
     const a = vec(engine.get(n.uid, 'start')?.value);
     const b = vec(engine.get(n.uid, 'end')?.value);
-    if (!a || !b || engine.get(n.uid, 'mid')?.value) continue;
+    if (!a || !b) continue;
+    if (engine.get(n.uid, 'mid')?.value) {
+      if (n.props.autorouted === true) arcs++;
+      continue;
+    }
     const len = Math.hypot(b.x - a.x, b.y - a.y);
     if (len < 1e-9) continue;
     const layer = String(engine.get(n.uid, 'layer')?.value ?? '');
@@ -88,17 +99,27 @@ export function cornerFigures(doc: Doc, engine: StyleEngine): { sharp: number; b
   }
   let sharp = 0;
   let bends = 0;
+  let acute = 0;
+  let collinear = 0;
+  const pads = copper.length ? collectCopper(doc, engine, copper).filter((s) => s.kind === 'pad') : [];
   for (const [k, list] of ends) {
     if (list.length !== 2 || !list[0]!.auto || !list[1]!.auto || blocked.has(k.slice(k.lastIndexOf('|') + 1))) continue;
+    const [, layer, at] = k.split('|');
+    const [px, py] = at!.split(',').map((v) => Number(v) / 1e4);
+    if (pads.some((s) => s.layer === layer && s.areas[0] && inArea({ x: px!, y: py! }, s.areas[0]))) continue;
     const [u, v] = [list[0]!.dir, list[1]!.dir];
     // Straight through: the two directions are opposite (dot = -1). Turn angle = 180° - angle between them.
     const dot = Math.max(-1, Math.min(1, u.x * v.x + u.y * v.y));
     const turn = 180 - (Math.acos(dot) * 180) / Math.PI;
-    if (turn < 0.5) continue;
+    if (turn < 0.5) {
+      collinear++;
+      continue;
+    }
     bends++;
     if (turn >= 90 - 0.5) sharp++;
+    if (turn > 90 + 0.5) acute++;
   }
-  return { sharp, bends, offAngle };
+  return { sharp, bends, offAngle, acute, collinear, arcs };
 }
 
 /** Autoroute what is unrouted, refill pours, run DRC and measure. Changes the project. */
@@ -112,7 +133,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
   for (const v of errors) drcByKind[v.kind] = (drcByKind[v.kind] ?? 0) + 1;
   const reasons: Record<string, number> = {};
   for (const f of r.failed) reasons[f.reason] = (reasons[f.reason] ?? 0) + 1;
-  const c = cornerFigures(p.doc, p.engine);
+  const c = cornerFigures(p.doc, p.engine, p.copper);
   return {
     connections,
     routed: r.routed,
@@ -127,6 +148,9 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     sharpCorners: c.sharp,
     bendsPerConnection: r.routed ? Math.round((c.bends / r.routed) * 100) / 100 : 0,
     offAngle: c.offAngle,
+    acuteCorners: c.acute,
+    collinear: c.collinear,
+    arcs: c.arcs,
   };
 }
 
