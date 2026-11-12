@@ -179,53 +179,72 @@ export function storePartOps(doc: Doc, part: PartDef, fp?: FootprintSpec | null)
 }
 
 /** Place every unit of a part on a sheet, side by side. Returns the ops and the reference. */
-export function placePartOps(doc: Doc, sheetUid: string, part: PartDef, at: Vec2, opts: { ref?: string; value?: string } = {}): { ops: Op[]; ref: string; uids: string[] } {
+export function placePartOps(doc: Doc, sheetUid: string, part: PartDef, at: Vec2, opts: { ref?: string; value?: string; units?: number[] } = {}): { ops: Op[]; ref: string; uids: string[] } {
   const sheet = doc.nodes.get(sheetUid);
   if (!sheet) throw new Error('No such sheet');
   const ref = opts.ref ?? nextRef(doc, part.prefix);
   const ops: Op[] = [];
   const uids: string[] = [];
   let x = at.x;
-  part.units.forEach((u, i) => {
-    const uid = newUid('sym');
-    const pins: DocNode[] = u.pins.map((p) => ({
-      uid: newUid('pin'),
-      type: 'pin',
-      name: p.number,
-      props: { number: p.number, pinName: p.name, pinType: p.type, ...(p.hidden ? { hidden: true } : {}) },
-      rules: [
-        { name: 'position', value: p.at },
-        { name: 'rotation', value: p.angle },
-        { name: 'pinLength', value: p.length },
-      ],
-      parent: uid,
-      children: [],
-    }));
-    const props: DocNode['props'] = { ref, Value: opts.value ?? part.value ?? part.name, unit: i + 1, partId: part.id, ...(part.footprint ? { Footprint: part.footprint } : {}) };
-    for (const [k, v] of Object.entries(part.properties ?? {})) if (v) props[k] = v;
-    const sym: DocNode = {
-      uid,
-      type: 'symbol',
-      name: ref,
-      props,
-      rules: [
-        { name: 'position', value: pinGridOrigin({ x, y: at.y }, u.pins.map((q) => q.at), 0, 'none', schematicGrid(doc).pin) },
-        { name: 'rotation', value: 0 },
-        { name: 'mirror', value: 'none' },
-      ],
-      parent: sheetUid,
-      children: pins.map((p) => p.uid),
-      data: { graphics: u.graphics },
-    };
+  const props: DocNode['props'] = { ref, Value: opts.value ?? part.value ?? part.name, partId: part.id, ...(part.footprint ? { Footprint: part.footprint } : {}) };
+  for (const [k, v] of Object.entries(part.properties ?? {})) if (v) props[k] = v;
+  const which = opts.units ?? part.units.map((_, i) => i + 1);
+  which.forEach((unit, i) => {
+    const u = part.units[unit - 1];
+    if (!u) throw new Error(`${part.name} has no unit ${unit}`);
+    const { nodes, uid } = unitNodes(doc, sheetUid, u, { ...props, unit }, { x, y: at.y });
     // Next unit to the right of this one.
-    let maxX = 0;
-    for (const p of u.pins) maxX = Math.max(maxX, Math.abs(p.at.x));
-    for (const g of u.graphics) if (g.t === 'rect') maxX = Math.max(maxX, Math.abs(g.a.x), Math.abs(g.b.x));
-    x += Math.ceil((maxX * 2 + 10) / 2.54) * 2.54;
-    ops.push({ op: 'add', parent: sheetUid, index: sheet.children.length + i, tree: { nodes: [sym, ...pins] } });
+    x += unitWidth(u);
+    ops.push({ op: 'add', parent: sheetUid, index: sheet.children.length + i, tree: { nodes } });
     uids.push(uid);
   });
   return { ops, ref, uids };
+}
+
+/** Horizontal room a unit takes when units are placed side by side (mm, on the 2.54 grid). */
+export function unitWidth(u: PartUnit): number {
+  let maxX = 0;
+  for (const p of u.pins) maxX = Math.max(maxX, Math.abs(p.at.x));
+  for (const g of u.graphics) if (g.t === 'rect') maxX = Math.max(maxX, Math.abs(g.a.x), Math.abs(g.b.x));
+  return Math.ceil((maxX * 2 + 10) / 2.54) * 2.54;
+}
+
+/** Pin nodes of a unit, children of symbol `parent`. */
+export function unitPinNodes(u: PartUnit, parent: string): DocNode[] {
+  return u.pins.map((p) => ({
+    uid: newUid('pin'),
+    type: 'pin',
+    name: p.number,
+    props: { number: p.number, pinName: p.name, pinType: p.type, ...(p.hidden ? { hidden: true } : {}) },
+    rules: [
+      { name: 'position', value: p.at },
+      { name: 'rotation', value: p.angle },
+      { name: 'pinLength', value: p.length },
+    ],
+    parent,
+    children: [],
+  }));
+}
+
+/** A symbol (one unit) with its pins, its first pin on the pin grid near `at`. */
+export function unitNodes(doc: Doc, sheetUid: string, u: PartUnit, props: DocNode['props'], at: Vec2): { nodes: DocNode[]; uid: string } {
+  const uid = newUid('sym');
+  const pins = unitPinNodes(u, uid);
+  const sym: DocNode = {
+    uid,
+    type: 'symbol',
+    name: String(props.ref ?? ''),
+    props,
+    rules: [
+      { name: 'position', value: pinGridOrigin(at, u.pins.map((q) => q.at), 0, 'none', schematicGrid(doc).pin) },
+      { name: 'rotation', value: 0 },
+      { name: 'mirror', value: 'none' },
+    ],
+    parent: sheetUid,
+    children: pins.map((p) => p.uid),
+    data: { graphics: u.graphics },
+  };
+  return { nodes: [sym, ...pins], uid };
 }
 
 /** Ops that set properties on every symbol unit and the PCB component with this reference. */

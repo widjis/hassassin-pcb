@@ -14,6 +14,7 @@ import {
   type WiresBefore,
   transformSelectionOps,
   sheetFrame,
+  unitLabel,
   addHierLabelOp,
   addSubSheetOps,
   blockOfSheet,
@@ -322,10 +323,13 @@ export class SchematicView {
     // Step right past symbols already sitting at the view centre.
     const taken = s.children.map((c) => doc.nodes.get(c)).filter((n) => n?.type === 'symbol').map((n) => this.app.engine?.get(n!.uid, 'position')?.value as Vec2 | undefined);
     for (let i = 0; i < 40 && taken.some((q) => q && Math.abs(q.x - at.x) < 7 && Math.abs(q.y - at.y) < 7); i++) at.x += 12.7;
-    const { ops, ref, uids } = placePartOps(doc, s.uid, part, at);
+    // A multi-unit part starts with unit A; the inspector offers the other units.
+    const multi = part.units.length > 1;
+    const { ops, ref, uids } = placePartOps(doc, s.uid, part, at, multi ? { units: [1] } : {});
     if (this.app.apply(`Place ${part.name}`, [...extra, ...ops])) {
       this.app.select(uids);
-      this.app.say(`Placed ${ref}${uids.length > 1 ? ` (${uids.length} units)` : ''}. Drag it into place; R rotates, X / Y mirror.`);
+      const rest = multi ? part.units.map((_, i) => unitLabel(part, i + 1)).slice(1) : [];
+      this.app.say(`Placed ${ref}${multi ? ' unit A' : ''}. Drag it into place; R rotates, X / Y mirror.${rest.length ? ` Units ${rest.join(', ')} are not placed yet: place them from the inspector.` : ''}`);
     }
   }
 

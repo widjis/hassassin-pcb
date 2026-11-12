@@ -7,16 +7,18 @@
  *   - wire ends touching nothing,
  *   - labels not attached to anything,
  *   - hierarchical labels without a sheet pin of the same name, and sheet pins without a label,
- *   - duplicate reference designators.
+ *   - duplicate reference designators,
+ *   - units of multi-unit parts that were never placed (an error for a power unit).
  */
 import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import type { Severity } from './drc.ts';
 import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
-import { allSheets, pinPoint, sheetItems, symbolFrame, symToSheet } from './schematic.ts';
+import { allSheets, pinPoint, sheetItems, sheetOf, symbolFrame, symToSheet } from './schematic.ts';
+import { missingUnits } from './multiUnit.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -30,6 +32,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   danglingPower: 'Power symbol not connected',
   wireThroughPart: 'Wire runs through a part',
   hierMismatch: 'Sheet pin and hierarchical label do not match',
+  unitNotPlaced: 'Unit of a part not placed',
 };
 
 export interface ErcViolation {
@@ -176,6 +179,25 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
       const at = vec(engine.get(p.uid, 'position')?.value) ?? { x: 0, y: 0 };
       out.push({ id: `sp:${p.uid}`, kind: 'hierMismatch', severity: 'warning', message: `Sheet pin ${p.name} of block ${block.name} has no hierarchical label inside the sheet`, sheet: block.parent, at, uids: [p.uid, block.uid] });
     }
+  }
+
+  // Units never placed: their pins would stay unconnected on the board. A missing power unit leaves
+  // the whole part unpowered (error); a spare gate or op-amp leaves its inputs floating (warning).
+  for (const m of missingUnits(doc)) {
+    const at = vec(engine.get(m.symbol.uid, 'position')?.value) ?? { x: 0, y: 0 };
+    const sh = sheetOf(doc, m.symbol);
+    for (const u of m.missing)
+      out.push({
+        id: `unit:${m.ref}:${u.unit}`,
+        kind: 'unitNotPlaced',
+        severity: u.power ? 'error' : 'warning',
+        message: u.power
+          ? `${m.ref}: power unit ${u.label.replace(' (power)', '')} is not placed, so the part has no supply connections`
+          : `${m.ref}: unit ${u.label} is not placed; place it and tie its inputs to a defined level (or mark them no-connect)`,
+        sheet: sh?.uid ?? '',
+        at,
+        uids: [m.symbol.uid],
+      });
   }
 
   // Duplicate references (different symbols, same unit).

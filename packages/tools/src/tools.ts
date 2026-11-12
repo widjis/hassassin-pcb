@@ -4,6 +4,12 @@
  * project is live, shared with collaborators).
  */
 import {
+  placedUnits,
+  unitsOf,
+  unitLetter,
+  unitLabel,
+  switchUnitOps,
+  placeUnitOps,
   SHEET_PIN_SHAPES,
   type SheetPinShape,
   addHierLabelOp,
@@ -325,6 +331,21 @@ function pinOf(p: Project, ref: string): { pin: DocNode; at: Vec2; sheet: DocNod
   const sheet = sheetOf(p.doc, pin);
   if (!at || !sheet) throw new ToolError(`Pin ${ref} has no position`);
   return { pin, at, sheet };
+}
+
+/** "B" / "b" / "2" → 2, checked against the number of units. */
+function parseUnit(v: string, count: number): number {
+  const t = v.trim().replace(/\s*\(power\)$/i, '');
+  let n = /^\d+$/.test(t) ? Number(t) : 0;
+  if (!n && /^[A-Za-z]+$/.test(t)) for (const ch of t.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  if (!(n >= 1 && n <= count)) throw new ToolError(`Unit "${v}" does not exist; this part has ${Array.from({ length: count }, (_, i) => unitLetter(i + 1)).join(', ')}`);
+  return n;
+}
+
+function unitReport(p: Project, ref: string) {
+  const any = [...placedUnits(p.doc, ref).values()][0]?.[0];
+  const st = any ? unitsOf(p.doc, any) : null;
+  return { ref, units: st?.units.map((u) => ({ unit: u.label, placed: u.placed })) ?? [] };
 }
 
 function sheetByName(p: Project, name?: unknown): DocNode {
@@ -1445,6 +1466,67 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'switch_unit',
+    description: 'Change which unit of a multi-unit part a placed symbol shows (e.g. turn U1 unit A into unit B, or into the power unit). The symbol keeps its place; its pins change, wires stay where they are. ref: the part; from: the placed unit to change (needed when several are placed); to: the new unit (letter or number). Units already placed cannot be chosen.',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' } }, required: ['ref', 'to'] },
+    run: (p, a) => {
+      const ref = str(a.ref, 'ref');
+      const placed = placedUnits(p.doc, ref);
+      if (!placed.size) throw new ToolError(`No part ${ref}`);
+      const any = [...placed.values()][0]![0]!;
+      const st = unitsOf(p.doc, any);
+      if (!st) throw new ToolError(`${ref} is not a multi-unit part (or its part definition is not stored in the project)`);
+      let sym: DocNode;
+      if (a.from !== undefined) {
+        const from = parseUnit(String(a.from), st.def.units.length);
+        const hit = placed.get(from)?.[0];
+        if (!hit) throw new ToolError(`Unit ${unitLetter(from)} of ${ref} is not placed. Placed: ${[...placed.keys()].map(unitLetter).join(', ')}`);
+        sym = hit;
+      } else {
+        if (placed.size > 1) throw new ToolError(`${ref} has units ${[...placed.keys()].map(unitLetter).join(', ')} placed; say which one with from`);
+        sym = any;
+      }
+      const to = parseUnit(String(a.to), st.def.units.length);
+      try {
+        apply(p, `Switch ${ref} to unit ${unitLetter(to)}`, switchUnitOps(p.doc, p.engine, sym.uid, to));
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      return unitReport(p, ref);
+    },
+  },
+  {
+    name: 'place_unit',
+    description: 'Place a unit of a multi-unit part that is not placed yet (e.g. the power unit of an op-amp, or a spare gate), next to its other units or at x, y on a sheet. ERC reports units that were never placed.',
+    mutates: true,
+    input: { type: 'object', properties: { ref: { type: 'string' }, unit: { type: 'string', description: 'Letter or number, e.g. "B" or "3"' }, x: { type: 'number' }, y: { type: 'number' }, sheet: { type: 'string' } }, required: ['ref', 'unit'] },
+    run: (p, a) => {
+      const ref = str(a.ref, 'ref');
+      const placed = placedUnits(p.doc, ref);
+      const any = [...placed.values()][0]?.[0];
+      if (!any) throw new ToolError(`No part ${ref}`);
+      const st = unitsOf(p.doc, any);
+      if (!st) throw new ToolError(`${ref} is not a multi-unit part (or its part definition is not stored in the project)`);
+      const unit = parseUnit(String(a.unit), st.def.units.length);
+      const sheet = a.sheet !== undefined ? sheetByName(p, a.sheet) : undefined;
+      const x = optNum(a.x, 'x');
+      const y = optNum(a.y, 'y');
+      let r;
+      try {
+        r = placeUnitOps(p.doc, p.engine, ref, unit, sheet?.uid, x !== undefined && y !== undefined ? { x, y } : undefined);
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      apply(p, `Place unit ${unitLetter(unit)} of ${ref}`, r.ops);
+      const pins = p.doc.nodes.get(r.uid)!.children.map((c) => p.doc.nodes.get(c)!).filter((n) => n.type === 'pin').map((pin) => {
+        const pt = pinPoint(p.doc, p.engine, pin)!;
+        return { pin: `${ref}.${pin.props.number}`, name: pin.props.pinName, at: { x: +pt.x.toFixed(2), y: +pt.y.toFixed(2) } };
+      });
+      return { ...unitReport(p, ref), pins };
+    },
+  },
+  {
     name: 'search_footprints',
     description: 'Search footprints: generic parametric ones (chip-0603, sot-23-5, soic-8, tssop-20, qfn-32-5x5-p0.5-ep3.5, dip-8, header-1x04-p2.54, terminal-1x02-p5.08, hole-m3…), project footprints, and installed KiCad footprint libraries ("Lib:Name").',
     mutates: false,
@@ -1453,7 +1535,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'place_part',
-    description: 'Place a library part (id from search_parts) on a schematic sheet. Multi-unit parts get every unit, side by side. The part (and its footprint) is copied into the project. Then wire it and call update_pcb.',
+    description: 'Place a library part (id from search_parts) on a schematic sheet. Multi-unit parts get every unit side by side, or only the units you list (units: "A" or "A,C"; place the rest later with place_unit, e.g. on another sheet). The part (and its footprint) is copied into the project. Then wire it and call update_pcb.',
     mutates: true,
     input: {
       type: 'object',
@@ -1465,6 +1547,7 @@ export const TOOLS: ToolDef[] = [
         ref: { type: 'string' },
         footprint: { type: 'string', description: 'Override the part\'s default footprint' },
         sheet: { type: 'string' },
+        units: { type: 'string', description: 'Multi-unit parts: which units to place, e.g. "A" or "A,B" (default: all)' },
       },
       required: ['id', 'x', 'y'],
     },
@@ -1479,7 +1562,7 @@ export const TOOLS: ToolDef[] = [
       if (ref && resolveTargets(p, ref).length) throw new ToolError(`Reference ${ref} is already used`);
       const g = schematicGrid(p.doc).wire;
       const sheet = sheetByName(p, a.sheet);
-      const placed = placePartOps(p.doc, sheet.uid, use, { x: Math.round(num(a.x, 'x') / g) * g, y: Math.round(num(a.y, 'y') / g) * g }, { ...(ref ? { ref } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}) });
+      const placed = placePartOps(p.doc, sheet.uid, use, { x: Math.round(num(a.x, 'x') / g) * g, y: Math.round(num(a.y, 'y') / g) * g }, { ...(ref ? { ref } : {}), ...(typeof a.value === 'string' ? { value: a.value } : {}), ...(typeof a.units === 'string' && a.units.trim() ? { units: a.units.split(/[\s,]+/).filter(Boolean).map((x) => parseUnit(x, part.units.length)) } : {}) });
       apply(p, `Place ${part.name}`, [...storePartOps(p.doc, part, fp ? { ...fp, name: chosen! } : null), ...placed.ops]);
       const pins: { pin: string; name: unknown; at: Vec2 }[] = [];
       for (const uid of placed.uids) {
@@ -1489,7 +1572,8 @@ export const TOOLS: ToolDef[] = [
           pins.push({ pin: `${placed.ref}.${pin.props.number}`, name: pin.props.pinName, at: { x: +pt.x.toFixed(2), y: +pt.y.toFixed(2) } });
         }
       }
-      return { ref: placed.ref, units: placed.uids.length, footprint: chosen ?? null, footprintFound: !!fp, pins };
+      const unplaced = part.units.length > 1 ? part.units.map((_, i) => i + 1).filter((u) => !placed.uids.some((x) => Number(p.doc.nodes.get(x)!.props.unit) === u)).map((u) => unitLabel(part, u)) : [];
+      return { ref: placed.ref, units: placed.uids.length, ...(unplaced.length ? { notPlacedYet: unplaced } : {}), footprint: chosen ?? null, footprintFound: !!fp, pins };
     },
   },
   {

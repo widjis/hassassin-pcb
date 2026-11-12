@@ -9,7 +9,7 @@ import {
   type Ruleset,
 } from '@hassassin/core';
 import type { App } from '../app.ts';
-import { renameRefOps, setPartPropsOps, type Op } from '@hassassin/core';
+import { placeUnitOps, renameRefOps, setPartPropsOps, switchUnitOps, unitLetter, unitsOf, type Op } from '@hassassin/core';
 import { clear, h } from './dom.ts';
 
 const ORDER = [...RULE_DEFS.keys()];
@@ -118,6 +118,39 @@ export function mountInspector(app: App, root: HTMLElement): void {
       ),
     );
     form.append(h('label', { class: 'k' }, 'DNP'), h('label', {}, dnp, ' do not populate'));
+    // Multi-unit parts: which unit this symbol is, and the units not placed yet (S12).
+    const st = unitsOf(doc, n);
+    if (st) {
+      const current = Number(n.props.unit ?? 1) || 1;
+      const sel = h('select', { 'aria-label': 'Unit' }) as HTMLSelectElement;
+      for (const u of st.units) {
+        const o = h('option', { value: String(u.unit) }, `${u.label}${u.placed && u.unit !== current ? ' · placed' : ''}`) as HTMLOptionElement;
+        o.disabled = u.placed && u.unit !== current;
+        o.selected = u.unit === current;
+        sel.append(o);
+      }
+      sel.addEventListener('change', () => commit(`Switch ${ref} to unit ${unitLetter(Number(sel.value))}`, () => switchUnitOps(doc, app.engine!, n.uid, Number(sel.value))));
+      form.append(h('label', { class: 'k' }, 'Unit'), sel);
+      const missing = st.units.filter((u) => !u.placed);
+      if (missing.length) {
+        const row = h('div', { class: 'unit-buttons' });
+        for (const u of missing)
+          row.append(
+            h('button', {
+              title: `Place unit ${u.label} of ${ref} next to the placed units`,
+              onclick: () => {
+                try {
+                  const r = placeUnitOps(doc, app.engine!, ref, u.unit);
+                  if (app.apply(`Place unit ${unitLetter(u.unit)} of ${ref}`, r.ops)) app.select([r.uid]);
+                } catch (e) {
+                  app.say((e as Error).message);
+                }
+              },
+            }, `Place ${u.label}`),
+          );
+        form.append(h('label', { class: 'k' }, 'Not placed'), row);
+      }
+    }
     return h('div', {}, h('strong', {}, 'Part'), form, h('div', { class: 'dim', style: 'font-size:11.5px;margin:-4px 0 8px' }, 'Changes apply to every unit and to the board component; a new footprint reaches the board on Update PCB.'));
   };
 

@@ -11,6 +11,7 @@ import { isGroundNet } from './symbolGen.ts';
 import { symbolFrame, symToSheet } from './schematic.ts';
 import { symbolBounds, type Rect } from './schematicEdit.ts';
 import { groupBoxRect, noteBox, sheetFrame } from './sheetFrame.ts';
+import { partDefOf, unitLetter } from './multiUnit.ts';
 
 export type TextField = 'ref' | 'value' | 'power' | 'label';
 
@@ -112,7 +113,7 @@ export function layoutSheetTexts(doc: Doc, engine: StyleEngine, sheetUid: string
         const left = { at: { x: body.minX - 0.5, y: cy }, align: 'right' as const, base: 'middle' as const };
         wants.push({ owner: n.uid, fields: [{ field: 'power', text: lbl.name, size: 1.2 }], spots: ground ? [below, right, left, above] : [above, right, left, below], near: body, priority: 1 });
       } else {
-        const ref = String(n.props.ref ?? n.name);
+        const ref = displayRef(doc, n);
         const v = String(n.props.Value ?? '');
         const val = v.length > 28 ? `${v.slice(0, 27)}…` : v;
         const fields: Want['fields'] = [{ field: 'ref', text: ref, size: 1.3 }];
@@ -230,4 +231,11 @@ export function textClashes(doc: Doc, engine: StyleEngine, sheetUid: string, tex
     if (bodies.some((b) => hit(t.box, b.box)) || wires.some((w) => hit(t.box, w))) n++;
   }
   return n;
+}
+
+/** Reference as shown on the sheet: with the unit letter for multi-unit parts (U1A, U1B …). */
+export function displayRef(doc: Doc, n: DocNode): string {
+  const ref = String(n.props.ref ?? n.name);
+  const def = partDefOf(doc, n);
+  return def && def.units.length > 1 ? `${ref}${unitLetter(Number(n.props.unit ?? 1) || 1)}` : ref;
 }

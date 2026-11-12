@@ -215,6 +215,25 @@ export function importKicadSchematic(input: SchFiles, existing?: Doc): SchImport
           continue;
         }
         symbols++;
+        // Multi-unit symbols keep their library definition in the project, so units can be switched
+        // and missing units found (S12).
+        const unitNums = [...new Set(lib.pins.map((p) => p.unit).concat(lib.graphics.map((g) => g.unit)))].filter((u) => u > 0).sort((a, b) => a - b);
+        if (unitNums.length > 1 && unitNums[unitNums.length - 1] === unitNums.length) {
+          const id = `kicad:${libId}`;
+          if (!doc.meta[`part:${id}`]) {
+            doc.meta[`part:${id}`] = {
+              id,
+              name: lib.name.split(':').pop() ?? lib.name,
+              prefix: ref.replace(/\d+$/, '') || 'U',
+              source: 'kicad-schematic',
+              units: unitNums.map((u) => ({
+                graphics: lib.graphics.filter((g) => g.unit === 0 || g.unit === u).map((g) => g.g),
+                pins: lib.pins.filter((q) => q.unit === 0 || q.unit === u).map((q) => ({ number: q.number, name: q.name, type: q.type, at: q.at, angle: q.angle, length: q.length, ...(q.hidden ? { hidden: true } : {}) })),
+              })),
+            };
+          }
+          props.unitDef = id;
+        }
         const sym = addNode(doc, sheet.uid, {
           uid: str(child(e, 'uuid')?.[1]),
           type: 'symbol',
