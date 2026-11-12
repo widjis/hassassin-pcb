@@ -208,7 +208,16 @@ only when all of its criteria pass.
     Browser check: sub-sheet with C1 and label IN, pin IN on the block, wire from R1, ERC clean for it.
   - Create a sub-sheet block, enter it, add hierarchical labels; matching sheet pins appear on the block.
   - Netlist and ERC behave as for imported KiCad hierarchies (existing tests keep passing).
-- [ ] **S12. Switch units of multi-unit symbols.**
+- [x] **S12. Switch units of multi-unit symbols.** — `447645a`
+  - Delivered: the inspector of a multi-unit symbol has a **Unit** choice (A, B, C (power) …; placed units
+    cannot be picked) and a **Place** button for every unit not placed yet. Placing a multi-unit part in
+    the editor puts down unit A and says which units are left. References show the unit letter (U1A, U1B).
+    Switching keeps the symbol's place, rotation and properties; wires stay where they are, as in KiCad.
+    Multi-unit symbols imported from KiCad keep their library definition, so they can be switched too.
+    ERC `unitNotPlaced`: an error for a missing power unit, a warning for a spare unit. Tools:
+    `switch_unit`, `place_unit`, `place_part units=…`.
+  - Tests: `packages/tools/test/schematic-s12.test.ts` (partial placement, ERC, switching and undo,
+    refusals, KiCad import). Browser check: dual op-amp, place C (power), switch A to B, ERC warning for A.
   - A placed unit can be changed (A, B, power unit …); placing one unit offers the remaining units.
   - ERC reports units that were never placed when their pins matter (for example the power unit).
 
