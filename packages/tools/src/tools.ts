@@ -5,6 +5,18 @@
  */
 import {
   pinPadCheck,
+  ercSettings,
+  defaultPinLevel,
+  setPinLevelOp,
+  setErcSeverityOp,
+  setErcOptionOp,
+  waiveOp,
+  unwaiveOp,
+  ERC_PIN_TYPES,
+  ERC_LABEL,
+  type ErcLevel,
+  type PinType,
+  type ErcSeverityOverride,
   busMembers,
   addBusOps,
   addBusEntryOp,
@@ -517,13 +529,86 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'run_erc',
-    description: 'Electrical rule check of the schematic (unconnected pins, driver conflicts, undriven power, dangling wires/labels, duplicate references).',
+    description: 'Electrical rule check of the schematic (unconnected pins, pin types that should not meet, undriven power, dangling wires/labels, duplicate references, buses). Uses the project\'s ERC settings (set_erc_rule, set_erc_check, set_erc_option). Each violation has an id; waive_violation accepts one with a reason, and waived ones are listed apart.',
     mutates: false,
     input: { type: 'object', properties: { limit: { type: 'number', description: 'Max violations listed (default 50)' } } },
     run: (p, a) => {
       const r = runErc(p.doc, p.engine);
       const limit = optNum(a.limit, 'limit') ?? 50;
-      return { errors: r.violations.filter((v) => v.severity === 'error').length, warnings: r.violations.filter((v) => v.severity === 'warning').length, byKind: countBy(r.violations), violations: r.violations.slice(0, limit).map((v) => ({ kind: v.kind, severity: v.severity, message: v.message, at: v.at })) };
+      return {
+        errors: r.violations.filter((v) => v.severity === 'error').length,
+        warnings: r.violations.filter((v) => v.severity === 'warning').length,
+        byKind: countBy(r.violations),
+        violations: r.violations.slice(0, limit).map((v) => ({ id: v.id, kind: v.kind, severity: v.severity, message: v.message, at: v.at })),
+        ...(r.waived.length ? { waived: r.waived.map((v) => ({ id: v.id, kind: v.kind, message: v.message, reason: v.waiver.reason, ...(v.waiver.by ? { by: v.waiver.by } : {}) })) } : {}),
+      };
+    },
+  },
+  {
+    name: 'set_erc_rule',
+    description: `Change the ERC pin-type matrix of this project: how a pin of type pin_a connected to a pin of type pin_b is reported (ok, warning, error, or default). Types: ${ERC_PIN_TYPES.join(', ')}. The defaults match KiCad's.`,
+    mutates: true,
+    input: { type: 'object', properties: { pin_a: { type: 'string', enum: [...ERC_PIN_TYPES] }, pin_b: { type: 'string', enum: [...ERC_PIN_TYPES] }, level: { type: 'string', enum: ['ok', 'warning', 'error', 'default'] } }, required: ['pin_a', 'pin_b', 'level'] },
+    run: (p, a) => {
+      const A = str(a.pin_a, 'pin_a') as PinType;
+      const B = str(a.pin_b, 'pin_b') as PinType;
+      if (!ERC_PIN_TYPES.includes(A) || !ERC_PIN_TYPES.includes(B)) throw new ToolError(`Pin types are ${ERC_PIN_TYPES.join(', ')}`);
+      const level = str(a.level, 'level');
+      if (!['ok', 'warning', 'error', 'default'].includes(level)) throw new ToolError('level must be ok, warning, error or default');
+      apply(p, `ERC: ${A} + ${B}`, [setPinLevelOp(p.doc, A, B, level === 'default' ? null : (level as ErcLevel))]);
+      return { [`${A} + ${B}`]: ercSettings(p.doc).level(A, B), default: defaultPinLevel(A, B) };
+    },
+  },
+  {
+    name: 'set_erc_check',
+    description: `Change how one ERC check reports in this project: error, warning, ignore (not reported), or default. Checks: ${Object.keys(ERC_LABEL).join(', ')}.`,
+    mutates: true,
+    input: { type: 'object', properties: { check: { type: 'string', enum: Object.keys(ERC_LABEL) }, level: { type: 'string', enum: ['error', 'warning', 'ignore', 'default'] } }, required: ['check', 'level'] },
+    run: (p, a) => {
+      const check = str(a.check, 'check');
+      if (!(check in ERC_LABEL)) throw new ToolError(`Checks are ${Object.keys(ERC_LABEL).join(', ')}`);
+      const level = str(a.level, 'level');
+      if (!['error', 'warning', 'ignore', 'default'].includes(level)) throw new ToolError('level must be error, warning, ignore or default');
+      apply(p, `ERC: ${check} ${level}`, [setErcSeverityOp(p.doc, check, level === 'default' ? null : (level as ErcSeverityOverride))]);
+      return { check, level };
+    },
+  },
+  {
+    name: 'set_erc_option',
+    description: 'ERC options of this project. power_symbols_need_source: treat every power symbol (GND, +3V3 …) as a power input, so its net needs a power output or a PWR_FLAG, as KiCad does (default off).',
+    mutates: true,
+    input: { type: 'object', properties: { power_symbols_need_source: { type: 'boolean' } }, required: ['power_symbols_need_source'] },
+    run: (p, a) => {
+      if (typeof a.power_symbols_need_source !== 'boolean') throw new ToolError('power_symbols_need_source must be true or false');
+      apply(p, 'ERC option', [setErcOptionOp(p.doc, 'powerSymbolsNeedSource', a.power_symbols_need_source)]);
+      return { power_symbols_need_source: a.power_symbols_need_source };
+    },
+  },
+  {
+    name: 'waive_violation',
+    description: 'Accept one ERC violation (its id from run_erc) with a reason; it no longer counts as a problem, and Review lists it as waived with the reason. Only waive what is intended, never to hide a mistake.',
+    mutates: true,
+    input: { type: 'object', properties: { id: { type: 'string' }, reason: { type: 'string' } }, required: ['id', 'reason'] },
+    run: (p, a, ctx) => {
+      const id = str(a.id, 'id');
+      const reason = str(a.reason, 'reason').trim();
+      if (!reason) throw new ToolError('A waiver needs a reason');
+      const v = runErc(p.doc, p.engine).violations.find((x) => x.id === id);
+      if (!v) throw new ToolError(`No current ERC violation with id ${id} (run_erc lists them)`);
+      apply(p, `Waive ${v.kind}`, [waiveOp(p.doc, id, reason, undefined, v.message)]);
+      return { waived: id, kind: v.kind, message: v.message, reason };
+    },
+  },
+  {
+    name: 'unwaive_violation',
+    description: 'Remove a waiver, so the violation counts again.',
+    mutates: true,
+    input: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    run: (p, a) => {
+      const id = str(a.id, 'id');
+      if (!ercSettings(p.doc).waivers[id]) throw new ToolError(`No waiver for ${id}`);
+      apply(p, 'Remove waiver', [unwaiveOp(p.doc, id)]);
+      return { unwaived: id };
     },
   },
   {

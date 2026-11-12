@@ -2,7 +2,7 @@
  * Application state: the document, its style engine, history, scene and view.
  * Every edit goes through `apply()` (→ History → ops), never by mutating the doc.
  */
-import {
+import { type WaivedViolation,
   computeRatsnest,
   createDoc,
   extractNetlist,
@@ -75,7 +75,7 @@ export class App {
   scene: SceneCache | null = null;
   ratsnest: Ratsnest = { lines: [], nets: [], unroutedNets: 0 };
   drc: DrcResult | null = null;
-  erc: { violations: ErcViolation[]; netlist: Netlist } | null = null;
+  erc: { violations: ErcViolation[]; waived: WaivedViolation[]; netlist: Netlist } | null = null;
   space: Space = 'layout';
   /** Live collaboration session, when the project is opened from a server. */
   collab: SyncClient | null = null;

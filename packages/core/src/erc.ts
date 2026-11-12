@@ -19,9 +19,11 @@ import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
 import { allSheets, pinPoint, sheetItems, sheetOf, symbolFrame, symToSheet } from './schematic.ts';
 import { missingUnits } from './multiUnit.ts';
 import { busMembers, sheetBuses } from './bus.ts';
+import { ercSettings, pinTypeOf, ERC_PIN_TYPES, PIN_TYPE_LABEL, type ErcWaiver } from './ercSettings.ts';
+import type { PinType } from './symbolEditor.ts';
 import { describePinPad, pinPadCheck } from './pinPad.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch' | 'labelSinglePin' | 'netNotBusMember';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch' | 'labelSinglePin' | 'netNotBusMember' | 'pinConflict';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -39,6 +41,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   pinPadMismatch: 'Symbol pins and footprint pads differ',
   labelSinglePin: 'Label connected to only one pin',
   netNotBusMember: 'Wire on a bus entry is not a member of the bus',
+  pinConflict: 'Pin types that should not be connected',
 };
 
 export interface ErcViolation {
@@ -56,9 +59,18 @@ export interface ErcViolation {
 const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x' in v ? (v as Vec2) : undefined);
 const EPS = 1e-3;
 
-export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { violations: ErcViolation[]; netlist: Netlist } {
+export interface WaivedViolation extends ErcViolation {
+  waiver: ErcWaiver;
+}
+
+/**
+ * Electrical rule check. Project settings (S17) decide the pin-type matrix, how each check reports,
+ * and which violations are waived: those come back in `waived`, not in `violations`.
+ */
+export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { violations: ErcViolation[]; waived: WaivedViolation[]; netlist: Netlist } {
   const nl = netlist ?? extractNetlist(doc, engine);
   const out: ErcViolation[] = [];
+  const settings = ercSettings(doc);
   const nc = noConnectPins(doc, engine);
   const sheetOfPin = new Map<string, string>();
   const pointOf = new Map<string, Vec2>();
@@ -93,17 +105,59 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
         out.push({ id: `ncc:${p.pinUid}`, kind: 'noConnectConnected', severity: 'warning', message: `${p.ref} pin ${p.pin} has a no-connect marker but is connected to ${net.name}`, sheet: sheetOfPin.get(p.pinUid) ?? '', at: at(p.pinUid), uids: [p.symbolUid, p.pinUid], net: net.name });
       }
     }
-    const outputs = net.pins.filter((p) => p.pinType === 'output' || p.pinType === 'power_out');
-    if (outputs.length > 1) {
-      const p = outputs[1]!;
-      out.push({ id: `drv:${net.name}`, kind: 'driverConflict', severity: 'error', message: `${outputs.map((o) => `${o.ref}.${o.pin}`).join(', ')} all drive ${net.name}`, sheet: sheetOfPin.get(p.pinUid) ?? '', at: at(p.pinUid), uids: outputs.map((o) => o.symbolUid), net: net.name });
+    // Pin types on one net, checked pair by pair against the project's matrix. Two pins that both
+    // drive the net are reported as a driver conflict, other pairs as a pin conflict.
+    const byType = new Map<PinType, typeof net.pins>();
+    for (const p of net.pins) {
+      if (nc.has(p.pinUid)) continue;
+      const t = pinTypeOf(p.pinType);
+      (byType.get(t) ?? byType.set(t, []).get(t)!).push(p);
+    }
+    const types = [...byType.keys()].sort((x, y) => ERC_PIN_TYPES.indexOf(x) - ERC_PIN_TYPES.indexOf(y));
+    for (let i = 0; i < types.length; i++) {
+      for (let j = i; j < types.length; j++) {
+        const a = types[i]!;
+        const b = types[j]!;
+        const pa = byType.get(a)!;
+        const pb = byType.get(b)!;
+        if (a === b && pa.length < 2) continue;
+        const level = settings.level(a, b);
+        if (level === 'ok') continue;
+        const pins = a === b ? pa : [...pa, ...pb];
+        const drivers = (t: PinType) => t === 'output' || t === 'power_out';
+        const kind = a === 'no_connect' || b === 'no_connect' ? 'noConnectConnected' : drivers(a) && drivers(b) ? 'driverConflict' : 'pinConflict';
+        const list = pins.map((o) => `${o.ref}.${o.pin}`).slice(0, 6).join(', ');
+        const message =
+          kind === 'noConnectConnected'
+            ? `${pins.filter((o) => pinTypeOf(o.pinType) === 'no_connect').map((o) => `${o.ref}.${o.pin}`).join(', ')} should not be connected, but is on ${net.name} (${list})`
+            : kind === 'driverConflict'
+            ? `${list} all drive ${net.name}`
+            : `${PIN_TYPE_LABEL[a]} and ${PIN_TYPE_LABEL[b].toLowerCase()} pins are connected on ${net.name} (${list})`;
+        const p = (a === b ? pa[1] : pb[0])!;
+        out.push({ id: `${kind === 'driverConflict' ? 'drv' : kind === 'noConnectConnected' ? 'ncp' : 'pin'}:${net.name}:${a}|${b}`, kind, severity: level, message, sheet: sheetOfPin.get(p.pinUid) ?? '', at: at(p.pinUid), uids: [...new Set(pins.map((o) => o.symbolUid))], net: net.name });
+      }
     }
     const powerIn = net.pins.filter((p) => p.pinType === 'power_in');
-    if (powerIn.length && real) {
+    // With the project option, a power symbol counts as a power input too (as in KiCad).
+    const ports = settings.powerSymbolsNeedSource ? net.items.map((u) => doc.nodes.get(u)).filter((n): n is DocNode => n?.type === 'label' && n.props.kind === 'power') : [];
+    if ((powerIn.length || ports.length) && real) {
       const driven = net.pins.some((p) => p.pinType === 'power_out') || net.items.some((u) => doc.nodes.get(u)?.props.kind === 'flag');
       if (!driven) {
-        const p = powerIn[0]!;
-        out.push({ id: `pwr:${net.name}`, kind: 'powerNotDriven', severity: 'error', message: `${net.name} feeds power inputs (${powerIn.map((o) => `${o.ref}.${o.pin}`).slice(0, 4).join(', ')}) but nothing on it is a power source; add a power output or a power flag`, sheet: sheetOfPin.get(p.pinUid) ?? '', at: at(p.pinUid), uids: [p.symbolUid], net: net.name });
+        const p = powerIn[0];
+        const port = ports[0];
+        let sh = port?.parent ? doc.nodes.get(port.parent) : undefined;
+        while (sh && sh.type !== 'sheet') sh = sh.parent ? doc.nodes.get(sh.parent) : undefined;
+        const what = powerIn.length ? `feeds power inputs (${powerIn.map((o) => `${o.ref}.${o.pin}`).slice(0, 4).join(', ')})` : 'has power symbols';
+        out.push({
+          id: `pwr:${net.name}`,
+          kind: 'powerNotDriven',
+          severity: 'error',
+          message: `${net.name} ${what} but nothing on it is a power source; add a power output or a power flag`,
+          sheet: p ? (sheetOfPin.get(p.pinUid) ?? '') : (sh?.uid ?? ''),
+          at: p ? at(p.pinUid) : (vec(engine.get(port!.uid, 'position')?.value) ?? { x: 0, y: 0 }),
+          uids: p ? [p.symbolUid] : [port!.parent ?? port!.uid],
+          net: net.name,
+        });
       }
     }
   }
@@ -277,7 +331,18 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
       out.push({ id: `dup:${n.uid}`, kind: 'duplicateRef', severity: 'error', message: `Reference ${n.props.ref ?? n.name} is used more than once`, sheet: sh?.type === 'sheet' ? sh.uid : '', at: p, uids: [prev, n.uid] });
     } else seen.set(key, n.uid);
   }
-  return { violations: out, netlist: nl };
+  // Project settings: how each check reports, then the waived violations aside.
+  const violations: ErcViolation[] = [];
+  const waived: WaivedViolation[] = [];
+  for (const v of out) {
+    const sev = settings.severity[v.kind];
+    if (sev === 'ignore') continue;
+    const r = sev ? { ...v, severity: sev } : v;
+    const w = settings.waivers[v.id];
+    if (w) waived.push({ ...r, waiver: w });
+    else violations.push(r);
+  }
+  return { violations, waived, netlist: nl };
 }
 
 /** A symbol's drawn body (no pins) in sheet coordinates, or null when it has no drawing. */

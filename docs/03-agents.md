@@ -76,7 +76,9 @@ between blocks.
 | inspect | read | Every computed rule and where its value comes from |
 | list_parts | read | Parts in the schematic and on the board |
 | netlist | read | Schematic nets with their pins |
-| run_erc / run_drc | read | Schematic / board checks |
+| run_erc / run_drc | read | Schematic / board checks; `run_erc` gives each violation an id and lists waived ones apart |
+| set_erc_rule / set_erc_check / set_erc_option | write | The project's ERC: pin-type matrix entry (ok / warning / error), how a check reports (error / warning / ignore), power symbols needing a source |
+| waive_violation / unwaive_violation | write | Accept one ERC violation with a reason (kept in the project, shown in Review), or count it again |
 | list_rules | read | Available rules, project rulesets, defaults |
 | set_rule | write | A ruleset (default) or a rule on specific objects |
 | set_property / set_spec | write | Part properties / project requirements |
