@@ -183,7 +183,8 @@ export class CliAgentSession {
     const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`;
     // Replace the user's own MCP servers for this run: only Hassassin is offered.
     const servers = `mcp_servers={hassassin={command=${toml(process.execPath)},args=[${toml(MCP_BIN)},"mcp"],env=${envToml}}}`;
-    const common = ['--json', '--skip-git-repo-check', '-s', 'read-only', '-c', 'approval_policy="never"', '-c', servers];
+    // Sandbox through a config override: `codex exec resume` has no -s / --sandbox flag.
+    const common = ['--json', '--skip-git-repo-check', '-c', 'sandbox_mode="read-only"', '-c', 'approval_policy="never"', '-c', servers];
     // Codex has no separate system prompt flag here: the instructions lead the first message,
     // and the mode is restated on each later one.
     const text = this.sessionId ? `${this.mode === 'ask' ? `(${READ_ONLY_HINT})\n\n` : '(Agent mode: you may change the project.)\n\n'}${prompt}` : `<instructions>\n${systemPrompt(this.mode)}\n</instructions>\n\n${prompt}`;

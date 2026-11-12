@@ -2,6 +2,16 @@
 // Stand-in for `codex exec --json`.
 const args = process.argv.slice(2);
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+// Like the real CLI (0.167): `exec resume` has no -s / --sandbox flag.
+if (args[0] === 'exec' && args[1] === 'resume' && args.some((a) => a === '-s' || a === '--sandbox')) {
+  process.stderr.write("error: unexpected argument '-s' found\n\n  tip: to pass '-s' as a value, use '-- -s'\n\nUsage: codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]\n");
+  process.exit(2);
+}
+// The sandbox must be read-only on every call.
+if (!args.includes('sandbox_mode="read-only"')) {
+  process.stderr.write('error: expected a read-only sandbox\n');
+  process.exit(2);
+}
 const servers = args[args.findIndex((a) => a.startsWith('mcp_servers='))] ?? '';
 out({ type: 'thread.started', thread_id: 'th-1' });
 out({ type: 'turn.started' });
