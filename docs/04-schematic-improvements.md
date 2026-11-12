@@ -238,7 +238,21 @@ only when all of its criteria pass.
     team library.
   - Pin side and order can be set when pasting a pin table; pins can be split into units (for example
     A, B and a power unit); `add_part` gets the same pin-side option for agents.
-- [ ] **S19. Footprint generator.**
+- [x] **S19. Footprint generator.** — `b415546`
+  - Delivered: `packages/core/src/footprintGen.ts` (written from scratch; no KiCad code). Families two-row
+    (around / zigzag numbering, SMD or through-hole), four-side, grid (JEDEC row letters, depopulated
+    positions), castellated module (optional half-hole drills) and free pad lists; exposed pad with
+    thermal vias; mounting holes; fab, silk, courtyard, pin-1 mark, reference and value. Pads from the
+    land pattern, or derived from lead dimensions with documented margins (gull-wing toe / heel / side
+    0.35 / 0.35 / 0.05, no-lead 0.30 / 0 / 0, J-lead 0.10 / 0.60 / 0.05 mm; pads kept 0.2 mm apart).
+    **New footprint…** in the Parts panel and the inspector (with Edit for generated ones): form per
+    family, live preview with pad-centre spans, pitch, pad sizes and courtyard. Stored in the project
+    with its parameters; published with its part as before. Tool `create_footprint` (with `ref`).
+  - Tests: `packages/tools/test/footprint-s19.test.ts`: ESP-12F module, QFN-24 with exposed pad and vias,
+    2 × 20 header (every pad within 0.01 mm of the datasheet numbers); a board with all three passes DRC
+    (0 errors); SOIC-8, TSSOP-20 and QFN-24 generated from JEDEC lead dimensions match the installed KiCad
+    footprints (same pads and numbering, positions and sizes within 0.1 mm); KiCad is read at test time
+    only. Browser check: castellated module and a QFN from lead dimensions, saved into the project.
   - Makes a footprint from datasheet dimensions when no library footprint exists: rows / grids of pads
     (count, pitch, pad size and shape, row spacing), an exposed / thermal pad, castellated edge pads,
     through-hole pins with drill, and mounting holes. It also adds the courtyard, silkscreen outline,
