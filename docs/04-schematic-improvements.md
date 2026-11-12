@@ -287,7 +287,23 @@ only when all of its criteria pass.
   - ERC (and Update PCB) reports symbol pins with no matching footprint pad, pads with no pin (unless
     marked mechanical / no-connect), and pin counts that differ.
   - The agent runs it after `assign_footprint`; Review lists the findings.
-- [ ] **S21. Official KiCad libraries on demand.**
+- [x] **S21. Official KiCad libraries on demand.** — `e19906c`
+  - Delivered: `packages/tools/src/kicadDownload.ts` (Node only). When the server has no KiCad libraries,
+    the Parts panel offers **Download KiCad libraries…**; the confirmation names both repositories
+    (gitlab.com/kicad/libraries/kicad-symbols and kicad-footprints), the size class and the license.
+    Only then the newest stable release is fetched (one archive each) and unpacked into
+    `~/.cache/hassassin/kicad-libraries/<version>/` (only `.kicad_sym`, `.kicad_mod` and the license files;
+    `gzip` from Node, our own small tar reader); the server uses it at once, later starts find it too.
+    Only the computer the server runs on can start it (`POST /api/library/kicad/download`); the CLI has
+    `hassassin kicad-libraries [status|download]`. An installed KiCad always wins. Every KiCad part and
+    footprint carries its license; the part detail shows source and license. The agent is told to tell
+    the user, never to download.
+  - Tests: `apps/server/test/kicadDownload.test.ts` with a local fake of the repositories (no network):
+    tar with pax long names, release choice, the whole flow on the server (nothing fetched before the
+    request; parts and footprints searchable with source and license afterwards). Browser check: a server
+    without KiCad shows the offer and the confirmation (declined: nothing fetched); with KiCad installed,
+    the part detail shows "From: KiCad library Regulator_Linear · License: CC BY-SA 4.0 …".
+    Not yet done: a real download from gitlab.com (waits for the owner's go-ahead).
   - Without KiCad installed, the app can download the official symbol and footprint libraries from
     KiCad's public repository into a local cache, after the user agrees.
   - They are never stored in this repository. The UI shows where each part came from and its license
