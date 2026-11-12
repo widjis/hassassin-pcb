@@ -70,6 +70,7 @@ const defs: RuleDef[] = [
   { name: 'pinLength', label: 'Pin length', kind: 'length', inheritable: false, help: 'Length of a schematic pin line.' },
   { name: 'autoPlacePriority', label: 'Auto-place priority', kind: 'number', inheritable: true, help: 'Higher numbers get placed or routed first.' },
   { name: 'cornerStyle', label: 'Corner style', kind: 'enum', inheritable: true, options: ['45', 'arc', '90'], help: 'How routed traces turn: 45 = two 45° bends instead of a right angle, arc = rounded, 90 = right angles allowed. Never acute.' },
+  { name: 'planeGapCost', label: 'Plane gap cost', kind: 'number', inheritable: true, help: 'Autorouter: extra cost per grid step of running where the neighbouring copper layer has no pour under the trace, or the pour is cut by a trace (default 0 = off). Higher for nets that need a solid return path (high-speed, RF).' },
   { name: 'routeDirection', label: 'Route direction', kind: 'enum', inheritable: true, options: ['alternate', 'alternate-v', 'any'], help: 'Autorouter: preferred direction per copper layer. alternate (default) = top layer horizontal, the next vertical, and so on; alternate-v = top vertical; any = no preference. Runs against a layer\'s direction cost more.' },
   { name: 'viaCost', label: 'Via cost', kind: 'length', inheritable: true, help: 'Autorouter: a via costs as much as this length of trace (default 4 mm).' },
   { name: 'cornerSetback', label: 'Corner setback', kind: 'length', inheritable: true, help: 'How far before a corner its 45° piece or arc starts (default: 2 × trace width).' },

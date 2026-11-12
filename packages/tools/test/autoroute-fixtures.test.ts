@@ -103,7 +103,8 @@ describe('autoroute fixtures: corner styles (P8e)', { timeout: 120_000 }, () => 
       const f = await styled(name, 'arc');
       expect([name, f.failed, f.unroutedAfter, f.bendsPerConnection, f.offAngle, f.collinear]).toEqual([name, 0, 0, 0, 0, 0]);
       expect(f.drcByKind).toEqual({});
-      if (f.routed) expect(f.arcs).toBeGreaterThan(0);
+      // plane-slot is one straight run: nothing to bend.
+      if (f.routed && name !== 'plane-slot') expect(f.arcs).toBeGreaterThan(0);
     }
   });
   it('90: right angles allowed but never an acute corner, still legal and complete', async () => {
@@ -173,6 +174,19 @@ describe('autoroute fixtures: costs and order (P8f)', { timeout: 120_000 }, () =
   it('fanout=false routes from the pads as before', async () => {
     const f = await measureAutoroute(await ROUTE_FIXTURES['qfn-fine'](), { fanout: false });
     expect([f.failed, f.fanouts]).toEqual([0, 0]);
+  });
+  it('plane gap cost: a trace moves off a slot in its reference plane, by option or by the net\'s planeGapCost rule (P8f)', async () => {
+    const plain = await figures('plane-slot');
+    expect(plain.offPlane).toBeGreaterThan(0.5);
+    const opt = await measureAutoroute(await ROUTE_FIXTURES['plane-slot'](), { plane_gap_cost: 1 });
+    const p = await ROUTE_FIXTURES['plane-slot']();
+    await runTool(p, 'set_rule', { target: 'net#"S"', rule: 'planeGapCost', value: '1' });
+    const rule = await measureAutoroute(p);
+    for (const f of [opt, rule]) {
+      expect([f.failed, f.unroutedAfter, f.drcErrors]).toEqual([0, 0, 0]);
+      expect(f.offPlane).toBeLessThan(0.15);
+      expect(f.length).toBeLessThan(plain.length * 1.1);
+    }
   });
   it('graze: copper that only touches a pad does not count as connected; the pad is still routed (P8f)', async () => {
     const f = await figures('graze');

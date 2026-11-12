@@ -36,6 +36,13 @@ export interface AutorouteOptions {
   proximityCost?: number;
   /** Order of connections: `short` (default: shortest first) or `difficulty` (fine-pitch pads first, then long connections). The `autoPlacePriority` rule comes before either. */
   order?: 'difficulty' | 'short';
+  /**
+   * Cost per grid step of running over a gap in the reference plane (P8f): where no pour lies on a
+   * neighbouring copper layer, or a trace laid by this run cuts it (default 0 = off: on the benchmark board it
+   * cost length and vias without keeping more copper over a plane). The net's `planeGapCost` rule takes
+   * precedence, for nets that need a solid return path.
+   */
+  planeGapCost?: number;
   /** Fan out dense parts first (P8f; default true): straight stubs out of fine-pitch pad rows, where routing starts. */
   fanout?: boolean;
   /** Layers to route on (default: all copper layers). */
@@ -389,6 +396,39 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     if (s.kind === 'fill' && !(s.net && routedNets.includes(s.net))) continue;
     paint(li, id, { edges: s.kind === 'fill' ? [] : s.edges, areas: s.kind === 'fill' || s.kind === 'pad' ? s.areas : [] }, clearanceFor(s.keepOut, 'trace'));
   }
+
+  // Reference plane (P8f): cells covered by a pour, per copper layer (the pours as filled before routing).
+  // A trace on layer li has a plane under it where a neighbouring copper layer is covered there and no
+  // trace laid by this run cuts that pour (checked during the search).
+  const cov = copper.map(() => null as Uint8Array | null);
+  for (const s of shapes) {
+    if (s.kind !== 'fill') continue;
+    const k = copper.indexOf(s.layer);
+    if (k < 0) continue;
+    const m = (cov[k] ??= new Uint8Array(N));
+    for (const ar of s.areas) {
+      let y0 = Infinity, y1 = -Infinity;
+      for (const ring of ar) for (const q of ring) (y0 = Math.min(y0, q.y)), (y1 = Math.max(y1, q.y));
+      for (let j = Math.max(0, Math.ceil((y0 - minY) / g)); j <= Math.min(H - 1, Math.floor((y1 - minY) / g)); j++) {
+        const y = cy(j);
+        const xs: number[] = [];
+        for (const ring of ar)
+          for (let t = 0; t < ring.length; t++) {
+            const a0 = ring[t]!;
+            const b0 = ring[(t + 1) % ring.length]!;
+            if ((a0.y > y) !== (b0.y > y)) xs.push(a0.x + ((y - a0.y) * (b0.x - a0.x)) / (b0.y - a0.y));
+          }
+        xs.sort((u, v) => u - v);
+        for (let t = 0; t + 1 < xs.length; t += 2)
+          for (let i = Math.max(0, Math.ceil((xs[t]! - minX) / g)); i <= Math.min(W - 1, Math.floor((xs[t + 1]! - minX) / g)); i++) m[j * W + i] = 1;
+      }
+    }
+  }
+  /** Per routing layer: its neighbouring copper layers that carry a pour, with their routing-layer index (-1 if not routed). */
+  const refAdj = layers.map((l) => {
+    const k = copper.indexOf(l);
+    return [k - 1, k + 1].filter((x) => x >= 0 && x < copper.length && cov[x]).map((x) => ({ m: cov[x]!, lj: layers.indexOf(copper[x]!) }));
+  });
 
   // Order (P8f): the `autoPlacePriority` rule first (higher first); then the shortest first (default), or by
   // difficulty (`order: 'difficulty'`): connections with a fine-pitch pad at an end (pad centres closer
@@ -923,6 +963,19 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
      * run next to another net costs more than a short pass, and traces keep some air where there is room.
      */
     const band = width + cn;
+    const gapK = refAdj.some((x) => x.length) ? netRule(r.net, 'planeGapCost', opts.planeGapCost ?? 0) : 0;
+    /** Is there a plane under cell c of layer li (a pour on a neighbouring layer, not cut by a trace of this run)? */
+    const planeUnder = (li: number, c: number, p: Vec2) => {
+      for (const { m, lj } of refAdj[li]!) {
+        if (!m[c]) continue;
+        if (lj < 0) return true;
+        let cut = false;
+        for (const cp of capsNear(lj, p)) if (distToSegment(p, cp.a, cp.b) < cp.r + cp.cl + halfFull) (cut = true);
+        if (!cut) return true;
+      }
+      return false;
+    };
+    /** Proximity to other nets and plane gaps under the cell: extra cost of entering it (memoised per search). */
     const proximity = (li: number, c: number) => {
       const s = li * N + c;
       if (proxStamp[s] === call) return proxVal[s]!;
@@ -937,6 +990,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         for (const cp of capsNear(li, p)) if (cp.id !== id) m = Math.min(m, distToSegment(p, cp.a, cp.b) - cp.r - Math.max(cn, cp.cl));
         const ex = m - halfFull - slackFull;
         if (ex < band) v = proxK * (1 - Math.max(0, ex) / band);
+      }
+      if (gapK > 0 && refAdj[li]!.length) {
+        const i = c % W;
+        if (!planeUnder(li, c, { x: cx(i), y: cy((c - i) / W) })) v += gapK;
       }
       proxStamp[s] = call;
       proxVal[s] = v;

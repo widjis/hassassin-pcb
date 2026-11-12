@@ -375,7 +375,23 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     Not done: BGA dog-bones (square pads, a via per ball between the balls), regular fan patterns
     (alternating stub lengths, vias placed in a ring), and a run on a real board with a QFN / QFP (the
     solar-mppt board, P8a, waits for the owner's leave).
-    Still open in P8f: the reference-plane cost, bundles, and the per-class costs (with P16).
+  - *Progress (2026-11-13), reference plane:* done: rule `planeGapCost` (per net) and option
+    `plane_gap_cost`: a cost per grid step where the trace has no pour under it on a neighbouring copper
+    layer (the pours as filled before routing), or where a trace laid by this run on that layer cuts the
+    pour. The benchmark reports `offPlane`, the share of autorouted length with no pour on a neighbouring
+    layer after refilling. Fixture `plane-slot` (a GND pour on B.Cu slotted by a trace right under the
+    straight line of a signal): with cost 0.5 or more the signal moves off the slot, 59 % → 5 % of its
+    length off the plane, for 0.2 mm more copper; a test checks the option and the rule.
+    On the RGB lamp copy it did not help: off-plane share 0.389 without the cost, 0.37–0.48 with it
+    (0.25–2, and two other forms tried: only traces on the other layer as gaps, or a cost for cutting a
+    pour on the trace's own layer), always with more vias (38–50) and length (+10–20 %). The board pours
+    four nets on F.Cu and GND on B.Cu, and both layers carry signals, so what decides the plane is how the
+    B.Cu routes split the GND pour (islands removed on refill), which a cost per cell does not see.
+    So the default is 0 (off); the rule is there for nets that need it, which P16's classes (high-speed,
+    RF, diff-pair) will set. A whole-plane view (keep one layer for the plane, count the pour islands a
+    route would cut off) is left for later. (The `fill … clearance` error some runs show is pour against
+    pour, P6, not the router.)
+    Still open in P8f: bundles, and the per-class costs (with P16).
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.

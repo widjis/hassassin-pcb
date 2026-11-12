@@ -45,6 +45,11 @@ export interface RouteFigures {
    * even copper layers horizontal, odd ones vertical); 45° pieces count half.
    */
   againstDirection: number;
+  /**
+   * Share of the straight autorouted length (0–1) with no pour under it on a neighbouring copper layer
+   * (P8f, reference plane), after refilling; 0 when no neighbouring layer has a pour.
+   */
+  offPlane: number;
 }
 
 /** Share of the straight autorouted length against the default layer directions (see `RouteFigures.againstDirection`). */
@@ -65,6 +70,30 @@ export function againstDirection(doc: Doc, engine: StyleEngine, copper: string[]
     else if ((k % 2 === 0 ? dy : dx) > 1e-6) against += len;
   }
   return total ? Math.round((against / total) * 1000) / 1000 : 0;
+}
+
+/** Share of the straight autorouted length over no pour on a neighbouring copper layer (see `RouteFigures.offPlane`), sampled every 0.1 mm. */
+export function offPlane(doc: Doc, engine: StyleEngine, copper: string[]): number {
+  const fills = collectCopper(doc, engine, copper).filter((s) => s.kind === 'fill');
+  let total = 0;
+  let off = 0;
+  for (const n of doc.nodes.values()) {
+    if (n.type !== 'trace' || n.props.autorouted !== true || engine.get(n.uid, 'mid')?.value) continue;
+    const a = vec(engine.get(n.uid, 'start')?.value);
+    const b = vec(engine.get(n.uid, 'end')?.value);
+    const k = copper.indexOf(String(engine.get(n.uid, 'layer')?.value ?? ''));
+    if (!a || !b || k < 0) continue;
+    const near = fills.filter((f) => Math.abs(copper.indexOf(f.layer) - k) === 1);
+    if (!near.length) continue;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const steps = Math.max(1, Math.ceil(len / 0.1));
+    for (let t = 0; t < steps; t++) {
+      const q = { x: a.x + ((b.x - a.x) * (t + 0.5)) / steps, y: a.y + ((b.y - a.y) * (t + 0.5)) / steps };
+      total += len / steps;
+      if (!near.some((f) => f.box.minX <= q.x && f.box.maxX >= q.x && f.box.minY <= q.y && f.box.maxY >= q.y && f.areas.some((ar) => inArea(q, ar)))) off += len / steps;
+    }
+  }
+  return total ? Math.round((off / total) * 1000) / 1000 : 0;
 }
 
 /** Remove traces and vias of every net that has no pour (pads, pours and poured nets stay). */
@@ -183,6 +212,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     grid: Math.round(r.grid * 1000) / 1000,
     fanouts: r.fanouts,
     againstDirection: againstDirection(p.doc, p.engine, p.copper),
+    offPlane: offPlane(p.doc, p.engine, p.copper),
   };
 }
 
@@ -324,7 +354,29 @@ export async function fixtureGraze(): Promise<Project> {
   return p;
 }
 
+/**
+ * A GND pour on B.Cu, cut by net T's hand-drawn B.Cu trace that runs right under the straight line between
+ * the two pads of net S. Routed straight on F.Cu, S runs over the slot in its reference plane for most of
+ * its length; with a plane-gap cost (P8f) it moves off the slot.
+ */
+export async function fixturePlaneSlot(): Promise<Project> {
+  const p = newProject('fixture-plane-slot');
+  for (let i = 0; i < 5; i++) await runTool(p, 'add_part', { kind: 'connector', pins: 1, x: i * 15, y: 0 });
+  await wire(p, 'S', 'J1.1', 'J2.1');
+  await wire(p, 'T', 'J3.1', 'J4.1');
+  await wire(p, 'GND', 'J5.1');
+  await finish(p, { x: 100, y: 100, width: 40, height: 20 }, [['J1', 104, 110], ['J2', 136, 110], ['J3', 112, 104], ['J4', 128, 104], ['J5', 120, 117]]);
+  await runTool(p, 'set_rule', { target: 'net#"GND"', rule: 'pourLayers', value: 'B.Cu' });
+  const net = [...p.doc.nodes.values()].find((n) => n.type === 'net' && n.name === 'T')!;
+  const pts: Vec2[] = [{ x: 112, y: 104 }, { x: 112, y: 110 }, { x: 128, y: 110 }, { x: 128, y: 104 }];
+  const ops: Op[] = [];
+  for (let k = 0; k + 1 < pts.length; k++)
+    ops.push({ op: 'add', parent: net.uid, index: net.children.length + k, tree: { nodes: [{ uid: `trslot${k}`, type: 'trace', name: '', props: {}, rules: [{ name: 'start', value: pts[k]! }, { name: 'end', value: pts[k + 1]! }, { name: 'layer', value: 'B.Cu' }], parent: net.uid, children: [] }] } });
+  p.history.apply('Slot trace', ops);
+  return p;
+}
+
 /** Extra `autoroute` arguments per fixture. */
 export const FIXTURE_ARGS: Record<string, Record<string, unknown>> = { channel: { layers: ['F.Cu'] } };
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze } as const;
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot } as const;
