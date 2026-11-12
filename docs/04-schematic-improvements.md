@@ -221,7 +221,18 @@ only when all of its criteria pass.
   - A placed unit can be changed (A, B, power unit …); placing one unit offers the remaining units.
   - ERC reports units that were never placed when their pins matter (for example the power unit).
 
-- [ ] **S16. Symbol editor** (moved from M3 in version 0.2).
+- [x] **S16. Symbol editor** (moved from M3 in version 0.2). — `3e9b495`
+  - Delivered: **New symbol…** in the Parts panel and **Edit symbol…** in the Parts panel and the
+    inspector. Paste a pin table (tab, comma, semicolon, `|` or space separated, header optional, datasheet
+    type words I / O / I/O / P / G / OD understood, missing types guessed from names), adjust number, name,
+    type, side and unit per pin, choose sides (by function, as on the package, from the table), order
+    (table, number, name) and a separate power unit; live preview of every unit. Bodies are sized to the pin
+    names, every pin on the 2.54 mm grid. The part is stored in the project with its pin table; saving an
+    edit redraws every placed copy; Publish to team works as for other project parts (checked against the
+    server). Tools: `create_symbol` (text or list, same options), `add_part kind=ic pin_layout / pin_sides`.
+    Also: new parts are placed clear of existing symbols.
+  - Tests: `packages/tools/test/schematic-s16.test.ts`. Browser check: datasheet table pasted, package and
+    by-function layouts, save and place, edit with the placed copy redrawn.
   - Create or edit a symbol: body, pins (number, name, type, side), from a pin table that can be pasted
     (for example from a datasheet); the result is stored with the project and can be published to the
     team library.
