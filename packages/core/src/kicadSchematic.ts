@@ -315,6 +315,13 @@ export function kicadSchematic(doc: Doc, engine: StyleEngine, opts: KicadSchemat
         const a = vec(engine.get(it.uid, 'start')?.value);
         const b = vec(engine.get(it.uid, 'end')?.value);
         if (a && b) add(`(wire (pts (xy ${sp(a)}) (xy ${sp(b)})) (stroke (width 0) (type default)) (uuid ${u}))`);
+      } else if (it.type === 'bus') {
+        const a = vec(engine.get(it.uid, 'start')?.value);
+        const b = vec(engine.get(it.uid, 'end')?.value);
+        if (a && b) add(`(bus (pts (xy ${sp(a)}) (xy ${sp(b)})) (stroke (width 0) (type default)) (uuid ${u}))`);
+      } else if (it.type === 'busEntry' && p) {
+        const size = vec(engine.get(it.uid, 'size')?.value) ?? { x: 2.54, y: 2.54 };
+        add(`(bus_entry (at ${sp(p)}) (size ${sp(size)}) (stroke (width 0) (type default)) (uuid ${u}))`);
       } else if (it.type === 'junction' && p) {
         add(`(junction (at ${sp(p)}) (diameter 0) (color 0 0 0 0) (uuid ${u}))`);
       } else if (it.type === 'noconnect' && p) {

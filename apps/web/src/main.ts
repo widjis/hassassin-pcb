@@ -236,7 +236,7 @@ for (const ev of ['space', 'doc', 'sheet'] as const) app.on(ev, syncSpace);
 for (const ev of ['change', 'selection', 'drc'] as const) app.on(ev, () => app.space === 'schematic' && sch.requestRender());
 const schToolSeg = $('schToolSeg');
 schToolSeg.addEventListener('click', (e) => {
-  const t = (e.target as HTMLElement).closest('button')?.dataset.tool as 'select' | 'wire' | undefined;
+  const t = (e.target as HTMLElement).closest('button')?.dataset.tool as 'select' | 'wire' | 'bus' | 'entry' | undefined;
   if (t) sch.setTool(t);
 });
 app.on('mode', () => {
@@ -269,7 +269,7 @@ const placeLabel = () => {
   dlg.innerHTML = `
     <form method="dialog">
       <h3>Net label</h3>
-      <label>Name <input name="name" required autocomplete="off"></label>
+      <label>Name <input name="name" required autocomplete="off" placeholder="e.g. SDA — on a bus: DATA[0..7] or I2C{SDA SCL}"></label>
       <fieldset><legend>Kind</legend>
         <label><input type="radio" name="kind" value="local"> Local: same name on this sheet connects</label>
         <label><input type="radio" name="kind" value="global"> Global: same name on every sheet connects</label>
@@ -808,12 +808,20 @@ window.addEventListener('keydown', (e) => {
     switch (e.key) {
       case 'Escape':
         if (sch.cancelPaste()) break;
-        if (sch.tool === 'wire') sch.setTool('select');
+        if (sch.tool !== 'select') sch.setTool('select');
         else app.select([]);
         break;
       case 'w':
       case 'W':
         sch.setTool('wire');
+        break;
+      case 'b':
+      case 'B':
+        sch.setTool('bus');
+        break;
+      case 'e':
+      case 'E':
+        sch.setTool('entry');
         break;
       case '/':
         sch.toggleCorner();

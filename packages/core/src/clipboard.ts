@@ -22,7 +22,7 @@ export interface Clip {
   anchor: Vec2;
 }
 
-const COPYABLE = new Set(['symbol', 'wire', 'label', 'junction', 'noconnect', 'note', 'groupBox']);
+const COPYABLE = new Set(['symbol', 'wire', 'label', 'junction', 'noconnect', 'note', 'groupBox', 'bus', 'busEntry']);
 const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x' in v && 'y' in v ? (v as Vec2) : undefined);
 const round = (p: Vec2): Vec2 => ({ x: Math.round(p.x * 10000) / 10000, y: Math.round(p.y * 10000) / 10000 });
 

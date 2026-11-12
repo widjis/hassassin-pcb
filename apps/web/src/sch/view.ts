@@ -4,6 +4,9 @@
  * delete (Del), enter sub-sheet (double-click a sheet block), up (Backspace on empty / U).
  */
 import {
+  addBusEntryOp,
+  addBusOps,
+  busEntryAt,
   genericPart,
   isGroundNet,
   moveSymbolsOps,
@@ -72,6 +75,7 @@ const C = {
   bg: '#0e1014',
   grid: 'rgba(120,130,150,0.18)',
   wire: '#4fd6a6',
+  bus: '#5b8cff',
   body: '#e8c47a',
   bodyFill: 'rgba(232,196,122,0.07)',
   pin: '#c9ced8',
@@ -90,7 +94,7 @@ const C = {
   text: '#c7cdd8',
 };
 
-type Tool = 'select' | 'wire';
+type Tool = 'select' | 'wire' | 'bus' | 'entry';
 
 interface View {
   cx: number;
@@ -117,6 +121,8 @@ export class SchematicView {
   tool: Tool = 'select';
   view: View = { cx: 0, cy: 0, scale: 6 };
   private wireStart: Vec2 | null = null;
+  /** Last corner of the bus being drawn (bus tool). */
+  private busStart: Vec2 | null = null;
   private wireHorizontalFirst = true;
   private cursor: Vec2 = { x: 0, y: 0 };
   private drag: {
@@ -237,7 +243,7 @@ export class SchematicView {
         const b = this.symbolBox(n);
         grow({ x: b.minX, y: b.minY });
         grow({ x: b.maxX, y: b.maxY });
-      } else if (n.type === 'wire') {
+      } else if (n.type === 'wire' || n.type === 'bus') {
         const a = vec(e.get(n.uid, 'start')?.value);
         const b = vec(e.get(n.uid, 'end')?.value);
         if (a && b) (grow(a), grow(b));
@@ -275,10 +281,14 @@ export class SchematicView {
       if (n.type === 'label' || n.type === 'junction' || n.type === 'noconnect' || n.type === 'sheetPin') {
         const q = vec(e.get(n.uid, 'position')?.value);
         if (q && dist(p, q) < Math.max(tol * 2, 1)) offer(n, 4);
-      } else if (n.type === 'wire') {
+      } else if (n.type === 'wire' || n.type === 'bus') {
         const a = vec(e.get(n.uid, 'start')?.value);
         const b = vec(e.get(n.uid, 'end')?.value);
-        if (a && b && distToSegment(p, a, b) < tol) offer(n, 3);
+        if (a && b && distToSegment(p, a, b) < tol * (n.type === 'bus' ? 1.5 : 1)) offer(n, 3);
+      } else if (n.type === 'busEntry') {
+        const a = vec(e.get(n.uid, 'position')?.value);
+        const sz = vec(e.get(n.uid, 'size')?.value);
+        if (a && sz && distToSegment(p, a, { x: a.x + sz.x, y: a.y + sz.y }) < tol) offer(n, 3.2);
       } else if (n.type === 'symbol') {
         const b = this.symbolBox(n);
         if (p.x >= b.minX - tol && p.x <= b.maxX + tol && p.y >= b.minY - tol && p.y <= b.maxY + tol) offer(n, 2 - (b.maxX - b.minX) * (b.maxY - b.minY) * 1e-4);
@@ -406,15 +416,46 @@ export class SchematicView {
       this.app.say('No clean path: this wire crosses a part or touches another net. Undo and use net labels (L), or move parts to make room.');
   }
 
+  /** Bus from `a` to `b`: straight, or an L with the corner set by / (as for wires). */
+  private addBus(a: Vec2, b: Vec2): void {
+    const s = this.sheet();
+    if (!s) return;
+    const mid = this.wireHorizontalFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
+    const pts = Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.y - b.y) < 1e-6 ? [a, b] : [a, mid, b];
+    const r = addBusOps(s, pts);
+    if (r.ops.length) this.app.apply('Draw bus', r.ops);
+  }
+
+  private addBusEntry(p: Vec2): void {
+    const s = this.sheet();
+    const doc = this.app.doc;
+    const e = this.app.engine;
+    if (!s || !doc || !e) return;
+    const g = busEntryAt(doc, e, s, p, schematicGrid(doc).wire);
+    if (!g) return this.app.say('Click next to a bus (within 2.54 mm) to add an entry.');
+    const r = addBusEntryOp(s, g.at, g.size);
+    this.app.apply('Add bus entry', [r.op]);
+    this.app.select([r.uid]);
+  }
+
   cancelWire(): void {
     this.wireStart = null;
+    this.busStart = null;
     this.requestRender();
   }
 
   setTool(t: Tool): void {
     this.tool = t;
     this.cancelWire();
-    this.app.say(t === 'wire' ? 'Wire: click to start, click to bend/finish, / flips the corner, Esc stops.' : '');
+    this.app.say(
+      t === 'wire'
+        ? 'Wire: click to start, click to bend/finish, / flips the corner, Esc stops.'
+        : t === 'bus'
+          ? 'Bus: click to start, click for each corner, double-click or Esc to finish. Name it with a label such as DATA[0..7] (L).'
+          : t === 'entry'
+            ? 'Bus entry: click next to a bus, on the side the wire should leave. Label the wire with a member name (DATA3).'
+            : '',
+    );
     this.app.emit('mode');
   }
 
@@ -717,7 +758,7 @@ export class SchematicView {
     const ops: Op[] = [];
     for (const uid of this.app.selection) {
       const n = this.app.node(uid);
-      if (n && ['symbol', 'wire', 'label', 'junction', 'noconnect', 'note', 'groupBox'].includes(n.type) && !(n.type === 'label' && this.app.node(n.parent ?? '')?.type === 'symbol')) ops.push({ op: 'remove', uid });
+      if (n && ['symbol', 'wire', 'bus', 'busEntry', 'label', 'junction', 'noconnect', 'note', 'groupBox'].includes(n.type) && !(n.type === 'label' && this.app.node(n.parent ?? '')?.type === 'symbol')) ops.push({ op: 'remove', uid });
       // A sub-sheet block goes with its sheet and everything on it (undo brings it back).
       else if (n?.type === 'block' && confirm(`Delete sub-sheet ${n.name} and everything on it? (Undo brings it back.)`)) ops.push({ op: 'remove', uid });
     }
@@ -781,7 +822,7 @@ export class SchematicView {
       const symbols: { uid: string; at: Vec2 }[] = [];
       if (kind === 'none' && this.tool === 'select' && e.button === 0) {
         const hit = this.pick(p);
-        if (hit && ['symbol', 'label', 'wire', 'junction', 'noconnect', 'block', 'note', 'groupBox'].includes(hit.type) && !(hit.type === 'label' && this.app.node(hit.parent ?? '')?.type === 'symbol')) {
+        if (hit && ['symbol', 'label', 'wire', 'bus', 'busEntry', 'junction', 'noconnect', 'block', 'note', 'groupBox'].includes(hit.type) && !(hit.type === 'label' && this.app.node(hit.parent ?? '')?.type === 'symbol')) {
           if (!this.app.selection.has(hit.uid)) this.app.select([hit.uid], e.shiftKey);
           kind = 'move';
           const eng = this.app.engine!;
@@ -793,7 +834,7 @@ export class SchematicView {
               if (at) symbols.push({ uid, at: { ...at } });
               continue;
             }
-            const keys = n.type === 'wire' ? ['start', 'end'] : ['position'];
+            const keys = n.type === 'wire' || n.type === 'bus' ? ['start', 'end'] : ['position'];
             const rules: Record<string, Vec2> = {};
             for (const k of keys) {
               const v = vec(eng.get(uid, k)?.value);
@@ -906,6 +947,16 @@ export class SchematicView {
       if (this.app.commentMode) return this.onPlaceComment?.(p);
       const pin = this.app.commentAt('schematic', this.sheet()?.uid, sx, sy, (q) => this.toScreen(q));
       if (pin) return this.onCommentClick?.(pin);
+      if (this.tool === 'bus') {
+        const q = this.snap(p);
+        if (this.busStart && dist(this.busStart, q) > 1e-6) this.addBus(this.busStart, q);
+        this.busStart = q;
+        return this.requestRender();
+      }
+      if (this.tool === 'entry') {
+        this.addBusEntry(p);
+        return this.requestRender();
+      }
       if (this.tool === 'wire') {
         const q = this.snap(p);
         if (!this.wireStart) this.wireStart = q;
@@ -921,7 +972,7 @@ export class SchematicView {
       else if (!e.shiftKey) this.app.select([]);
     });
     c.addEventListener('dblclick', (e) => {
-      if (this.tool === 'wire') return this.cancelWire();
+      if (this.tool === 'wire' || this.tool === 'bus') return this.cancelWire();
       const { sx, sy } = local(e);
       const field = this.fieldAt(this.toWorld(sx, sy));
       if (field) return this.editField(field.sym, field.field);
@@ -1154,6 +1205,37 @@ export class SchematicView {
       ctx.stroke();
     }
 
+    // Buses and bus entries
+    for (const n of items) {
+      if (n.type === 'bus') {
+        const a = vec(e.get(n.uid, 'start')?.value);
+        const b = vec(e.get(n.uid, 'end')?.value);
+        if (!a || !b) continue;
+        ctx.strokeStyle = isSel(n) ? C.sel : C.bus;
+        ctx.lineWidth = isSel(n) ? Math.max(3.5, lw(0.6)) : Math.max(2.5, lw(0.45));
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        const p = S(a);
+        const q = S(b);
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+      } else if (n.type === 'busEntry') {
+        const a = vec(e.get(n.uid, 'position')?.value);
+        const sz = vec(e.get(n.uid, 'size')?.value);
+        if (!a || !sz) continue;
+        ctx.strokeStyle = isSel(n) ? C.sel : C.bus;
+        ctx.lineWidth = isSel(n) ? Math.max(2.5, lw(0.3)) : lw(0.15);
+        ctx.beginPath();
+        const p = S(a);
+        const q = S({ x: a.x + sz.x, y: a.y + sz.y });
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+      }
+    }
+
     // Symbols
     for (const n of items) {
       if (n.type !== 'symbol') continue;
@@ -1319,6 +1401,24 @@ export class SchematicView {
       ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
       ctx.strokeRect(Math.min(a.x, b.x) + 0.5, Math.min(a.y, b.y) + 0.5, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
       ctx.restore();
+    }
+
+    // Bus tool preview
+    if (this.tool === 'bus' && this.busStart && dist(this.busStart, this.cursor) > 1e-6) {
+      const a = this.busStart;
+      const b = this.cursor;
+      const mid = this.wireHorizontalFirst ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
+      ctx.strokeStyle = C.bus;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = Math.max(2.5, lw(0.45));
+      ctx.beginPath();
+      [a, mid, b].forEach((pt, i) => {
+        const sp = S(pt);
+        if (i === 0) ctx.moveTo(sp.x, sp.y);
+        else ctx.lineTo(sp.x, sp.y);
+      });
+      ctx.stroke();
+      ctx.globalAlpha = 1;
     }
 
     // Wire tool preview

@@ -18,9 +18,10 @@ import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
 import { allSheets, pinPoint, sheetItems, sheetOf, symbolFrame, symToSheet } from './schematic.ts';
 import { missingUnits } from './multiUnit.ts';
+import { busMembers, sheetBuses } from './bus.ts';
 import { describePinPad, pinPadCheck } from './pinPad.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch' | 'labelSinglePin';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch' | 'labelSinglePin' | 'netNotBusMember';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -37,6 +38,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   unitNotPlaced: 'Unit of a part not placed',
   pinPadMismatch: 'Symbol pins and footprint pads differ',
   labelSinglePin: 'Label connected to only one pin',
+  netNotBusMember: 'Wire on a bus entry is not a member of the bus',
 };
 
 export interface ErcViolation {
@@ -106,11 +108,24 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
     }
   }
 
+  const netOfItem = new Map<string, (typeof nl.nets)[number]>();
+  for (const net of nl.nets) for (const u of net.items) netOfItem.set(u, net);
+
   // Dangling wire ends and labels (per sheet, geometric).
   for (const sheet of allSheets(doc)) {
     const its = sheetItems(doc, sheet);
     const wires = its.filter((n) => n.type === 'wire').map((n) => ({ n, a: vec(engine.get(n.uid, 'start')?.value)!, b: vec(engine.get(n.uid, 'end')?.value)! })).filter((w) => w.a && w.b);
     const points: Vec2[] = [];
+    const buses = its.filter((n) => n.type === 'bus').map((n) => ({ a: vec(engine.get(n.uid, 'start')?.value)!, b: vec(engine.get(n.uid, 'end')?.value)! })).filter((b) => b.a && b.b);
+    const entries = its
+      .filter((n) => n.type === 'busEntry')
+      .map((n) => {
+        const at = vec(engine.get(n.uid, 'position')?.value);
+        const sz = vec(engine.get(n.uid, 'size')?.value);
+        return at && sz ? { n, at, end: { x: at.x + sz.x, y: at.y + sz.y } } : null;
+      })
+      .filter((x): x is { n: DocNode; at: Vec2; end: Vec2 } => !!x);
+    for (const en of entries) points.push(en.end);
     for (const n of its) {
       if (n.type === 'pin') {
         const p = pointOf.get(n.uid);
@@ -170,8 +185,34 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
       if (n.type !== 'label' || n.props.kind === 'power' || n.props.kind === 'flag') continue;
       const p = vec(engine.get(n.uid, 'position')?.value);
       if (!p) continue;
-      const touches = wires.some((w) => distToSegment(p, w.a, w.b) < EPS) || anchors.some((a) => a.uid !== n.uid && dist(p, a.p) < EPS);
+      const onBus = buses.some((b) => distToSegment(p, b.a, b.b) < EPS);
+      const touches = onBus || wires.some((w) => distToSegment(p, w.a, w.b) < EPS) || anchors.some((a) => a.uid !== n.uid && dist(p, a.p) < EPS);
       if (!touches) out.push({ id: `dl:${n.uid}`, kind: 'danglingLabel', severity: 'warning', message: `Label ${n.name} is not attached to a wire or pin`, sheet: sheet.uid, at: p, uids: [n.uid] });
+    }
+    // A wire joins a bus only as one of its members (by its net label), as in KiCad.
+    if (entries.length) {
+      const sb = sheetBuses(doc, engine, sheet);
+      for (const en of entries) {
+        const w = wires.find((v) => dist(v.a, en.end) < EPS || dist(v.b, en.end) < EPS || distToSegment(en.end, v.a, v.b) < EPS);
+        if (!w) continue;
+        const net = netOfItem.get(w.n.uid);
+        const bus = sb.at(en.at);
+        const names = (net?.items ?? []).map((u) => doc.nodes.get(u)).filter((l): l is DocNode => l?.type === 'label' && !busMembers(l.name)).map((l) => l.name);
+        if (bus && bus.members.length && names.some((x) => bus.members.includes(x))) continue;
+        const busName = bus?.labels[0]?.name;
+        out.push({
+          id: `nbm:${en.n.uid}`,
+          kind: 'netNotBusMember',
+          severity: 'warning',
+          message: busName
+            ? `The wire on this bus entry carries ${net?.name ?? 'a net'}, which is not a member of bus ${busName}; label the wire with a member name such as ${bus!.members[0]}`
+            : `This bus has no name, so the wire on its entry joins nothing; name the bus with a label such as DATA[0..7] and the wire with a member name`,
+          sheet: sheet.uid,
+          at: en.end,
+          uids: [en.n.uid, w.n.uid],
+          ...(net ? { net: net.name } : {}),
+        });
+      }
     }
   }
 

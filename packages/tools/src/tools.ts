@@ -5,6 +5,10 @@
  */
 import {
   pinPadCheck,
+  busMembers,
+  addBusOps,
+  addBusEntryOp,
+  busEntryAt,
   kicadNetlist,
   kicadSchematic,
   describePinPad,
@@ -796,6 +800,75 @@ export const TOOLS: ToolDef[] = [
       ops.push(op);
       apply(p, flag ? 'Add PWR_FLAG' : `Add ${net} symbol`, ops);
       return { pin: a.pin, symbol: ref, net: flag ? extractNetlist(p.doc, p.engine).byPin.get(String(a.pin)) : net };
+    },
+  },
+  {
+    name: 'add_bus',
+    description: 'Draw a bus and name it: name is a vector such as DATA[0..7] (members DATA0 … DATA7) or a group such as I2C{SDA SCL} (members I2C.SDA, I2C.SCL). points: the corners, e.g. "10,20 60,20" (mm, on the grid). A wire belongs to a member through a net label with the member\'s name, as in KiCad; pins: optional list of pins ("U1.3 U1.4 …") that get those member labels in order. kind: local (default), global (members connect across sheets) or hier (inside a sub-sheet: a bus sheet pin appears on the block; on the parent, a bus touching that pin joins member by member, in order). Add bus entries with add_bus_entry where wires meet the bus.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Bus name, e.g. DATA[0..7] or I2C{SDA SCL}' },
+        points: { type: 'string', description: 'Corners: "x,y x,y …" (a list of {x, y} also works)' },
+        pins: { type: 'string', description: 'Pins to label with the members, in order: "U1.3 U1.4"' },
+        kind: { type: 'string', enum: ['local', 'global', 'hier'] },
+        sheet: { type: 'string' },
+      },
+      required: ['name', 'points'],
+    },
+    run: (p, a) => {
+      const name = str(a.name, 'name');
+      const members = busMembers(name);
+      if (!members) throw new ToolError(`"${name}" is not a bus name: use a vector such as DATA[0..7] or a group such as I2C{SDA SCL}`);
+      const pts: Vec2[] = Array.isArray(a.points)
+        ? (a.points as unknown[]).map((q) => vec(q)).filter((q): q is Vec2 => !!q)
+        : String(a.points ?? '')
+            .trim()
+            .split(/[\s;]+/)
+            .filter(Boolean)
+            .map((t) => t.split(',').map(Number))
+            .filter((xy) => xy.length === 2 && xy.every(Number.isFinite))
+            .map(([x, y]) => ({ x: x!, y: y! }));
+      if (pts.length < 2) throw new ToolError('points needs at least two corners, e.g. "10,20 60,20"');
+      const sheet = sheetByName(p, a.sheet);
+      const kind = a.kind === undefined ? 'local' : String(a.kind);
+      if (!['local', 'global', 'hier'].includes(kind)) throw new ToolError('kind must be local, global or hier');
+      const bus = addBusOps(sheet, pts);
+      const ops: Op[] = [...bus.ops];
+      const at = pts[0]!;
+      if (kind === 'hier') {
+        if (!blockOfSheet(p.doc, sheet)) throw new ToolError('A hierarchical bus belongs inside a sub-sheet (add_sheet); use kind=global between top-level sheets.');
+        const h = addHierLabelOp(sheet, name, at, 'bidirectional');
+        ops.push({ ...h.op, index: sheet.children.length + ops.length } as Op);
+      } else {
+        ops.push({ op: 'add', parent: sheet.uid, index: sheet.children.length + ops.length, tree: { nodes: [{ uid: newUid('lbl'), type: 'label', name, props: { kind }, rules: [{ name: 'position', value: at }, { name: 'rotation', value: 0 }], parent: sheet.uid, children: [] }] } });
+      }
+      apply(p, `Add bus ${name}`, ops);
+      const pinList = Array.isArray(a.pins) ? (a.pins as unknown[]).map(String) : typeof a.pins === 'string' ? a.pins.split(/[\s,]+/).filter(Boolean) : [];
+      if (pinList.length > members.length) throw new ToolError(`${pinList.length} pins but ${name} has only ${members.length} members`);
+      const labelled: string[] = [];
+      for (const [i, pin] of pinList.entries()) {
+        const P = pinOf(p, pin);
+        apply(p, `Label ${pin} ${members[i]}`, [{ op: 'add', parent: P.sheet.uid, index: P.sheet.children.length, tree: { nodes: [{ uid: newUid('lbl'), type: 'label', name: members[i]!, props: { kind: 'local' }, rules: [{ name: 'position', value: P.at }, { name: 'rotation', value: 0 }], parent: P.sheet.uid, children: [] }] } }]);
+        labelled.push(`${pin}=${members[i]}`);
+      }
+      return { bus: name, members, segments: bus.uids.length, ...(labelled.length ? { labelled } : {}) };
+    },
+  },
+  {
+    name: 'add_bus_entry',
+    description: 'Add a bus entry next to a bus: x, y is a point beside the bus where the wire should leave (within 2.54 mm of it). Returns the entry\'s wire end; label the wire there with a member name of the bus (add_label on the pin it reaches), as in KiCad.',
+    mutates: true,
+    input: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, sheet: { type: 'string' } }, required: ['x', 'y'] },
+    run: (p, a) => {
+      const sheet = sheetByName(p, a.sheet);
+      const at = { x: num(a.x, 'x'), y: num(a.y, 'y') };
+      const g = busEntryAt(p.doc, p.engine, sheet, at, schematicGrid(p.doc).wire);
+      if (!g) throw new ToolError(`No bus within 2.54 mm of ${at.x}, ${at.y} on this sheet`);
+      const r = addBusEntryOp(sheet, g.at, g.size);
+      apply(p, 'Add bus entry', [r.op]);
+      return { entry: r.uid, onBus: g.at, wireEnd: { x: g.at.x + g.size.x, y: g.at.y + g.size.y } };
     },
   },
   {

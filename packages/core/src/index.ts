@@ -15,6 +15,7 @@ export * from './pour.ts';
 export * from './clip.ts';
 export * from './schematic.ts';
 export * from './netlist.ts';
+export * from './bus.ts';
 export * from './kicadNetlist.ts';
 export * from './kicadSchematic.ts';
 export * from './erc.ts';

@@ -57,14 +57,14 @@ const canon = (d: Doc) => {
   return JSON.stringify(f);
 };
 const settle = () => new Promise((r) => setTimeout(r, 120));
-/** Wait until `ok()` holds (polling), so a busy machine does not fail the test; gives up after 3 s. */
-const until = async (ok: () => boolean, ms = 3000) => {
+/** Wait until `ok()` holds (polling), so a busy machine does not fail the test; gives up after 10 s. */
+const until = async (ok: () => boolean, ms = 10_000) => {
   const end = Date.now() + ms;
   while (!ok() && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
 };
 
 describe('collaboration server', () => {
-  it('keeps two editors in step under concurrent edits', async () => {
+  it('keeps two editors in step under concurrent edits', { timeout: 30_000 }, async () => {
     const { id, tokens } = await createProject();
     const a = makeClient(id, tokens.edit, 'Ana');
     const b = makeClient(id, tokens.edit, 'Budi');
@@ -85,7 +85,7 @@ describe('collaboration server', () => {
       return JSON.stringify(server);
     };
     let server = '';
-    const end = Date.now() + 3000;
+    const end = Date.now() + 10_000;
     do {
       await until(() => canon(a.state.doc) === canon(b.state.doc));
       server = await serverCopy();

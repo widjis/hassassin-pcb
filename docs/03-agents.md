@@ -94,6 +94,7 @@ between blocks.
 | compact_blocks | write | Pack the blocks of a sheet into rows, closer together; connections stay |
 | tidy_wires | write | Move small parts so jogs straighten and re-route bends; connections are checked and never change |
 | set_schematic_grid | write | Pin grid (1.27 / 2.54 / 5.08 mm) and wire grid of the project |
+| add_bus / add_bus_entry | write | A bus named like `DATA[0..7]` or `I2C{SDA SCL}` (local, global or hierarchical), optionally labelling pins with its members in order; a bus entry beside a bus. Members connect by their net labels, across sheet pins in order, and by a global bus label everywhere, as in KiCad |
 | set_sheet_frame / add_note / add_group_box | write | Drawing frame with title block; free text notes; titled boxes around a block of parts |
 | update_pcb | write | Schematic → board sync |
 | move_part / route / refill_pours | write | Board editing |

@@ -193,6 +193,19 @@ export function sheetDrawing(doc: Doc, engine: StyleEngine, sheet: DocNode, opts
     if (a && b) line([a, b], 0.2, P.wire);
   }
 
+  // Buses (thick) and bus entries (thin, in the bus colour)
+  for (const n of items) {
+    if (n.type === 'bus') {
+      const a = vec(engine.get(n.uid, 'start')?.value);
+      const b = vec(engine.get(n.uid, 'end')?.value);
+      if (a && b) line([a, b], 0.5, P.block);
+    } else if (n.type === 'busEntry') {
+      const a = vec(engine.get(n.uid, 'position')?.value);
+      const sz = vec(engine.get(n.uid, 'size')?.value);
+      if (a && sz) line([a, { x: a.x + sz.x, y: a.y + sz.y }], 0.2, P.block);
+    }
+  }
+
   // Symbols
   for (const n of items) {
     if (n.type !== 'symbol') continue;

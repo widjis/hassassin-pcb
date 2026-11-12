@@ -272,6 +272,13 @@ export function importKicadSchematic(input: SchFiles, existing?: Doc): SchImport
         for (let i = 0; i + 1 < pts.length; i++) {
           addNode(doc, sheet.uid, { type: 'wire', rules: [rule('start', pts[i]!), rule('end', pts[i + 1]!)] });
         }
+      } else if (h === 'bus') {
+        const pts = (child(e, 'pts') ?? []).filter(isList).map((p) => at(p)).filter((p): p is Vec2 => !!p);
+        for (let i = 0; i + 1 < pts.length; i++) addNode(doc, sheet.uid, { type: 'bus', rules: [rule('start', pts[i]!), rule('end', pts[i + 1]!)] });
+      } else if (h === 'bus_entry') {
+        const p = at(child(e, 'at'));
+        const size = at(child(e, 'size'));
+        if (p && size) addNode(doc, sheet.uid, { type: 'busEntry', rules: [rule('position', p), rule('size', size)] });
       } else if (h === 'label' || h === 'global_label' || h === 'hierarchical_label') {
         const a = child(e, 'at');
         const p = at(a);

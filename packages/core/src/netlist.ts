@@ -14,6 +14,7 @@ import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { dist, distToSegment } from './geom.ts';
 import { allSheets, pinPoint, sheetItems, sheetPath } from './schematic.ts';
+import { busMembers, sheetBuses } from './bus.ts';
 
 export interface NetPin {
   ref: string;
@@ -76,6 +77,7 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
   const dsu = new DSU();
   const items: Item[] = [];
   const byNode = new Map<string, Item>();
+  const localNames = new Map<string, Map<string, number>>();
 
   for (const sheet of allSheets(doc)) {
     const local: Item[] = [];
@@ -118,6 +120,7 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
     }
     // Local and hierarchical labels with the same name on this sheet.
     const byName = new Map<string, number>();
+    localNames.set(sheet.uid, byName);
     for (const l of local) {
       const k = l.node.props.kind ?? 'local';
       if (l.kind !== 'label' || (k !== 'local' && k !== 'hier')) continue;
@@ -151,6 +154,42 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
     }
   }
 
+  // Buses (S15): a bus member is the net labelled with its name on that sheet. Members join where a
+  // bus meets a sheet pin (by position in the member lists) and everywhere a bus has a global label.
+  const virtual = new Map<string, Item>();
+  const member = (sheet: DocNode, name: string, global = false): number => {
+    const key = global ? `bus:global:${name}` : `bus:${sheet.uid}:${name}`;
+    let it = virtual.get(key);
+    if (!it) {
+      const node: DocNode = { uid: key, type: 'label', name, props: { kind: global ? 'global' : 'local' }, rules: [], parent: sheet.uid, children: [] };
+      it = { id: dsu.add(), node, sheet, kind: 'label', a: { x: NaN, y: NaN } };
+      virtual.set(key, it);
+      items.push(it);
+      const real = global ? globals.get(name) : localNames.get(sheet.uid)?.get(name);
+      if (real !== undefined) dsu.union(real, it.id);
+    }
+    return it.id;
+  };
+  const busesOf = new Map(allSheets(doc).map((sh) => [sh.uid, sheetBuses(doc, engine, sh)] as const));
+  for (const sheet of allSheets(doc)) {
+    const sb = busesOf.get(sheet.uid)!;
+    for (const b of sb.buses) if (b.global) for (const m of b.members) dsu.union(member(sheet, m), member(sheet, m, true));
+    for (const block of sheetItems(doc, sheet)) {
+      if (block.type !== 'block') continue;
+      const child = block.children.map((c) => doc.nodes.get(c)).find((c) => c?.type === 'sheet');
+      if (!child) continue;
+      for (const c of block.children) {
+        const pin = doc.nodes.get(c);
+        if (pin?.type !== 'sheetPin') continue;
+        const own = busMembers(pin.name);
+        if (!own) continue;
+        const p = vec(engine.get(pin.uid, 'position')?.value);
+        const outer = (p && sb.at(p)?.members.length ? sb.at(p)!.members : null) ?? own;
+        for (let i = 0; i < Math.min(outer.length, own.length); i++) dsu.union(member(sheet, outer[i]!), member(child, own[i]!));
+      }
+    }
+  }
+
   // Collect nets.
   const groups = new Map<number, Item[]>();
   for (const it of items) {
@@ -162,7 +201,10 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
   }
   const nets: SchNet[] = [];
   const usedNames = new Map<string, number>();
-  for (const g of groups.values()) {
+  for (const g0 of groups.values()) {
+    // A bus label names the bus, not a net: it takes no part in naming.
+    const g = g0.filter((i) => !(i.kind === 'label' && busMembers(i.node.name)));
+    if (!g.length) continue;
     const pins: NetPin[] = [];
     for (const it of g) {
       if (it.kind !== 'pin') continue;
@@ -218,7 +260,7 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
     const n = usedNames.get(name) ?? 0;
     usedNames.set(name, n + 1);
     if (n) name = `${name}_${n}`;
-    nets.push({ name, named, pins, items: g.filter((i) => i.kind !== 'pin').map((i) => i.node.uid) });
+    nets.push({ name, named, pins, items: g.filter((i) => i.kind !== 'pin' && !i.node.uid.startsWith('bus:')).map((i) => i.node.uid) });
   }
   nets.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   const byPin = new Map<string, string>();
