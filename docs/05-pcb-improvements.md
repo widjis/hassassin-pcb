@@ -160,7 +160,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
 
     On qfn-escape, routing only the signal nets gives 2 / 6, and all nets at 0.2 mm give 4 / 8: the shared
     clearance zone is the main blocker (P8b), the rest is pin escape (P8c, P8f).
-- [ ] **P8b. Per-net clearance (clearance field).**
+- [x] **P8b. Per-net clearance (clearance field).**
   - The obstacle grid stores, per layer and cell, the distance to the nearest copper and the nearest copper
     of a *different* net than that one (a two-label distance transform, computed once and updated when a
     route is added or removed), plus that copper's own clearance.
@@ -170,6 +170,13 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - Via legality uses the same field with the via radius. The existing neck-down on narrow pads stays.
   - Test: two signal nets of 0.15 mm leave a 0.4 mm QFN between pads even when a 0.5 mm power net is
     routed on the same board (fails on v0.0.3).
+  - *Done:* fixture `qfn-fine` (0.4 mm QFN-24, 0.15 mm signals and clearances, 0.5 mm supply): v0.0.3
+    4 / 8 → 8 / 8, 0 DRC errors. `qfn-escape` (0.5 mm QFN, default rules): 0 / 8 → 4 / 8; the other 4
+    route with a 0.05 mm grid, so what is left there is grid alignment at the pads (P8c). Pads narrower
+    than the trace now get a neck-down zone (the pad grown by half the width plus the clearance) that
+    the search checks at the neck width; segments touching it are emitted at that width. Run time on
+    `reversed-bus` went from 1.7 s to 2.4 s (the distance field is heavier than the old halo); P8d / P8g
+    look at speed again. The benchmark boards are still to be measured.
 - [ ] **P8c. Route per net, to any copper of the net.**
   - A net is routed as a set of connected copper groups (pads, traces, vias already on the board): the
     search starts from every cell of one group and ends on any cell of another, until the net is one group.
