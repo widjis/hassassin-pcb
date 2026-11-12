@@ -124,7 +124,7 @@ const store = {
   },
 };
 
-export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
+export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare: () => void): void {
   let items: Item[] = [];
   let tasks: Task[] = [];
   let chat: string | null = null;
@@ -379,7 +379,17 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
     if (seq !== renderSeq) return; // a newer render started while this one waited
     clear(root);
     if (!app.collab || !collab.session) {
-      root.append(h('div', { class: 'empty' }, 'The AI agent works on shared projects: it joins as a collaborator so its edits are live and undoable. Click Share in the top bar first.'));
+      root.append(
+        h(
+          'div',
+          { class: 'agent-intro' },
+          h('div', { class: 'agent-intro-title' }, 'AI agent'),
+          h('p', {}, 'Describe what to build or ask about the design. The agent works as a collaborator on a shared project, so every edit is live and undoable.'),
+          app.doc
+            ? h('button', { class: 'btn primary', onclick: onShare }, 'Share project to start')
+            : h('p', { class: 'dim' }, 'Open or create a project first (File menu).'),
+        ),
+      );
       return;
     }
     if (!status) {
@@ -580,6 +590,10 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement): void {
     void render().then(loadTranscripts);
   });
   app.on('drc', drawHints);
+  // The intro's button depends on whether a project is open.
+  app.on('doc', () => {
+    if (!app.collab) void render();
+  });
   listen();
   void render().then(loadTranscripts);
 }

@@ -4,6 +4,8 @@
  */
 const KEY = 'hassassin:layout';
 const DEFAULT = { left: 270, right: 320 };
+/** The inspector opens on its own when something is selected, so it never gets narrower than this. */
+const MIN_RIGHT = 240;
 
 let widths = { ...DEFAULT };
 let ws: HTMLElement | null = null;
@@ -22,13 +24,14 @@ function apply() {
 
 const clamp = (side: 'left' | 'right', w: number) => {
   const max = Math.max(320, window.innerWidth - (side === 'left' ? widths.right : widths.left) - 240);
-  return Math.round(Math.min(max, Math.max(side === 'left' ? 220 : 0, w)));
+  return Math.round(Math.min(max, Math.max(side === 'left' ? 220 : MIN_RIGHT, w)));
 };
 
 export function initResizers(workspace: HTMLElement): void {
   ws = workspace;
   try {
     widths = { ...DEFAULT, ...JSON.parse(localStorage.getItem(KEY) ?? '{}') };
+    if (widths.right > 0 && widths.right < MIN_RIGHT) widths.right = DEFAULT.right;
   } catch {
     /* ignore */
   }

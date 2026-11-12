@@ -50,7 +50,11 @@ function ruleAdder(onAdd: (decl: RuleDecl) => void): HTMLElement {
   );
 }
 
-export function mountInspector(app: App, root: HTMLElement): void {
+/**
+ * The inspector shows the selected object or ruleset. With nothing selected it hides
+ * (onShown(false)) and the board summary and shortcuts go to helpRoot instead.
+ */
+export function mountInspector(app: App, root: HTMLElement, helpRoot: HTMLElement, onShown: (shown: boolean) => void): void {
   let mode: 'computed' | 'specified' = 'computed';
 
   const unit = () => {
@@ -374,16 +378,27 @@ export function mountInspector(app: App, root: HTMLElement): void {
     return box;
   };
 
+  const renderHelp = () => {
+    clear(helpRoot);
+    helpRoot.append(renderNone());
+  };
+  (helpRoot as HTMLElement & { refresh?: () => void }).refresh = renderHelp;
+
+  let shown: boolean | null = null;
   const render = () => {
     clear(root);
     const i = app.inspected;
+    let box: HTMLElement | null = null;
     if (i.kind === 'node') {
       const n = app.node(i.uid);
-      root.append(n ? renderNode(n) : renderNone());
+      if (n) box = renderNode(n);
     } else if (i.kind === 'ruleset') {
       const rs = app.doc && [...app.doc.rulesets, ...app.doc.defaults].find((r) => r.id === i.id);
-      root.append(rs ? renderRuleset(rs) : renderNone());
-    } else root.append(renderNone());
+      if (rs) box = renderRuleset(rs);
+    }
+    if (box) root.append(box);
+    if (shown !== !!box) onShown((shown = !!box));
+    renderHelp();
   };
   app.on('doc', render);
   app.on('inspect', render);

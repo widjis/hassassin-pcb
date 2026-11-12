@@ -16,6 +16,7 @@ import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
 import { mountReview } from './ui/review.ts';
 import { mountTree } from './ui/tree.ts';
+import { mountRail } from './ui/rail.ts';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -25,8 +26,24 @@ const app = new App($<HTMLCanvasElement>('gl'), $<HTMLCanvasElement>('overlay'))
 mountLayers(app, $('layersPanel'));
 mountTree(app, $('treePanel'), $<HTMLInputElement>('treeFilter'));
 mountRules(app, $('rulesPanel'));
-mountInspector(app, $('inspector'));
+mountInspector(app, $('inspector'), $('helpPanel'), (shown) => {
+  document.querySelector('.workspace')!.classList.toggle('no-insp', !shown);
+  window.dispatchEvent(new Event('resize'));
+});
 mountProject(app, $('projectPanel'));
+// ---- tool rail (panels open as flyouts over the canvas) ----
+const rail = mountRail($('rail'), $('flyout'), [
+  { id: 'project', title: 'Project' },
+  { id: 'parts', title: 'Parts' },
+  { id: 'board', title: 'Board' },
+  { id: 'layers', title: 'Layers' },
+  { id: 'objects', title: 'Objects' },
+  { id: 'rules', title: 'Rules' },
+  { id: 'review', title: 'Review', badge: 'reviewBadge' },
+  { id: 'comments', title: 'Comments', badge: 'commentBadge' },
+  { id: 'history', title: 'History' },
+  { id: 'help', title: 'Board summary and shortcuts', bottom: true },
+]);
 const sch = new SchematicView(app, $<HTMLCanvasElement>('sch'));
 mountReview(app, $('reviewPanel'), $('reviewBadge'), (v) => {
   app.setSpace('schematic');
@@ -48,16 +65,22 @@ loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmWithAsmJsF
 
 initResizers(document.querySelector<HTMLElement>('.workspace')!);
 
-// ---- left tabs ----
-const tabs = $('leftTabs');
-const showTab = (name: string) => {
-  for (const b of tabs.querySelectorAll('button')) b.classList.toggle('active', b.dataset.tab === name);
-  for (const s of document.querySelectorAll<HTMLElement>('.tab-body')) s.classList.toggle('hidden', s.dataset.body !== name);
-  (document.querySelector<HTMLElement>(`.tab-body[data-body="${name}"]`) as (HTMLElement & { refresh?: () => void }) | null)?.refresh?.();
-};
-tabs.addEventListener('click', (e) => {
-  const t = (e.target as HTMLElement).closest('button')?.dataset.tab;
-  if (t) showTab(t);
+const showTab = (name: string) => rail.show(name);
+// ---- File menu ----
+const fileMenu = $('fileMenu');
+$('fileMenuBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  fileMenu.classList.toggle('hidden');
+});
+document.addEventListener('click', (e) => {
+  if (!(e.target as HTMLElement).closest('#fileMenu')) fileMenu.classList.add('hidden');
+});
+fileMenu.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).closest('button')) fileMenu.classList.add('hidden');
+});
+$('fileInput').addEventListener('change', () => fileMenu.classList.add('hidden'));
+$('flyout').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') rail.close();
 });
 app.on('inspect', () => {
   if (app.inspected.kind === 'ruleset') showTab('rules');
@@ -176,22 +199,25 @@ tools.addEventListener('click', (e) => {
 });
 // ---- layout / schematic spaces ----
 const spaces = $('spaces');
+const is3d = () => !$('view3d').classList.contains('hidden');
 spaces.addEventListener('click', (e) => {
-  const s = (e.target as HTMLElement).closest('button')?.dataset.space as Space | undefined;
-  if (s) app.setSpace(s);
+  const s = (e.target as HTMLElement).closest('button')?.dataset.space as Space | '3d' | undefined;
+  if (s === '3d') return void toggle3d();
+  if (s) {
+    if (is3d()) void toggle3d();
+    app.setSpace(s);
+  }
 });
 const sheetSelect = $<HTMLSelectElement>('sheetSelect');
 const syncSpace = () => {
   const schMode = app.space === 'schematic';
-  for (const b of spaces.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.space === app.space);
-  $('schTools').classList.toggle('hidden', !schMode);
+  for (const b of spaces.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', is3d() ? b.dataset.space === '3d' : b.dataset.space === app.space);
   $('sch').classList.toggle('hidden', !schMode);
   app.glCanvas.classList.toggle('hidden', schMode);
   app.overlay.classList.toggle('hidden', schMode);
   wrap.classList.toggle('sch-mode', schMode);
-  tools.classList.toggle('hidden', schMode);
-  $('layerBtn').classList.toggle('hidden', schMode);
-  $('flipBtn').classList.toggle('hidden', schMode);
+  $('layoutTools').classList.toggle('hidden', schMode || is3d());
+  $('schTools').classList.toggle('hidden', !schMode || is3d());
   // sheet list
   sheetSelect.replaceChildren(
     ...sch.sheets().map((s) => {
@@ -497,7 +523,6 @@ $('newBtn').addEventListener('click', () => {
   app.newProject();
   loaded();
 });
-showTab('layers');
 
 // ---- collaboration ----
 const collab = new Collab(app);
@@ -523,7 +548,7 @@ const focusComment = (c: DocNode) => {
 };
 mountComments(app, collab, $('commentsPanel'), focusComment);
 mountHistory(app, collab, $('historyPanel'));
-mountAgent(app, collab, $('agentPanel'));
+mountAgent(app, collab, $('agentPanel'), () => openShareDialog(app, collab));
 mountParts(app, $('partsPanel'), {
   place: (part, extra) => {
     if (!app.doc) return app.say('Open or create a project first.');
@@ -586,7 +611,7 @@ let rebuild3d = 0;
 const host3d = $('view3d');
 const toggle3d = async () => {
   const on = host3d.classList.toggle('hidden') === false;
-  $('view3dBtn').classList.toggle('on', on);
+  syncSpace();
   if (!on) return;
   if (!board3d) {
     const { Board3D } = await import('./render/view3d.ts');
@@ -594,7 +619,6 @@ const toggle3d = async () => {
   }
   board3d.build(app);
 };
-$('view3dBtn').addEventListener('click', () => void toggle3d());
 app.on('change', () => {
   if (!board3d || host3d.classList.contains('hidden')) return;
   clearTimeout(rebuild3d);

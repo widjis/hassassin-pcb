@@ -16,57 +16,59 @@
       </div>
       <div class="collab-bar" id="collabBar"></div>
       <div class="actions">
-        <div class="seg tools" id="tools">
-          <button data-mode="select" class="on" title="Select and move (Esc)">Select</button>
-          <button data-mode="route" title="Route traces (X)">Route</button>
-        </div>
-        <button id="layerBtn" title="Active copper layer (L)">F.Cu</button>
         <button id="undoBtn" title="Undo (Cmd/Ctrl+Z)">↶</button>
         <button id="redoBtn" title="Redo (Shift+Cmd/Ctrl+Z)">↷</button>
-        <button id="flipBtn" title="View from the other side (F)">Top</button>
-        <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
-        <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
-        <button id="view3dBtn" title="3D view of the board (3)">3D</button>
         <button id="saveBtn" title="Save as .hpcb (Cmd/Ctrl+S)">Save</button>
-        <button id="fabBtn" title="Download Gerbers, drill, BOM and placement as a ZIP">Export fab</button>
-        <button id="newBtn" title="Start an empty project">New</button>
-        <label class="btn primary" title="Open a board, schematics (select several files) or a .hpcb project">Open<input id="fileInput" type="file" accept=".kicad_pcb,.kicad_sch,.hpcb" multiple hidden /></label>
+        <div class="menu-wrap">
+          <button id="fileMenuBtn" title="New, open and export">File ▾</button>
+          <div class="menu hidden" id="fileMenu">
+            <button id="newBtn" title="Start an empty project">New project</button>
+            <label class="menu-item" title="Open a board, schematics (select several files) or a .hpcb project">Open…<input id="fileInput" type="file" accept=".kicad_pcb,.kicad_sch,.hpcb" multiple hidden /></label>
+            <button id="fabBtn" title="Download Gerbers, drill, BOM and placement as a ZIP">Export fab files</button>
+          </div>
+        </div>
       </div>
     </header>
     <main class="workspace">
       <aside class="sidebar left">
-        <nav class="tabs" id="leftTabs">
-          <button data-tab="project">Project</button>
-          <button data-tab="agent">Agent</button>
-          <button data-tab="parts">Parts</button>
-          <button data-tab="board">Board</button>
-          <button data-tab="layers" class="active">Layers</button>
-          <button data-tab="objects">Objects</button>
-          <button data-tab="rules">Rules</button>
-          <button data-tab="review">Review <span id="reviewBadge" class="badge"></span></button>
-          <button data-tab="comments">Comments <span id="commentBadge" class="badge"></span></button>
-          <button data-tab="history">History</button>
-        </nav>
-        <section class="tab-body hidden" data-body="project" id="projectPanel"></section>
-        <section class="tab-body hidden" data-body="parts" id="partsPanel"></section>
-        <section class="tab-body hidden" data-body="agent" id="agentPanel"></section>
-        <section class="tab-body" data-body="layers" id="layersPanel"></section>
-        <section class="tab-body hidden" data-body="objects">
-          <input id="treeFilter" class="filter" placeholder="Filter by name" spellcheck="false" />
-          <div id="treePanel" class="tree"></div>
-        </section>
-        <section class="tab-body hidden" data-body="rules" id="rulesPanel"></section>
-        <section class="tab-body hidden" data-body="review" id="reviewPanel"></section>
-        <section class="tab-body hidden" data-body="comments" id="commentsPanel"></section>
-        <section class="tab-body hidden" data-body="history" id="historyPanel"></section>
-        <section class="tab-body hidden" data-body="board" id="boardPanel"></section>
+        <section class="tab-body" id="agentPanel"></section>
       </aside>
       <div class="canvas-wrap" id="canvasWrap">
         <div id="view3d" class="view3d hidden"></div>
-        <div class="spacebar">
+        <div class="viewbar">
           <div class="seg" id="spaces">
-            <button data-space="schematic">Schematic</button>
-            <button data-space="layout" class="on">Layout</button>
+            <button data-space="schematic" title="Schematic">Schematic</button>
+            <button data-space="layout" class="on" title="Board layout">Layout</button>
+            <button data-space="3d" id="view3dBtn" title="3D view of the board (3)">3D</button>
+          </div>
+        </div>
+        <nav class="rail" id="rail"></nav>
+        <div class="flyout hidden" id="flyout">
+          <div class="flyout-head"><span id="flyoutTitle"></span><button id="flyoutClose" title="Close (Esc)">×</button></div>
+          <section class="tab-body hidden" data-body="project" id="projectPanel"></section>
+          <section class="tab-body hidden" data-body="parts" id="partsPanel"></section>
+          <section class="tab-body hidden" data-body="board" id="boardPanel"></section>
+          <section class="tab-body hidden" data-body="layers" id="layersPanel"></section>
+          <section class="tab-body hidden" data-body="objects">
+            <input id="treeFilter" class="filter" placeholder="Filter by name" spellcheck="false" />
+            <div id="treePanel" class="tree"></div>
+          </section>
+          <section class="tab-body hidden" data-body="rules" id="rulesPanel"></section>
+          <section class="tab-body hidden" data-body="review" id="reviewPanel"></section>
+          <section class="tab-body hidden" data-body="comments" id="commentsPanel"></section>
+          <section class="tab-body hidden" data-body="history" id="historyPanel"></section>
+          <section class="tab-body hidden" data-body="help" id="helpPanel"></section>
+        </div>
+        <div class="spacebar">
+          <div class="layout-tools" id="layoutTools">
+            <div class="seg tools" id="tools">
+              <button data-mode="select" class="on" title="Select and move (Esc)">Select</button>
+              <button data-mode="route" title="Route traces (X)">Route</button>
+            </div>
+            <button id="layerBtn" title="Active copper layer (L)">F.Cu</button>
+            <button id="flipBtn" title="View from the other side (F)">Top</button>
+            <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
+            <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
           </div>
           <div class="sch-tools" id="schTools">
             <select id="sheetSelect" title="Sheet"></select>
@@ -110,7 +112,7 @@
         <canvas id="overlay"></canvas>
         <canvas id="sch" class="hidden"></canvas>
         <div class="drop-hint" id="dropHint">
-          <div>Drop a <b>.kicad_pcb</b> (with its <b>.kicad_sch</b> files) or a <b>.hpcb</b> here — or start with <b>New</b>.</div>
+          <div>Drop a <b>.kicad_pcb</b> (with its <b>.kicad_sch</b> files) or a <b>.hpcb</b> here — or start with <b>File → New project</b>.</div>
           <button id="restoreBtn" class="hidden"></button>
         </div>
         <div class="statusbar" id="status"></div>
