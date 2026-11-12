@@ -1486,15 +1486,53 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'get_part',
-    description: 'Details of a library part: pins per unit, default footprint, properties (MPN, datasheet) and supplier offers.',
+    description: 'Details of a part: pins per unit, default footprint, properties (MPN, datasheet) and supplier offers. id: a library id from search_parts, or the reference of a placed component (U1, R3) for the part behind it.',
     mutates: false,
-    input: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    input: { type: 'object', properties: { id: { type: 'string', description: 'Library id (kicad:Lib:Name, generic:resistor …) or a component reference such as U1' } }, required: ['id'] },
     run: async (p, a, ctx) => {
-      const part = await libOf(ctx).getPart(p.doc, str(a.id, 'id'));
-      if (!part) throw new ToolError(`No part "${a.id}". Use search_parts.`);
+      const id = str(a.id, 'id').trim();
+      const lib = libOf(ctx);
+      const pinText = (x: { number: string; name?: string; type: string }) => `${x.number}${x.name && x.name !== '~' ? ` ${x.name}` : ''} (${x.type})`;
+      let part = await lib.getPart(p.doc, id);
+      let placed: Record<string, unknown> | undefined;
+      if (!part) {
+        // A component reference: answer with the library part behind it, or with what the placed symbol holds.
+        const syms = [...p.doc.nodes.values()].filter((n) => n.type === 'symbol' && String(n.props.ref ?? '').toUpperCase() === id.toUpperCase());
+        const elem = [...p.doc.nodes.values()].find((n) => n.type === 'element' && (n.props.ref === id || n.name === id));
+        if (!syms.length && !elem) throw new ToolError(`No part or component "${id}". Use search_parts for library parts, or a component reference such as U1.`);
+        const sp = syms[0]?.props ?? {};
+        const ref = String(sp.ref ?? elem?.props.ref ?? elem?.name ?? id);
+        const libId = typeof sp.libId === 'string' ? sp.libId : '';
+        for (const c of [sp.partId, libId && `kicad:${libId}`, libId]) {
+          if (typeof c === 'string' && c && !part) part = await lib.getPart(p.doc, c);
+        }
+        const footprint = String(sp.Footprint ?? elem?.props.Footprint ?? elem?.props.footprint ?? '') || undefined;
+        const value = String(sp.Value ?? elem?.props.Value ?? elem?.props.value ?? '') || undefined;
+        placed = { ref, ...(value ? { value } : {}), ...(footprint ? { footprint } : {}), ...(libId ? { libId } : {}) };
+        if (!part) {
+          const skip = new Set(['ref', 'Value', 'Footprint', 'libId', 'partId', 'unit', 'element']);
+          const properties: Record<string, string> = {};
+          for (const [k, v] of Object.entries(sp)) if (!skip.has(k) && (typeof v === 'string' || typeof v === 'number') && String(v) !== '') properties[k] = String(v);
+          const units = [...syms]
+            .sort((x, y) => Number(x.props.unit ?? 1) - Number(y.props.unit ?? 1))
+            .map((s) => ({
+              unit: Number(s.props.unit ?? 1),
+              pins: s.children
+                .map((c) => p.doc.nodes.get(c))
+                .filter((n): n is DocNode => n?.type === 'pin')
+                .map((n) => pinText({ number: String(n.props.number ?? n.name), name: String(n.props.pinName ?? ''), type: String(n.props.pinType ?? 'unspecified') })),
+            }));
+          return {
+            placed,
+            note: `${ref} has no library part in the available libraries${libId ? ` (its symbol is ${libId})` : ''}; these are the pins and properties of the placed symbol.`,
+            name: libId.split(':').pop() || ref, value, footprint, properties, units,
+          };
+        }
+      }
       return {
+        ...(placed ? { placed } : {}),
         id: part.id, name: part.name, description: part.description, prefix: part.prefix, value: part.value, footprint: part.footprint, footprints: part.footprints, properties: part.properties, offers: part.offers,
-        units: part.units.map((u, i) => ({ unit: i + 1, pins: u.pins.map((x) => `${x.number}${x.name && x.name !== '~' ? ` ${x.name}` : ''} (${x.type})`) })),
+        units: part.units.map((u, i) => ({ unit: i + 1, pins: u.pins.map(pinText) })),
       };
     },
   },
