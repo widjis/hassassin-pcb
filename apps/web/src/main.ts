@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
@@ -232,12 +232,54 @@ partSelect.addEventListener('change', () => {
   if (partSelect.value) addPart(partSelect.value as PartKind);
   partSelect.value = '';
 });
+let lastLabelKind: 'local' | 'global' | 'hier' = 'local';
 const placeLabel = () => {
-  const name = prompt('Net label name (prefix with * for a global label):');
-  if (!name?.trim()) return;
-  const global = name.trim().startsWith('*');
-  sch.addLabel(sch.cursorPoint, global ? name.trim().slice(1) : name.trim(), global ? 'global' : 'local');
+  const at = sch.cursorPoint;
+  const sheetUid = sch.sheet()?.uid;
+  const sub = sch.isSubSheet();
+  const dlg = document.createElement('dialog');
+  dlg.className = 'annotate-dialog frame-dialog';
+  const kind = lastLabelKind === 'hier' && !sub ? 'local' : lastLabelKind;
+  dlg.innerHTML = `
+    <form method="dialog">
+      <h3>Net label</h3>
+      <label>Name <input name="name" required autocomplete="off"></label>
+      <fieldset><legend>Kind</legend>
+        <label><input type="radio" name="kind" value="local"> Local: same name on this sheet connects</label>
+        <label><input type="radio" name="kind" value="global"> Global: same name on every sheet connects</label>
+        <label><input type="radio" name="kind" value="hier" ${sub ? '' : 'disabled'}> Hierarchical: a pin on this sub-sheet's block${sub ? '' : ' (only inside a sub-sheet)'}</label>
+      </fieldset>
+      <label>Direction <select name="shape">${SHEET_PIN_SHAPES.map((k) => `<option value="${k}" ${k === 'passive' ? 'selected' : ''}>${k.replace('_', '-')}</option>`).join('')}</select></label>
+      <div class="row"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Place</button></div>
+    </form>`;
+  const form = dlg.querySelector('form')!;
+  form.querySelector<HTMLInputElement>(`input[value=${kind}]`)!.checked = true;
+  const shapeRow = form.querySelector<HTMLSelectElement>('select[name=shape]')!.parentElement!;
+  const syncShape = () => (shapeRow.style.display = new FormData(form).get('kind') === 'hier' ? '' : 'none');
+  form.addEventListener('change', syncShape);
+  syncShape();
+  document.body.append(dlg);
+  dlg.addEventListener('close', () => {
+    const data = new FormData(form);
+    dlg.remove();
+    if (dlg.returnValue !== 'ok') return;
+    let name = String(data.get('name') ?? '').trim();
+    let k = String(data.get('kind')) as 'local' | 'global' | 'hier';
+    // Old habit: "*NAME" still means a global label.
+    if (name.startsWith('*')) ((name = name.slice(1).trim()), (k = 'global'));
+    if (!name) return;
+    lastLabelKind = k;
+    sch.addLabel(at, name, k, String(data.get('shape')) as SheetPinShape, sheetUid);
+    if (k === 'hier') app.say(`Hierarchical label ${name}: the block on the parent sheet now has a pin ${name}. Press U to go up and wire it.`);
+  });
+  dlg.showModal();
 };
+$('subSheetBtn').addEventListener('click', () => {
+  const name = prompt('Sub-sheet name (e.g. Power, MCU, Sensors):');
+  if (!name?.trim()) return;
+  const err = sch.addSubSheet(name);
+  app.say(err ?? `Sub-sheet ${name.trim()} added. Double-click it to open; hierarchical labels inside become pins on the block.`);
+});
 $('labelBtn').addEventListener('click', placeLabel);
 $('syncBtn').addEventListener('click', () => void app.syncToPcb());
 const openLibrary = () => {

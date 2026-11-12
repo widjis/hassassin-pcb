@@ -14,6 +14,10 @@ import {
   type WiresBefore,
   transformSelectionOps,
   sheetFrame,
+  addHierLabelOp,
+  addSubSheetOps,
+  blockOfSheet,
+  type SheetPinShape,
   titleBlockGraphics,
   noteBox,
   groupBoxRect,
@@ -325,12 +329,45 @@ export class SchematicView {
     }
   }
 
-  addLabel(at: Vec2, name: string, kind: 'local' | 'global' = 'local'): void {
+  addLabel(at: Vec2, name: string, kind: 'local' | 'global' | 'hier' = 'local', shape: SheetPinShape = 'passive', sheetUid?: string): void {
+    const doc = this.app.doc;
+    // The sheet the label was asked for (a dialog may close after the user moved to another sheet).
+    const s = sheetUid ? doc?.nodes.get(sheetUid) : this.sheet();
+    const e = this.app.engine;
+    if (!s || !doc || !e || !name.trim()) return;
+    const op: Op =
+      kind === 'hier'
+        ? addHierLabelOp(s, name.trim(), at, shape).op
+        : { op: 'add', parent: s.uid, index: s.children.length, tree: { nodes: [{ uid: newUid('lbl'), type: 'label', name: name.trim(), props: { kind }, rules: [{ name: 'position', value: at }, { name: 'rotation', value: 0 }], parent: s.uid, children: [] }] } };
+    // withJunctionsOps also adds the matching sheet pin on the block for a hierarchical label.
+    this.app.apply(kind === 'hier' ? 'Add hierarchical label' : 'Add label', withJunctionsOps(doc, e, [op]));
+  }
+
+  /** True when the open sheet is a sub-sheet (inside a block). */
+  isSubSheet(): boolean {
     const s = this.sheet();
-    if (!s || !name.trim()) return;
-    this.app.apply('Add label', [
-      { op: 'add', parent: s.uid, index: s.children.length, tree: { nodes: [{ uid: newUid('lbl'), type: 'label', name: name.trim(), props: { kind }, rules: [{ name: 'position', value: at }, { name: 'rotation', value: 0 }], parent: s.uid, children: [] }] } },
-    ]);
+    return !!(s && this.app.doc && blockOfSheet(this.app.doc, s));
+  }
+
+  /** Add a sub-sheet block with its top-left corner at the cursor; returns an error message or null. */
+  addSubSheet(name: string): string | null {
+    const s = this.sheet();
+    const doc = this.app.doc;
+    if (!s || !doc) return 'No sheet open';
+    try {
+      // At the cursor, unless that lands on the drawing: then to the right of it.
+      let at = this.cursorPoint;
+      const e = this.app.engine;
+      const content = e ? sheetContentBox(doc, e, s) : null;
+      const size = { x: 30.48, y: 20.32 };
+      if (content && at.x < content.maxX + 2.54 && at.x + size.x > content.minX - 2.54 && at.y < content.maxY + 2.54 && at.y + size.y > content.minY - 2.54) at = { x: content.maxX + 12.7, y: content.minY };
+      const r = addSubSheetOps(doc, s, name, at, size);
+      this.app.apply('Add sub-sheet', r.ops);
+      this.app.select([r.block]);
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
   }
 
   /** Path the wire tool would draw from `a` to `b`: clean if possible, else the plain L (flagged). */
@@ -666,6 +703,8 @@ export class SchematicView {
     for (const uid of this.app.selection) {
       const n = this.app.node(uid);
       if (n && ['symbol', 'wire', 'label', 'junction', 'noconnect', 'note', 'groupBox'].includes(n.type) && !(n.type === 'label' && this.app.node(n.parent ?? '')?.type === 'symbol')) ops.push({ op: 'remove', uid });
+      // A sub-sheet block goes with its sheet and everything on it (undo brings it back).
+      else if (n?.type === 'block' && confirm(`Delete sub-sheet ${n.name} and everything on it? (Undo brings it back.)`)) ops.push({ op: 'remove', uid });
     }
     if (ops.length) {
       this.app.apply(`Delete ${ops.length} item${ops.length > 1 ? 's' : ''}`, this.withJunctions(ops));
@@ -746,6 +785,13 @@ export class SchematicView {
               if (v) rules[k] = { ...v };
             }
             if (Object.keys(rules).length) items.push({ uid, rules });
+            // A sub-sheet block takes its sheet pins along (wires on them follow as for labels).
+            if (n.type === 'block')
+              for (const c of n.children) {
+                const sp = this.app.node(c);
+                const v = sp?.type === 'sheetPin' ? vec(eng.get(c, 'position')?.value) : undefined;
+                if (v) items.push({ uid: c, rules: { position: { ...v } } });
+              }
           }
         } else if (!hit) kind = 'box';
       }

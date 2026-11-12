@@ -96,6 +96,7 @@ How to work:
   - Connect parts with wires (connect_pins). Arrange each block so connected pins are close and aligned, then wire them. Do not build a schematic out of labels alone.
   - Every ground and supply connection uses a power symbol (add_power with GND, +3V3, +5V, +20V, …), never a plain label. Add a PWR_FLAG (add_power flag=true) on rails that are fed from a connector or other passive pin.
   - Use net labels only for signals that run between blocks or far across the sheet (for example SDA, SCL, LED_DATA), and give them clear names.
+  - For a large design, split blocks into sub-sheets: add_sheet, place parts with sheet="/Name/", add_label kind=hier for each signal that leaves the sub-sheet, then wire the block pins ("Name:SIGNAL") on the parent sheet with connect_pins.
   - Keep blocks apart (power, MCU, LED driver, sensors, connectors) and leave room between them.
   - To tidy a block after wiring, move_symbol keeps every connection; there is no need to rewire.
   - Parts snap so their pins sit on the 2.54 mm grid. Place a part so the pin it connects to is on the same row (or column) as the other pin, then the wire is straight; run tidy_wires after wiring a block to straighten what is left.

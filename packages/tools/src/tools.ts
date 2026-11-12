@@ -4,6 +4,12 @@
  * project is live, shared with collaborators).
  */
 import {
+  SHEET_PIN_SHAPES,
+  type SheetPinShape,
+  addHierLabelOp,
+  addSubSheetOps,
+  blockOfSheet,
+  sheetOfBlock,
   schematicPdf,
   exportSheets,
   schematicSvgs,
@@ -292,7 +298,28 @@ function one(p: Project, target: string, type?: DocNode['type']): DocNode {
   return hits[0]!;
 }
 
+/** A sheet pin written "Block:PIN" (block name or sub-sheet path, then the pin name). */
+function sheetPinOf(p: Project, ref: string): { pin: DocNode; at: Vec2; sheet: DocNode } | null {
+  const m = /^(.+):([^:]+)$/.exec(ref.trim());
+  if (!m) return null;
+  const want = m[1]!.replace(/^\/|\/$/g, '');
+  const blocks = [...p.doc.nodes.values()].filter((n) => n.type === 'block' && (n.name === want || sheetPath(p.doc, sheetOfBlock(p.doc, n) ?? n).replace(/^\/|\/$/g, '') === want));
+  if (!blocks.length) return null;
+  const block = blocks[0]!;
+  const pin = block.children.map((c) => p.doc.nodes.get(c)).find((n) => n?.type === 'sheetPin' && n.name === m[2]);
+  if (!pin) {
+    const names = block.children.map((c) => p.doc.nodes.get(c)).filter((n) => n?.type === 'sheetPin').map((n) => n!.name);
+    throw new ToolError(`Block ${block.name} has no sheet pin "${m[2]}"${names.length ? ` (it has ${names.join(', ')})` : ''}. Sheet pins appear when you add hierarchical labels inside the sub-sheet (add_label kind=hier).`);
+  }
+  const at = vec(p.engine.get(pin.uid, 'position')?.value);
+  const sheet = block.parent ? p.doc.nodes.get(block.parent) : undefined;
+  if (!at || sheet?.type !== 'sheet') throw new ToolError(`Sheet pin ${ref} has no position`);
+  return { pin, at, sheet };
+}
+
 function pinOf(p: Project, ref: string): { pin: DocNode; at: Vec2; sheet: DocNode } {
+  const sp = sheetPinOf(p, ref);
+  if (sp) return sp;
   const pin = one(p, ref, 'pin');
   const at = pinPoint(p.doc, p.engine, pin);
   const sheet = sheetOf(p.doc, pin);
@@ -639,13 +666,13 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'connect_pins',
-    description: 'Draw a schematic wire between two pins on the same sheet, e.g. from "R1.2" to "D1.2". This is the normal way to connect parts: wires make the schematic easy to read and trace. The wire is routed at right angles around part bodies and never touches pins or wires of other nets (as few bends as practical); if no clean path exists the call fails and suggests labels. Place parts so their connected pins are close and aligned. Use add_label only for long-distance or cross-sheet signals, and add_power for GND/supply rails.',
+    description: 'Draw a schematic wire between two pins on the same sheet, e.g. from "R1.2" to "D1.2" (a sub-sheet block pin is written "Block:NAME"). This is the normal way to connect parts: wires make the schematic easy to read and trace. The wire is routed at right angles around part bodies and never touches pins or wires of other nets (as few bends as practical); if no clean path exists the call fails and suggests labels. Place parts so their connected pins are close and aligned. Use add_label only for long-distance or cross-sheet signals, and add_power for GND/supply rails.',
     mutates: true,
     input: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' } }, required: ['from', 'to'] },
     run: (p, a) => {
       const A = pinOf(p, str(a.from, 'from'));
       const B = pinOf(p, str(a.to, 'to'));
-      if (A.sheet.uid !== B.sheet.uid) throw new ToolError('Pins are on different sheets; use add_label with the same net name on both.');
+      if (A.sheet.uid !== B.sheet.uid) throw new ToolError('Pins are on different sheets. Inside a sub-sheet use add_label kind=hier, then wire the block pin ("Block:NAME") on the parent sheet; or use global labels.');
       const path = routeConnection(p.doc, p.engine, A.sheet.uid, A.at, B.at);
       if (!path)
         throw new ToolError(
@@ -710,14 +737,54 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'add_label',
-    description: 'Attach a net label to a pin (e.g. pin "U1.3", name "SDA"). Pins with the same local label on one sheet are connected; global=true connects across sheets. Use labels only for signals that travel far or between sheets/blocks; wire nearby pins with connect_pins, and use add_power (not labels) for GND and supply rails.',
+    description: 'Attach a net label to a pin (e.g. pin "U1.3", name "SDA"). kind: local (default; same name on one sheet connects), global (connects across all sheets), or hier (hierarchical: inside a sub-sheet; a sheet pin of the same name appears on the sub-sheet block, and you wire that pin on the parent sheet with connect_pins "Block:NAME"). shape (hier only): input, output, bidirectional, tri_state or passive (default). Use labels only for signals that travel far or between sheets/blocks; wire nearby pins with connect_pins, and use add_power (not labels) for GND and supply rails.',
     mutates: true,
-    input: { type: 'object', properties: { pin: { type: 'string' }, name: { type: 'string' }, global: { type: 'boolean' } }, required: ['pin', 'name'] },
+    input: {
+      type: 'object',
+      properties: {
+        pin: { type: 'string' },
+        name: { type: 'string' },
+        kind: { type: 'string', enum: ['local', 'global', 'hier'] },
+        shape: { type: 'string', enum: [...SHEET_PIN_SHAPES] },
+        global: { type: 'boolean', description: 'Same as kind=global' },
+      },
+      required: ['pin', 'name'],
+    },
     run: (p, a) => {
       const P = pinOf(p, str(a.pin, 'pin'));
       const name = str(a.name, 'name');
-      apply(p, 'Add label', [{ op: 'add', parent: P.sheet.uid, index: P.sheet.children.length, tree: { nodes: [{ uid: newUid('lbl'), type: 'label', name, props: { kind: a.global ? 'global' : 'local' }, rules: [{ name: 'position', value: P.at }, { name: 'rotation', value: 0 }], parent: P.sheet.uid, children: [] }] } }]);
+      const kind = a.kind === undefined ? (a.global ? 'global' : 'local') : String(a.kind);
+      if (!['local', 'global', 'hier'].includes(kind)) throw new ToolError('kind must be local, global or hier');
+      if (kind === 'hier') {
+        const block = blockOfSheet(p.doc, P.sheet);
+        if (!block) throw new ToolError(`Pin ${a.pin} is on a top-level sheet; hierarchical labels belong inside a sub-sheet (add_sheet). Use kind=global to connect across top-level sheets.`);
+        const shape = a.shape === undefined ? 'passive' : String(a.shape);
+        if (!(SHEET_PIN_SHAPES as readonly string[]).includes(shape)) throw new ToolError(`shape must be one of ${SHEET_PIN_SHAPES.join(', ')}`);
+        apply(p, 'Add hierarchical label', [addHierLabelOp(P.sheet, name, P.at, shape as SheetPinShape).op]);
+        const sp = block.children.map((c) => p.doc.nodes.get(c)).find((n) => n?.type === 'sheetPin' && n.name === name);
+        const at = sp ? vec(p.engine.get(sp.uid, 'position')?.value) : undefined;
+        return { pin: a.pin, net: extractNetlist(p.doc, p.engine).byPin.get(String(a.pin)), sheetPin: `${block.name}:${name}`, ...(at ? { sheetPinAt: at } : {}) };
+      }
+      apply(p, 'Add label', [{ op: 'add', parent: P.sheet.uid, index: P.sheet.children.length, tree: { nodes: [{ uid: newUid('lbl'), type: 'label', name, props: { kind }, rules: [{ name: 'position', value: P.at }, { name: 'rotation', value: 0 }], parent: P.sheet.uid, children: [] }] } }]);
       return { pin: a.pin, net: extractNetlist(p.doc, p.engine).byPin.get(String(a.pin)) };
+    },
+  },
+  {
+    name: 'add_sheet',
+    description: 'Add a hierarchical sub-sheet: a block on a sheet (top-left x, y in mm; default size 30 x 20 mm, it grows with its pins) with a new empty sheet inside, reached as sheet "/Name/". Place parts there with sheet="Name", connect its signals to the parent with add_label kind=hier inside, then wire the block pins "Name:SIGNAL" on the parent sheet with connect_pins. Use sub-sheets to split a large design into blocks (power, MCU, sensors…).',
+    mutates: true,
+    input: { type: 'object', properties: { name: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' }, sheet: { type: 'string', description: 'Parent sheet (default: root)' } }, required: ['name', 'x', 'y'] },
+    run: (p, a) => {
+      const parent = sheetByName(p, a.sheet);
+      let r;
+      try {
+        r = addSubSheetOps(p.doc, parent, str(a.name, 'name'), { x: num(a.x, 'x'), y: num(a.y, 'y') }, { x: optNum(a.width, 'width') ?? 30.48, y: optNum(a.height, 'height') ?? 20.32 });
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      apply(p, 'Add sub-sheet', r.ops);
+      const sheet = p.doc.nodes.get(r.sheet)!;
+      return { sheet: sheetPath(p.doc, sheet), block: r.block, parent: sheetPath(p.doc, parent) };
     },
   },
   {

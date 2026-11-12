@@ -6,6 +6,7 @@
  *   - power-input pins on a net with no power source (power output, power flag),
  *   - wire ends touching nothing,
  *   - labels not attached to anything,
+ *   - hierarchical labels without a sheet pin of the same name, and sheet pins without a label,
  *   - duplicate reference designators.
  */
 import type { Doc, DocNode, Vec2 } from './model.ts';
@@ -15,7 +16,7 @@ import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
 import { allSheets, pinPoint, sheetItems, symbolFrame, symToSheet } from './schematic.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -28,6 +29,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   wireOverPin: 'Wire runs over a pin',
   danglingPower: 'Power symbol not connected',
   wireThroughPart: 'Wire runs through a part',
+  hierMismatch: 'Sheet pin and hierarchical label do not match',
 };
 
 export interface ErcViolation {
@@ -153,6 +155,26 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
       if (!p) continue;
       const touches = wires.some((w) => distToSegment(p, w.a, w.b) < EPS) || anchors.some((a) => a.uid !== n.uid && dist(p, a.p) < EPS);
       if (!touches) out.push({ id: `dl:${n.uid}`, kind: 'danglingLabel', severity: 'warning', message: `Label ${n.name} is not attached to a wire or pin`, sheet: sheet.uid, at: p, uids: [n.uid] });
+    }
+  }
+
+  // Hierarchy: each hierarchical label needs a sheet pin of the same name on the block that holds
+  // its sheet, and each sheet pin a hierarchical label inside.
+  for (const sheet of allSheets(doc)) {
+    const block = sheet.parent ? doc.nodes.get(sheet.parent) : undefined;
+    const pins = block?.type === 'block' ? block.children.map((c) => doc.nodes.get(c)).filter((n): n is DocNode => n?.type === 'sheetPin') : [];
+    const labels = sheetItems(doc, sheet).filter((n) => n.type === 'label' && n.props.kind === 'hier' && doc.nodes.get(n.parent ?? '')?.type !== 'symbol');
+    for (const l of labels) {
+      if (pins.some((p) => p.name === l.name)) continue;
+      const at = vec(engine.get(l.uid, 'position')?.value) ?? { x: 0, y: 0 };
+      const message = block?.type === 'block' ? `Hierarchical label ${l.name} has no sheet pin on block ${block.name}` : `Hierarchical label ${l.name} is on a top-level sheet, so it connects to nothing; use a global label or a sub-sheet`;
+      out.push({ id: `hl:${l.uid}`, kind: 'hierMismatch', severity: 'warning', message, sheet: sheet.uid, at, uids: [l.uid] });
+    }
+    if (block?.type !== 'block' || !block.parent) continue;
+    for (const p of pins) {
+      if (labels.some((l) => l.name === p.name)) continue;
+      const at = vec(engine.get(p.uid, 'position')?.value) ?? { x: 0, y: 0 };
+      out.push({ id: `sp:${p.uid}`, kind: 'hierMismatch', severity: 'warning', message: `Sheet pin ${p.name} of block ${block.name} has no hierarchical label inside the sheet`, sheet: block.parent, at, uids: [p.uid, block.uid] });
     }
   }
 

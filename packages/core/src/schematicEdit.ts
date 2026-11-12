@@ -16,6 +16,7 @@ import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { pinGridOrigin, schematicGrid, sheetOf, symbolFrame, symbolPinLocals, symToSheet, type Mirror, type SymbolFrame } from './schematic.ts';
 import { extractNetlist } from './netlist.ts';
+import { syncSheetPinsForSheets } from './hierarchy.ts';
 
 export interface SymbolMove {
   uid: string;
@@ -331,6 +332,16 @@ function obstacles(doc: Doc, engine: StyleEngine, sheetUid: string, selfUid: str
     } else if (n.type === 'label' || n.type === 'junction' || n.type === 'noconnect') {
       const at = vec(engine.get(n.uid, 'position')?.value);
       if (at) pt(at, n.uid);
+    } else if (n.type === 'block') {
+      // A sub-sheet block: its body is in the way; its sheet pins are connection points.
+      const p = vec(engine.get(n.uid, 'position')?.value);
+      const sz = vec(engine.get(n.uid, 'size')?.value);
+      if (p && sz) o.boxes.push({ minX: p.x, minY: p.y, maxX: p.x + sz.x, maxY: p.y + sz.y });
+      for (const pc of n.children) {
+        const k = doc.nodes.get(pc);
+        const at = k?.type === 'sheetPin' ? vec(engine.get(k.uid, 'position')?.value) : undefined;
+        if (at) pt(at, k!.uid);
+      }
     } else if (n.type === 'symbol') {
       const f = symbolFrame(engine, n.uid);
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -433,6 +444,10 @@ function segClear(a: Vec2, b: Vec2, o: Obstacles, ends: Vec2[]): boolean {
     if (ends.some(inside)) continue;
     const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
     if (x1 > bx.minX + 0.05 && x0 < bx.maxX - 0.05 && y1 > bx.minY + 0.05 && y0 < bx.maxY - 0.05) return false;
+    // Running along the outline reads as part of the body (e.g. down the edge of a sheet block).
+    const alongV = x1 - x0 < EPS && (Math.abs(x0 - bx.minX) < 0.05 || Math.abs(x0 - bx.maxX) < 0.05) && Math.min(y1, bx.maxY) - Math.max(y0, bx.minY) > 0.5;
+    const alongH = y1 - y0 < EPS && (Math.abs(y0 - bx.minY) < 0.05 || Math.abs(y0 - bx.maxY) < 0.05) && Math.min(x1, bx.maxX) - Math.max(x0, bx.minX) > 0.5;
+    if (alongV || alongH) return false;
   }
   return true;
 }
@@ -1028,6 +1043,8 @@ export function withJunctionsOps(doc: Doc, engine: StyleEngine, ops: Op[]): Op[]
   try {
     const more: Op[] = [];
     for (const sid of sheets) if (doc.nodes.has(sid)) more.push(...junctionOps(doc, engine, sid));
+    // Sheet pins follow the hierarchical labels of sub-sheets (S11).
+    more.push(...syncSheetPinsForSheets(doc, engine, [...sheets].filter((sid) => doc.nodes.has(sid))));
     return more.length ? [...ops, ...more] : ops;
   } finally {
     applyOps(doc, res.inverse);
@@ -1118,7 +1135,7 @@ export function routeWirePath(doc: Doc, engine: StyleEngine, sheetUid: string, f
   // Pins stay obstacles even on the own net: a wire should end on a pin, never run over one.
   const keepP = all.points.map((_, i) => {
     const owner = doc.nodes.get(all.pointOwners?.[i] ?? '');
-    return owner?.type === 'pin' || !own.has(netOf.get(all.pointOwners?.[i] ?? '') ?? '\u0000');
+    return owner?.type === 'pin' || owner?.type === 'sheetPin' || !own.has(netOf.get(all.pointOwners?.[i] ?? '') ?? '\u0000');
   });
   const keepS = all.segs.map((_, i) => !own.has(netOf.get(all.segOwners?.[i] ?? '') ?? '\u0000'));
   const o: Obstacles = {

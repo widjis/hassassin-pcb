@@ -33,3 +33,4 @@ export * from './arrange.ts';
 export * from './compact.ts';
 export * from './sheetFrame.ts';
 export * from './schematicExport.ts';
+export * from './hierarchy.ts';
