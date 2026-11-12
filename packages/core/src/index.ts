@@ -37,3 +37,4 @@ export * from './hierarchy.ts';
 export * from './multiUnit.ts';
 export * from './symbolEditor.ts';
 export * from './footprintGen.ts';
+export * from './pinPad.ts';

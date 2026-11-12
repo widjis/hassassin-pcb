@@ -104,7 +104,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
     };
     const doc = app.doc!;
     field('Reference', 'ref', (v) => commit(`Rename ${ref} to ${v}`, () => renameRefOps(doc, ref, v)));
-    for (const [title, key] of [['Value', 'Value'], ['MPN', 'MPN'], ['Manufacturer', 'Manufacturer'], ['Datasheet', 'Datasheet']] as const)
+    for (const [title, key] of [['Value', 'Value'], ['MPN', 'MPN'], ['Manufacturer', 'Manufacturer'], ['Datasheet', 'Datasheet'], ['Mechanical pads', 'MechanicalPads']] as const)
       field(title, key, (v) => commit(`${title} of ${ref}`, () => setPartPropsOps(doc, ref, { [key]: v || null })));
     // The footprint lives on the symbols; Update PCB swaps it on the board.
     field('Footprint', 'Footprint', (v) =>
@@ -175,7 +175,7 @@ export function mountInspector(app: App, root: HTMLElement): void {
 
     const isPart = n.type === 'symbol' && !n.props.power;
     if (isPart) box.append(partForm(n));
-    const EDITED = new Set(['ref', 'Value', 'MPN', 'Manufacturer', 'Footprint', 'Datasheet', 'dnp']);
+    const EDITED = new Set(['ref', 'Value', 'MPN', 'Manufacturer', 'Footprint', 'Datasheet', 'dnp', 'MechanicalPads']);
     const props = Object.entries(n.props).filter(([k, v]) => v !== '' && !(isPart && EDITED.has(k)));
     const kv = h('div', { class: 'kv' });
     if (n.type === 'net' && app.doc) {

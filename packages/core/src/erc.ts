@@ -8,7 +8,8 @@
  *   - labels not attached to anything,
  *   - hierarchical labels without a sheet pin of the same name, and sheet pins without a label,
  *   - duplicate reference designators,
- *   - units of multi-unit parts that were never placed (an error for a power unit).
+ *   - units of multi-unit parts that were never placed (an error for a power unit),
+ *   - symbol pins without a footprint pad (error) and pads without a pin (warning).
  */
 import type { Doc, DocNode, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
@@ -17,8 +18,9 @@ import { dist, distToSegment } from './geom.ts';
 import { extractNetlist, noConnectPins, type Netlist } from './netlist.ts';
 import { allSheets, pinPoint, sheetItems, sheetOf, symbolFrame, symToSheet } from './schematic.ts';
 import { missingUnits } from './multiUnit.ts';
+import { describePinPad, pinPadCheck } from './pinPad.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -33,6 +35,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   wireThroughPart: 'Wire runs through a part',
   hierMismatch: 'Sheet pin and hierarchical label do not match',
   unitNotPlaced: 'Unit of a part not placed',
+  pinPadMismatch: 'Symbol pins and footprint pads differ',
 };
 
 export interface ErcViolation {
@@ -198,6 +201,16 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
         at,
         uids: [m.symbol.uid],
       });
+  }
+
+  // Pins ↔ pads (S20): a pin without a pad cannot reach the board; a pad without a pin stays open.
+  for (const f of pinPadCheck(doc)) {
+    const sym = doc.nodes.get(f.symbol);
+    const at = sym ? (vec(engine.get(sym.uid, 'position')?.value) ?? { x: 0, y: 0 }) : { x: 0, y: 0 };
+    const sh = sym ? sheetOf(doc, sym) : null;
+    const [pinMsg, padMsg] = [f.pinsWithoutPad.length ? describePinPad({ ...f, padsWithoutPin: [] })[0] : null, f.padsWithoutPin.length ? describePinPad({ ...f, pinsWithoutPad: [] })[0] : null];
+    if (pinMsg) out.push({ id: `pp:${f.ref}:pins`, kind: 'pinPadMismatch', severity: 'error', message: pinMsg, sheet: sh?.uid ?? '', at, uids: [f.symbol] });
+    if (padMsg) out.push({ id: `pp:${f.ref}:pads`, kind: 'pinPadMismatch', severity: 'warning', message: padMsg, sheet: sh?.uid ?? '', at, uids: [f.symbol] });
   }
 
   // Duplicate references (different symbols, same unit).

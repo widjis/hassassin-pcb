@@ -4,6 +4,8 @@
  * project is live, shared with collaborators).
  */
 import {
+  pinPadCheck,
+  describePinPad,
   generateFootprint,
   genericFootprint,
   type FootprintParams,
@@ -146,7 +148,9 @@ export async function syncPcb(p: Project, ctx: ToolContext) {
     if (fp && fp.source !== 'generic' && !p.doc.meta[fpKey(n)]) keep.push({ op: 'setMeta', key: fpKey(n), value: { ...fp, name: n } });
   }
   apply(p, 'Update PCB from schematic', [...keep, ...ops]);
-  return { changed: ops.length > 0, ...report, netsRenamed: report.netsRenamed.map(([a, b]) => `${a} → ${b}`) };
+  // Pin ↔ pad check (S20) on what the board now holds.
+  const pinPad = pinPadCheck(p.doc, { resolve: resolveFootprint }).flatMap(describePinPad);
+  return { changed: ops.length > 0, ...report, netsRenamed: report.netsRenamed.map(([a, b]) => `${a} → ${b}`), ...(pinPad.length ? { pinPad } : {}) };
 }
 
 function parsePrices(v: unknown): { qty: number; price: number }[] {
@@ -1751,18 +1755,21 @@ export const TOOLS: ToolDef[] = [
       const hasSymbol = [...p.doc.nodes.values()].some((n) => n.type === 'symbol' && String(n.props.ref ?? n.name) === ref);
       apply(p, `Footprint ${ref} → ${name}`, ops.filter((o) => !(o.op === 'setProp' && p.doc.nodes.get(o.uid)?.type === 'element' && hasSymbol)));
       const out: Record<string, unknown> = { ref, footprint: name, pads: fp.pads.length };
+      // Pin ↔ pad check (S20) right away, so a wrong footprint shows up before routing.
+      const check = pinPadCheck(p.doc, { ref, resolve: (n) => (n === name ? fp : null) }).flatMap(describePinPad);
+      out.pinPad = check.length ? check : 'every symbol pin has a pad and every pad a pin';
       if (a.update !== false && hasSymbol) out.update = await syncPcb(p, ctx);
       return out;
     },
   },
   {
     name: 'set_part_info',
-    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet, lcsc, value, dnp (do not populate). rename gives the part a new reference (schematic units and board component together).',
+    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet, lcsc, value, dnp (do not populate), mechanical_pads (pads that need no pin, for the pin ↔ pad check). rename gives the part a new reference (schematic units and board component together).',
     mutates: true,
-    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, lcsc: { type: 'string' }, value: { type: 'string' }, dnp: { type: 'boolean' }, rename: { type: 'string', description: 'New reference, e.g. R12' } }, required: ['ref'] },
+    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, lcsc: { type: 'string' }, value: { type: 'string' }, dnp: { type: 'boolean' }, rename: { type: 'string', description: 'New reference, e.g. R12' }, mechanical_pads: { type: 'string', description: 'Footprint pads that need no symbol pin (mounting tabs, unused exposed pad, no-connect pads), e.g. "MP1, MP2, 25"' } }, required: ['ref'] },
     run: (p, a) => {
       const ref = str(a.ref, 'ref');
-      const map: Record<string, string> = { mpn: 'MPN', manufacturer: 'Manufacturer', datasheet: 'Datasheet', lcsc: 'LCSC', value: 'Value' };
+      const map: Record<string, string> = { mpn: 'MPN', manufacturer: 'Manufacturer', datasheet: 'Datasheet', lcsc: 'LCSC', value: 'Value', mechanical_pads: 'MechanicalPads' };
       const props: Record<string, string | null> = {};
       for (const [k, key] of Object.entries(map)) if (typeof a[k] === 'string') props[key] = (a[k] as string).trim() || null;
       const ops = setPartPropsOps(p.doc, ref, props);

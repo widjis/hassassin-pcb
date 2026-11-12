@@ -10,6 +10,7 @@ import {
   hasClipper,
   newProjectOps,
   planSync,
+  pinPadCheck,
   runErc,
   systemDefaults,
   applyOps,
@@ -215,6 +216,9 @@ export class App {
       report.netsRemoved.length && `${report.netsRemoved.length} empty net(s) removed`,
       report.onlyOnPcb.length && `${report.onlyOnPcb.length} board-only part(s) kept (${report.onlyOnPcb.slice(0, 4).join(', ')})`,
     ].filter(Boolean);
+    // Pin ↔ pad check (S20): the details are in Review (ERC).
+    const pp = pinPadCheck(doc, { resolve: resolveFootprint });
+    if (pp.length) parts.push(`pins and pads differ on ${pp.map((f) => f.ref).slice(0, 4).join(', ')}${pp.length > 4 ? ' …' : ''} (see Review)`);
     this.say(`Board updated: ${parts.join(' · ')}.`);
   }
 
