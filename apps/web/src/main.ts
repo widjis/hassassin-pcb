@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { kicadNetlist, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { kicadNetlist, kicadSchematic, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import { SchematicView } from './sch/view.ts';
@@ -634,6 +634,17 @@ $('fabBtn').addEventListener('click', () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   app.say(`Exported ${r.name}${r.notes.length ? ' — ' + r.notes[0] : ''}`);
+});
+$('schKicadBtn').addEventListener('click', () => {
+  if (!app.doc || !app.engine) return app.say('Open or create a project first.');
+  const base = (app.fileName || 'design').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_');
+  const r = kicadSchematic(app.doc, app.engine, { project: base });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([zip(r.files.map((f) => ({ name: f.name, data: f.text }))) as BlobPart], { type: "application/zip" }));
+  a.download = `${base}-kicad.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  app.say(`Exported ${base}-kicad.zip — ${r.sheets} sheet${r.sheets === 1 ? '' : 's'}, ${r.symbols} parts; open ${r.root} in KiCad${r.warnings.length ? ` · ${r.warnings.length} footprint${r.warnings.length === 1 ? '' : 's'} without a KiCad match` : ''}`);
 });
 $('netExportBtn').addEventListener('click', () => {
   if (!app.doc || !app.engine) return app.say('Open or create a project first.');

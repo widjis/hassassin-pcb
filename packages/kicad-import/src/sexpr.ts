@@ -75,6 +75,13 @@ export function parseSExpr(text: string): SList {
   return root;
 }
 
+/** Write an S-expression back as text (one line; quoted strings stay quoted). */
+export function writeSExpr(e: SExpr): string {
+  if (Array.isArray(e)) return `(${e.map(writeSExpr).join(' ')})`;
+  if (typeof e === 'string') return e;
+  return `"${e.s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+}
+
 // ---- helpers for walking the tree ----
 
 export const isList = (e: SExpr | undefined): e is SList => Array.isArray(e);

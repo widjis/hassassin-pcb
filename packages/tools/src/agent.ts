@@ -38,7 +38,7 @@ export type AgentEvent =
   | { type: 'error'; message: string };
 
 /** Tools the agent may not use: they touch the host's files or bypass the typed tools. */
-const HIDDEN = new Set(['export_fab', 'export_schematic', 'export_netlist', 'import_kicad_library', 'apply_ops']);
+const HIDDEN = new Set(['export_fab', 'export_schematic', 'export_netlist', 'export_kicad_schematic', 'import_kicad_library', 'apply_ops']);
 
 const TASK_TOOL = {
   name: 'update_tasks',

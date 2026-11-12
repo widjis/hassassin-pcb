@@ -98,7 +98,7 @@ const KICAD_CLI = ['/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli', '/u
 const dir = process.env.KICAD_PROJECT_DIR;
 const board = dir && existsSync(dir) ? readdirSync(dir).find((f) => f.endsWith('.kicad_pcb')) : undefined;
 
-describe.runIf(!!KICAD_CLI && !!board)('S13 against KiCad (kicad-cli)', () => {
+describe.runIf(!!KICAD_CLI && !!board)('S13 against KiCad (kicad-cli)', { timeout: 60_000 }, () => {
   it('components, net names, pins and pin types match KiCad\'s own netlist', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'hs13-'));
     const sch = join(dir!, board!.replace(/\.kicad_pcb$/, '.kicad_sch'));

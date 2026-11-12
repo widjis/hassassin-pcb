@@ -7,7 +7,7 @@
  * are flipped when stored as symbol-local coordinates.
  */
 import { addNode, createDoc, symToSheet, systemDefaults, type Doc, type DocNode, type Mirror, type PropValue, type RuleDecl, type Vec2 } from '@hassassin/core';
-import { child, children, flag, head, isList, num, parseSExpr, str, type SList } from './sexpr.ts';
+import { child, children, flag, head, isList, num, parseSExpr, str, writeSExpr, type SList } from './sexpr.ts';
 
 export type SymGraphic =
   | { t: 'poly'; pts: Vec2[]; fill: boolean; w: number }
@@ -168,6 +168,17 @@ export function importKicadSchematic(input: SchFiles, existing?: Doc): SchImport
     const texts: { at: Vec2; text: string; size: number }[] = [];
     const sheet = addNode(doc, parent.uid, { type: 'sheet', name, props: { file } });
     const libs = parseLibSymbols(root, warnings);
+    // Keep each library symbol as written, so an unchanged symbol can be exported exactly as it came
+    // (KiCad compares it with its library). `units` records each placed unit as it was imported.
+    for (const def of children(child(root, 'lib_symbols') ?? [], 'symbol')) {
+      const name = str(def[1]);
+      if (name && !doc.meta[`kicadSym:${name}`]) doc.meta[`kicadSym:${name}`] = { text: writeSExpr(def), units: {} };
+    }
+    const note = (libId: string, unit: number, body: unknown) => {
+      const m = doc.meta[`kicadSym:${libId}`] as { units: Record<string, string> } | undefined;
+      if (m) m.units[String(unit)] = JSON.stringify(body);
+    };
+    const r4 = (p: Vec2) => ({ x: Math.round(p.x * 10000) / 10000, y: Math.round(p.y * 10000) / 10000 });
 
     for (const e of root) {
       if (!isList(e)) continue;
@@ -198,6 +209,7 @@ export function importKicadSchematic(input: SchFiles, existing?: Doc): SchImport
           // Power ports become labels; PWR_FLAG only marks a net as driven.
           const pin = lib.pins[0];
           const isFlag = /PWR_FLAG/i.test(libId) || /PWR_FLAG/i.test(String(props.Value ?? ''));
+          note(libId, 1, { graphics: lib.graphics.filter((g) => g.unit === 0 || g.unit === unit).map((g) => g.g), pins: [{ number: '1', name: '', type: isFlag ? 'power_out' : 'power_in', at: r4(pin ? pin.at : { x: 0, y: 0 }), angle: 270, length: 0 }] });
           const sym = addNode(doc, sheet.uid, {
             type: 'symbol',
             name: ref,
@@ -234,6 +246,10 @@ export function importKicadSchematic(input: SchFiles, existing?: Doc): SchImport
           }
           props.unitDef = id;
         }
+        note(libId, unit, {
+          graphics: lib.graphics.filter((g) => g.unit === 0 || g.unit === unit).map((g) => g.g),
+          pins: lib.pins.filter((p) => p.unit === 0 || p.unit === unit).map((p) => ({ number: p.number, name: p.name, type: p.type, at: p.at, angle: p.angle, length: p.length, ...(p.hidden ? { hidden: true } : {}) })),
+        });
         const sym = addNode(doc, sheet.uid, {
           uid: str(child(e, 'uuid')?.[1]),
           type: 'symbol',

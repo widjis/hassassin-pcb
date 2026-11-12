@@ -41,6 +41,7 @@ const POSITIONAL: Record<string, string[]> = {
   export_fab: ['out'],
   export_schematic: ['out'],
   export_netlist: ['out'],
+  export_kicad_schematic: ['out'],
   search_parts: ['query'],
   get_part: ['id'],
   search_footprints: ['query'],
@@ -183,7 +184,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   if (typeof flags.json === 'string') Object.assign(args, JSON.parse(flags.json));
   // For export-fab, -o is the zip path.
-  if ((tool.name === 'export_fab' || tool.name === 'export_schematic' || tool.name === 'export_netlist') && typeof flags.out === 'string' && args.out === undefined) args.out = flags.out;
+  if ((tool.name === 'export_fab' || tool.name === 'export_schematic' || tool.name === 'export_netlist' || tool.name === 'export_kicad_schematic') && typeof flags.out === 'string' && args.out === undefined) args.out = flags.out;
 
   const link = parseLiveLink(projectPath);
   if (link) {
@@ -200,7 +201,7 @@ export async function main(argv: string[]): Promise<void> {
   if (tool.name === 'refill_pours') await loadGeometry();
   const result = await runTool(p, tool.name, args, toolContext());
   if (tool.mutates && p.dirty) {
-    const target = typeof flags.out === 'string' && tool.name !== 'export_fab' && tool.name !== 'export_schematic' && tool.name !== 'export_netlist' ? flags.out : projectPath;
+    const target = typeof flags.out === 'string' && tool.name !== 'export_fab' && tool.name !== 'export_schematic' && tool.name !== 'export_netlist' && tool.name !== 'export_kicad_schematic' ? flags.out : projectPath;
     if (!isHpcb(target)) fail(`"${tool.name}" changes the project; write it as .hpcb with -o project.hpcb (KiCad files are read-only here).`);
     await writeProject(p, target);
     print({ ...(typeof result === 'object' && result ? result : { result }), saved: target });

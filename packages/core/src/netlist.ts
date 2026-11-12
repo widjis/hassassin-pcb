@@ -192,6 +192,16 @@ export function extractNetlist(doc: Doc, engine: StyleEngine): Netlist {
       if (labels.length) {
         name = labels[0]!;
         named = 'label';
+      } else {
+        // Then a hierarchical label (as KiCad does): /Filter/IN for the IN label inside sheet Filter.
+        const hier = g
+          .filter((i) => i.kind === 'label' && i.node.props.kind === 'hier')
+          .map((i) => sheetPath(doc, i.sheet) + i.node.name)
+          .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+        if (hier.length) {
+          name = hier[0]!;
+          named = 'label';
+        }
       }
     }
     if (!name) {

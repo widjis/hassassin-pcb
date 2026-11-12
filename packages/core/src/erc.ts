@@ -20,7 +20,7 @@ import { allSheets, pinPoint, sheetItems, sheetOf, symbolFrame, symToSheet } fro
 import { missingUnits } from './multiUnit.ts';
 import { describePinPad, pinPadCheck } from './pinPad.ts';
 
-export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch';
+export type ErcKind = 'unconnectedPin' | 'noConnectConnected' | 'driverConflict' | 'powerNotDriven' | 'danglingWire' | 'danglingLabel' | 'duplicateRef' | 'wireOverPin' | 'danglingPower' | 'wireThroughPart' | 'hierMismatch' | 'unitNotPlaced' | 'pinPadMismatch' | 'labelSinglePin';
 
 export const ERC_LABEL: Record<ErcKind, string> = {
   unconnectedPin: 'Pin not connected',
@@ -36,6 +36,7 @@ export const ERC_LABEL: Record<ErcKind, string> = {
   hierMismatch: 'Sheet pin and hierarchical label do not match',
   unitNotPlaced: 'Unit of a part not placed',
   pinPadMismatch: 'Symbol pins and footprint pads differ',
+  labelSinglePin: 'Label connected to only one pin',
 };
 
 export interface ErcViolation {
@@ -70,6 +71,16 @@ export function runErc(doc: Doc, engine: StyleEngine, netlist?: Netlist): { viol
   const at = (pinUid: string) => pointOf.get(pinUid) ?? { x: 0, y: 0 };
 
   for (const net of nl.nets) {
+    // A label names a connection between places; on a single pin the other end is missing.
+    if (net.pins.length === 1) {
+      for (const uid of net.items) {
+        const l = doc.nodes.get(uid);
+        if (l?.type !== 'label' || !['local', 'global', undefined].includes(l.props.kind as string | undefined)) continue;
+        let sh = l.parent ? doc.nodes.get(l.parent) : undefined;
+        while (sh && sh.type !== 'sheet') sh = sh.parent ? doc.nodes.get(sh.parent) : undefined;
+        out.push({ id: `lsp:${l.uid}`, kind: 'labelSinglePin', severity: 'warning', message: `Label ${l.name} is connected to only one pin (${net.pins[0]!.ref}.${net.pins[0]!.pin}); the other end of ${l.name} is missing`, sheet: sh?.uid ?? '', at: vec(engine.get(l.uid, 'position')?.value) ?? { x: 0, y: 0 }, uids: [l.uid], net: net.name });
+      }
+    }
     const real = net.items.length > 0 || net.pins.length > 1;
     for (const p of net.pins) {
       const marked = nc.has(p.pinUid);

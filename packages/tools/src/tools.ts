@@ -6,6 +6,7 @@
 import {
   pinPadCheck,
   kicadNetlist,
+  kicadSchematic,
   describePinPad,
   generateFootprint,
   genericFootprint,
@@ -1433,6 +1434,32 @@ export const TOOLS: ToolDef[] = [
       const zip = fabZip(r);
       await ctx.writeFile(str(a.out, 'out'), zip);
       return { written: a.out, bytes: zip.length, files: r.files.map((f) => ({ name: f.name, bytes: f.data.length })), notes: r.notes };
+    },
+  },
+  {
+    name: 'export_kicad_schematic',
+    description: 'Export the schematic as KiCad schematic files (.kicad_sch, KiCad 9 / 10), one per sheet, plus a .kicad_pro. out: path of the root .kicad_sch (the other sheets are written next to it) or of a .zip with all files. Symbols carry their drawing and pins in the file; power ports become power symbols.',
+    mutates: false,
+    input: { type: 'object', properties: { out: { type: 'string', description: 'Root .kicad_sch path, or a .zip' } }, required: ['out'] },
+    run: async (p, a, ctx) => {
+      if (!ctx.writeFile) throw new ToolError('This host cannot write files.');
+      const out = str(a.out, 'out');
+      const zipped = /\.zip$/i.test(out);
+      if (!zipped && !/\.kicad_sch$/i.test(out)) throw new ToolError('out must end in .kicad_sch or .zip');
+      const name = zipped ? (p.doc.meta.projectName ? String(p.doc.meta.projectName) : p.name.replace(/\.hpcb$/i, '')) : out.split(/[\\/]/).pop()!.replace(/\.kicad_sch$/i, '');
+      const r = kicadSchematic(p.doc, p.engine, { project: name || 'design' });
+      if (zipped) {
+        await ctx.writeFile(out, zip(r.files.map((f) => ({ name: f.name, data: f.text }))));
+        return { written: out, files: r.files.map((f) => f.name), symbols: r.symbols, sheets: r.sheets, ...(r.warnings.length ? { warnings: r.warnings } : {}) };
+      }
+      const dir = out.slice(0, out.length - out.split(/[\\/]/).pop()!.length);
+      const written: string[] = [];
+      for (const f of r.files) {
+        const path = f.name === r.root ? out : dir + f.name;
+        await ctx.writeFile(path, f.text);
+        written.push(path);
+      }
+      return { written, symbols: r.symbols, sheets: r.sheets, ...(r.warnings.length ? { warnings: r.warnings } : {}) };
     },
   },
   {
