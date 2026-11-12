@@ -29,11 +29,19 @@ describe('autoroute fixtures: invariants', { timeout: 60_000 }, () => {
     expect((await figures('reversed-bus')).failed).toBe(0);
     expect((await figures('off-grid')).failed).toBe(0);
   });
+  // P8b: each net is checked with its own width and clearance, so the 0.15 mm signals leave the
+  // 0.4 mm QFN although a 0.5 mm supply net is routed on the same part (v0.0.3: 4 / 8).
+  it('qfn-fine: every connection routed next to a wide supply net (P8b)', async () => {
+    const f = await figures('qfn-fine');
+    expect(f.failed).toBe(0);
+    expect(f.drcErrors).toBe(0);
+  });
 });
 
 describe('autoroute fixtures: known gaps (v0.0.3)', { timeout: 60_000 }, () => {
-  // P8b: the clearance zone sized for the 0.5 mm supply net closes the 0.5 mm pitch QFN.
-  it.fails('qfn-escape: every connection routed (P8b)', async () => {
+  // P8c: the 0.5 mm pitch pad centres fall between the 0.1 mm grid points, so traces cannot leave
+  // the pads straight (with a 0.05 mm grid all 8 route). v0.0.3: 0 / 8; after P8b: 4 / 8.
+  it.fails('qfn-escape: every connection routed (P8c)', async () => {
     expect((await figures('qfn-escape')).failed).toBe(0);
   });
   // P8e: right-angle and acute corners come out of the search.

@@ -152,6 +152,25 @@ export async function fixtureQfnEscape(): Promise<Project> {
 }
 
 /**
+ * P8b's acceptance board: a 0.4 mm pitch QFN-24 with 0.15 mm signal nets and 0.15 mm clearances,
+ * next to a 0.5 mm supply net on the same part. With one clearance zone for all nets (v0.0.3) the
+ * zone sized for the supply net closes the gaps between the pads.
+ */
+export async function fixtureQfnFine(): Promise<Project> {
+  const p = newProject('fixture-qfn-fine');
+  await runTool(p, 'add_part', { kind: 'ic', pins: 24, x: 60, y: 0, package: 'qfn-24-4x4-p0.4' });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 8, x: 0, y: 0 });
+  for (let i = 1; i <= 6; i++) await wire(p, `S${i}`, `U1.${i}`, `J1.${i}`);
+  await wire(p, 'VCC', `U1.7`, 'J1.7');
+  await wire(p, 'GND', `U1.19`, 'J1.8');
+  await finish(p, { x: 100, y: 100, width: 30, height: 24 }, [['U1', 120, 112], ['J1', 106, 112]]);
+  for (const target of ['net', 'pad', 'trace', 'via']) await runTool(p, 'set_rule', { target, rule: 'keepOut', value: '0.15mm' });
+  await runTool(p, 'set_rule', { target: 'net', rule: 'traceWidth', value: '0.15mm' });
+  await runTool(p, 'set_rule', { target: 'net', rule: 'traceWidthMin', value: '0.1mm' });
+  return p;
+}
+
+/**
  * Two 8-pin headers wired in reverse order (1→8, 2→7, …): every net crosses every other, so two layers
  * and vias are needed and early routes block later ones without rip-up and retry (P8d).
  */
@@ -182,4 +201,4 @@ export async function fixtureOffGrid(): Promise<Project> {
   ]);
 }
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid } as const;
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid } as const;

@@ -3,6 +3,12 @@
  * copper layer (8 directions → 45° traces) with through vias, keeping each net's
  * clearance from other copper. Our own straightforward maze router: no rip-up and retry,
  * no push-and-shove. Connections it cannot complete are reported, never forced.
+ *
+ * Clearance (P8b, docs/05-pcb-improvements.md): every grid cell keeps the distance to the
+ * nearest copper of the two nearest different owners (a two-label distance field), with the
+ * clearance that copper demands. A cell is usable for a net when the nearest copper that is not
+ * its own is at least half the net's width plus the larger of the two clearances away, so each
+ * net is checked with its own width and clearance (no zone shared by all nets).
  */
 import type { Op } from './commands.ts';
 import type { Doc, DocNode, KeepOut, RuleDecl, Vec2 } from './model.ts';
@@ -128,10 +134,48 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     return k ? clearanceFor(k, 'pad') : 0.2;
   };
 
-  // Per layer: `core` = copper owner (net id, -1 for no-net copper / outside the board),
-  // `halo` = clearance zone owner (net id, -1 where two nets' zones meet).
+  // Per layer: `core` = copper owner (net id, -1 for no-net copper / outside the board).
   const core = layers.map(() => new Int32Array(N));
-  const haloA = layers.map(() => new Int32Array(N));
+  // Distance field per layer. Slot 1 and 2: the two nearest different owners of copper near the
+  // cell (`o`), the distance from the cell centre to that owner's copper edge (`d`), and the smallest
+  // distance minus the clearance that copper demands from a trace (`e`). An owner pushed out by two
+  // nearer ones is folded into `zd` / `ze`, which every net must respect (conservative).
+  const field = layers.map(() => ({
+    o1: new Int32Array(N), d1: new Float32Array(N).fill(Infinity), e1: new Float32Array(N).fill(Infinity),
+    o2: new Int32Array(N), d2: new Float32Array(N).fill(Infinity), e2: new Float32Array(N).fill(Infinity),
+    zd: new Float32Array(N).fill(Infinity), ze: new Float32Array(N).fill(Infinity),
+  }));
+  const note = (li: number, c: number, owner: number, d: number, e: number) => {
+    const f = field[li]!;
+    if (f.o1[c] === owner && f.d1[c]! < Infinity) {
+      if (d < f.d1[c]!) f.d1[c] = d;
+      if (e < f.e1[c]!) f.e1[c] = e;
+      return;
+    }
+    if (f.o2[c] === owner && f.d2[c]! < Infinity) {
+      if (d < f.d2[c]!) f.d2[c] = d;
+      if (e < f.e2[c]!) f.e2[c] = e;
+      if (f.d2[c]! < f.d1[c]!) {
+        const [o, dd, ee] = [f.o1[c]!, f.d1[c]!, f.e1[c]!];
+        (f.o1[c] = f.o2[c]!), (f.d1[c] = f.d2[c]!), (f.e1[c] = f.e2[c]!);
+        (f.o2[c] = o), (f.d2[c] = dd), (f.e2[c] = ee);
+      }
+      return;
+    }
+    // A new owner at this cell.
+    const fold = (dd: number, ee: number) => {
+      if (dd < f.zd[c]!) f.zd[c] = dd;
+      if (ee < f.ze[c]!) f.ze[c] = ee;
+    };
+    if (d < f.d1[c]!) {
+      if (f.d2[c]! < Infinity) fold(f.d2[c]!, f.e2[c]!);
+      (f.o2[c] = f.o1[c]!), (f.d2[c] = f.d1[c]!), (f.e2[c] = f.e1[c]!);
+      (f.o1[c] = owner), (f.d1[c] = d), (f.e1[c] = e);
+    } else if (d < f.d2[c]!) {
+      if (f.d2[c]! < Infinity) fold(f.d2[c]!, f.e2[c]!);
+      (f.o2[c] = owner), (f.d2[c] = d), (f.e2[c] = e);
+    } else fold(d, e);
+  };
   const edgeMargin = 0.3;
   for (let j = 0; j < H; j++) {
     for (let i = 0; i < W; i++) {
@@ -143,21 +187,27 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   }
 
   const shapes = collectCopper(doc, engine, copper);
-  // Widest trace half-width + clearance among nets we route: the halo kept around foreign copper.
   const routedNets = [...new Set(rats.map((r) => r.net))];
-  let halo = 0;
-  for (const n of routedNets) halo = Math.max(halo, netRule(n, 'traceWidth', 0.25) / 2 + netClear(n));
-  const diag = g * 0.75;
+  // How far the distance field must reach: the widest half-width plus the largest clearance that
+  // any routed net or any copper asks for, plus one cell for the step between cell centres.
+  let reachW = 0;
+  let reachC = 0;
+  for (const n of routedNets) {
+    reachW = Math.max(reachW, netRule(n, 'traceWidth', 0.25) / 2, netRule(n, 'viaDiameter', 0.6) / 2);
+    reachC = Math.max(reachC, netClear(n));
+  }
+  for (const s of shapes) reachC = Math.max(reachC, clearanceFor(s.keepOut, 'trace'));
+  const reach = reachW + reachC + g * 1.5;
 
-  /** Mark copper (and its halo) of `id` on layer `li`. Cells claimed by two nets become blocked. */
-  const paint = (li: number, id: number, s: { edges: [Vec2, Vec2, number][]; areas: Vec2[][][] }, extra: number) => {
+  /** Mark copper of `id` on layer `li` (copper core, and distances around it). `cl` = clearance it demands. */
+  const paint = (li: number, id: number, s: { edges: [Vec2, Vec2, number][]; areas: Vec2[][][] }, cl: number) => {
     const co = core[li]!;
-    const ha = haloA[li]!;
     const setCore = (c: number) => {
       const v = co[c]!;
       if (v === 0 || v === id || (v === -1 && id > 0)) co[c] = id;
     };
-    // Edges (traces, vias, outlines) as capsules: copper inside, clearance halo around.
+    const extra = reach;
+    // Edges (traces, vias, outlines) as capsules: copper inside, distances around.
     for (const [a, b, r] of s.edges) {
       const reach = r + extra;
       const i0 = Math.max(0, Math.floor((Math.min(a.x, b.x) - reach - minX) / g));
@@ -170,8 +220,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
           if (d >= extra) continue;
           const c = j * W + i;
           if (d <= 0) setCore(c);
-          else if (ha[c] === 0) ha[c] = id;
-          else if (ha[c] !== id) ha[c] = -1;
+          note(li, c, id, Math.max(0, d), Math.max(0, d) - cl);
         }
       }
     }
@@ -236,7 +285,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const id = netId(s.net);
     // Pours of other nets are refilled around new traces, so they are not obstacles.
     if (s.kind === 'fill' && !(s.net && routedNets.includes(s.net))) continue;
-    paint(li, id, { edges: s.kind === 'fill' ? [] : s.edges, areas: s.kind === 'fill' || s.kind === 'pad' ? s.areas : [] }, Math.max(halo, clearanceFor(s.keepOut, 'trace') + halo - 0.2) + diag);
+    paint(li, id, { edges: s.kind === 'fill' ? [] : s.edges, areas: s.kind === 'fill' || s.kind === 'pad' ? s.areas : [] }, clearanceFor(s.keepOut, 'trace'));
   }
 
   // Order: short connections and small nets first.
@@ -258,29 +307,72 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const id = netId(r.net);
     const width = netRule(r.net, 'traceWidth', 0.25);
     const viaD = netRule(r.net, 'viaDiameter', 0.6);
-    const viaR = Math.ceil((viaD / 2 + netClear(r.net) - width / 2) / g);
-    // Own copper is usable only where it is also clear of other nets' halo (a trace inside
-    // its own pad can still stick out towards a neighbour); the end cells are always allowed.
+    const cn = netClear(r.net);
+    const viaR = Math.ceil((viaD / 2 + cn - width / 2) / g);
+    // Pads of this net at the two ends that are narrower than the trace: inside a zone around them
+    // (the pad grown by half the width plus the clearance) the trace necks down to the pad's width.
+    const minTrace = netRule(r.net, 'traceWidthMin', 0.15);
+    const necks: { box: { minX: number; minY: number; maxX: number; maxY: number }; w: number }[] = [];
+    for (const end of [r.a, r.b]) {
+      for (const sh of shapes) {
+        if (sh.kind !== 'pad' || sh.net !== r.net || !sh.areas[0] || !inArea(end, sh.areas[0])) continue;
+        const w = Math.min(sh.box.maxX - sh.box.minX, sh.box.maxY - sh.box.minY);
+        if (w >= width) continue;
+        const m = width / 2 + cn;
+        necks.push({ box: { minX: sh.box.minX - m, minY: sh.box.minY - m, maxX: sh.box.maxX + m, maxY: sh.box.maxY + m }, w: Math.floor(w * 1000) / 1000 });
+      }
+    }
+    if (necks.some((n) => n.w < minTrace)) {
+      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'pad is narrower than the minimum trace width' });
+      continue;
+    }
+    const neckAt = (x: number, y: number) => {
+      let w = width;
+      for (const n of necks) if (x >= n.box.minX && x <= n.box.maxX && y >= n.box.minY && y <= n.box.maxY) w = Math.min(w, n.w);
+      return w;
+    };
+    // The step between two cell centres can pass closer to a corner of copper than either centre;
+    // this margin covers it for a half-width + clearance of `R` (worst case: a point obstacle).
+    const halfStep = g * Math.SQRT1_2;
+    const slackFor = (R: number) => R - Math.sqrt(Math.max(0, R * R - halfStep * halfStep));
+    /** Room at cell `c` for copper of this net with half-width `half`: nearest foreign copper far enough. */
+    const clear = (li: number, c: number, half: number, slack: number) => {
+      const f = field[li]!;
+      let m = Math.min(f.zd[c]! - cn, f.ze[c]!);
+      if (f.o1[c] !== id) m = Math.min(m, f.d1[c]! - cn, f.e1[c]!);
+      if (f.o2[c] !== id) m = Math.min(m, f.d2[c]! - cn, f.e2[c]!);
+      return m >= half + slack - 1e-6;
+    };
+    const halfFull = width / 2;
+    const slackFull = slackFor(halfFull + cn);
+    // The end cells are always allowed (they sit in the net's own pads); every other cell must have
+    // room for the trace, necked down near narrow end pads.
     let endA = -1;
     let endB = -1;
     const usable = (li: number, c: number) => {
       if (c === endA || c === endB) return core[li]![c] === id;
       const k = core[li]![c]!;
       if (k !== 0 && k !== id) return false;
-      const h = haloA[li]![c]!;
-      return h === 0 || h === id;
+      if (!necks.length) return clear(li, c, halfFull, slackFull);
+      const i = c % W;
+      const w = neckAt(cx(i), cy((c - i) / W));
+      return w === width ? clear(li, c, halfFull, slackFull) : clear(li, c, w / 2, slackFor(w / 2 + cn));
     };
     const viaOk = (c: number) => {
+      for (let li = 0; li < L; li++) {
+        const k = core[li]![c]!;
+        if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) return false;
+      }
+      // A via never sits on or touches a pad, the net's own included.
       const i = c % W;
       const j = (c - i) / W;
-      for (let li = 0; li < L; li++)
-        for (let dj = -viaR; dj <= viaR; dj++)
-          for (let di = -viaR; di <= viaR; di++) {
-            if (di * di + dj * dj > viaR * viaR) continue;
-            const ii = i + di;
-            const jj = j + dj;
-            if (ii < 0 || jj < 0 || ii >= W || jj >= H || padMask[jj * W + ii] || !usable(li, jj * W + ii)) return false;
-          }
+      for (let dj = -viaR; dj <= viaR; dj++)
+        for (let di = -viaR; di <= viaR; di++) {
+          if (di * di + dj * dj > viaR * viaR) continue;
+          const ii = i + di;
+          const jj = j + dj;
+          if (ii < 0 || jj < 0 || ii >= W || jj >= H || padMask[jj * W + ii]) return false;
+        }
       return true;
     };
     // Endpoints: the layers where the net's copper sits at each end.
@@ -369,7 +461,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const cells: { li: number; c: number }[] = [];
     for (let s = found; s >= 0; s = from[s]!) cells.push({ li: Math.floor(s / N), c: s % N });
     cells.reverse();
-    // Claim the path (with halo) so later connections keep clear.
+    // Claim the path so later connections keep clear of it.
     const pts = (k: number) => ({ x: cx(cells[k]!.c % W), y: cy(Math.floor(cells[k]!.c / W)) });
     const segs: { layer: number; pts: Vec2[] }[] = [];
     const vias: Vec2[] = [];
@@ -386,24 +478,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     cur.pts.push(r.b);
     segs.push(cur);
 
-    // Neck down where a trace end sits inside a foreign clearance zone (fine-pitch pads).
-    const minTrace = netRule(r.net, 'traceWidthMin', 0.15);
-    const neckAt = (p: Vec2, cell: number, li: number): number | null => {
-      const h = haloA[li]![cell]!;
-      if (h === 0 || h === id) return null;
-      let best = Infinity;
-      for (const sh of shapes) {
-        if (sh.kind !== 'pad' || sh.net !== r.net || sh.layer !== layers[li] || !sh.areas[0] || !inArea(p, sh.areas[0])) continue;
-        best = Math.min(best, sh.box.maxX - sh.box.minX, sh.box.maxY - sh.box.minY);
-      }
-      return Number.isFinite(best) && best < width ? best : null;
+    /** Width of a segment: necked down if any part of it lies in a neck zone. */
+    const segWidth = (a: Vec2, b: Vec2) => {
+      let w = width;
+      for (const n of necks) if (segmentHitsBox(a, b, n.box)) w = Math.min(w, n.w);
+      return w;
     };
-    const neckA = neckAt(r.a, A.c, cells[0]!.li);
-    const neckB = neckAt(r.b, B.c, cells[cells.length - 1]!.li);
-    if ((neckA !== null && neckA < minTrace) || (neckB !== null && neckB < minTrace)) {
-      report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'pad is narrower than the minimum trace width' });
-      continue;
-    }
     const node = netNode.get(r.net);
     if (!node) {
       report.failed.push({ net: r.net, from: r.a, to: r.b, reason: 'net object missing (run update_pcb)' });
@@ -431,20 +511,40 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         const a = simple[k]!;
         const b = simple[k + 1]!;
         length += Math.hypot(b.x - a.x, b.y - a.y);
-        const near = (q: Vec2) => Math.min(Math.hypot(a.x - q.x, a.y - q.y), Math.hypot(b.x - q.x, b.y - q.y)) < g * 1.5;
-        const neck = neckA !== null && near(r.a) ? neckA : neckB !== null && near(r.b) ? neckB : null;
+        const w = segWidth(a, b);
         const rules: RuleDecl[] = [{ name: 'start', value: a }, { name: 'end', value: b }, { name: 'layer', value: layers[sgm.layer]! }];
-        if (neck !== null) rules.push({ name: 'traceWidth', value: Math.floor(neck * 1000) / 1000 });
+        if (w < width) rules.push({ name: 'traceWidth', value: w });
         ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+        paint(sgm.layer, id, { edges: [[a, b, w / 2]], areas: [] }, cn);
       }
-      paint(sgm.layer, id, { edges: simple.slice(1).map((b, k) => [simple[k]!, b, width / 2] as [Vec2, Vec2, number]), areas: [] }, halo + diag);
     });
     for (const v of vias) {
       ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('via'), type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
-      for (let li = 0; li < L; li++) paint(li, id, { edges: [[v, v, viaD / 2]], areas: [] }, halo + diag);
+      for (let li = 0; li < L; li++) paint(li, id, { edges: [[v, v, viaD / 2]], areas: [] }, cn);
     }
     report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(length * 1000) / 1000, vias: vias.length });
   }
   report.ms = Math.round(performance.now() - t0);
   return { ops, report };
+}
+
+/** Does segment a–b touch the axis-aligned box (Liang–Barsky clipping)? */
+function segmentHitsBox(a: Vec2, b: Vec2, box: { minX: number; minY: number; maxX: number; maxY: number }): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const clip = (p: number, q: number) => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const t = q / p;
+    if (p < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+    return true;
+  };
+  return clip(-dx, a.x - box.minX) && clip(dx, box.maxX - a.x) && clip(-dy, a.y - box.minY) && clip(dy, box.maxY - a.y);
 }
