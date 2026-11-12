@@ -36,6 +36,33 @@ export interface RouteFigures {
   collinear: number;
   /** Autorouted arcs (corner style `arc`). */
   arcs: number;
+  /** Grid pitch the router used (mm). */
+  grid: number;
+  /**
+   * Share of the straight autorouted length (0–1) that runs against its layer's default direction (P8f:
+   * even copper layers horizontal, odd ones vertical); 45° pieces count half.
+   */
+  againstDirection: number;
+}
+
+/** Share of the straight autorouted length against the default layer directions (see `RouteFigures.againstDirection`). */
+export function againstDirection(doc: Doc, engine: StyleEngine, copper: string[]): number {
+  let total = 0;
+  let against = 0;
+  for (const n of doc.nodes.values()) {
+    if (n.type !== 'trace' || n.props.autorouted !== true || engine.get(n.uid, 'mid')?.value) continue;
+    const a = vec(engine.get(n.uid, 'start')?.value);
+    const b = vec(engine.get(n.uid, 'end')?.value);
+    const k = copper.indexOf(String(engine.get(n.uid, 'layer')?.value ?? ''));
+    if (!a || !b || k < 0) continue;
+    const dx = Math.abs(b.x - a.x);
+    const dy = Math.abs(b.y - a.y);
+    const len = Math.hypot(dx, dy);
+    total += len;
+    if (dx > 1e-6 && dy > 1e-6) against += len / 2;
+    else if ((k % 2 === 0 ? dy : dx) > 1e-6) against += len;
+  }
+  return total ? Math.round((against / total) * 1000) / 1000 : 0;
 }
 
 /** Remove traces and vias of every net that has no pour (pads, pours and poured nets stay). */
@@ -126,7 +153,7 @@ export function cornerFigures(doc: Doc, engine: StyleEngine, copper: string[] = 
 export async function measureAutoroute(p: Project, args: Record<string, unknown> = {}): Promise<RouteFigures> {
   await runTool(p, 'refill_pours', {});
   const connections = computeRatsnest(p.doc, p.engine, p.copper).lines.length;
-  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number };
+  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number; grid: number };
   await runTool(p, 'refill_pours', {});
   const errors = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted');
   const drcByKind: Record<string, number> = {};
@@ -151,6 +178,8 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     acuteCorners: c.acute,
     collinear: c.collinear,
     arcs: c.arcs,
+    grid: Math.round(r.grid * 1000) / 1000,
+    againstDirection: againstDirection(p.doc, p.engine, p.copper),
   };
 }
 
@@ -263,7 +292,36 @@ export async function fixtureChannel(): Promise<Project> {
   return finish(p, { x: 100, y: 100, width: 16, height: 20 }, [['J1', 101.4, 110], ['J2', 114.6, 110], ['J3', 108, 103], ['J4', 108, 118.6]]);
 }
 
+/**
+ * As `tee`, but net T is already joined J1.1–J2.1 by a hand-drawn trace that runs along the left edge of
+ * the SMD pad R1.1 without ending in it or crossing its centre. Copper touches, but the connectivity check
+ * (and so the ratsnest) does not count it as joined: the router must still route R1.1 (P8f: before, its
+ * grid flood took the touching copper as one group and reported the connection as made).
+ */
+export async function fixtureGraze(): Promise<Project> {
+  const p = newProject('fixture-graze');
+  await runTool(p, 'add_part', { kind: 'connector', pins: 2, x: 0, y: 0 });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 2, x: 20, y: 0 });
+  await runTool(p, 'add_part', { kind: 'resistor', value: '1k', x: 40, y: 0 });
+  await wire(p, 'T', 'J1.1', 'J2.1', 'R1.1');
+  await wire(p, 'U', 'J1.2', 'J2.2', 'R1.2');
+  await finish(p, { x: 100, y: 100, width: 40, height: 20 }, [['J1', 104, 108], ['J2', 136, 108], ['R1', 120, 113]]);
+  const net = [...p.doc.nodes.values()].find((n) => n.type === 'net' && n.name === 'T')!;
+  const pads = collectCopper(p.doc, p.engine, p.copper).filter((s) => s.kind === 'pad' && s.net === 'T' && s.layer === 'F.Cu');
+  const mid = (b: { minX: number; minY: number; maxX: number; maxY: number }) => ({ x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 });
+  const tht = pads.filter((s) => pads.filter((o) => o.uid === s.uid).length === 1 && collectCopper(p.doc, p.engine, p.copper).some((o) => o.uid === s.uid && o.layer === 'B.Cu'));
+  const smd = pads.find((s) => !tht.includes(s))!;
+  const [a, b] = tht.map((s) => mid(s.box)).sort((u, v) => u.x - v.x) as [Vec2, Vec2];
+  const x0 = smd.box.minX;
+  const pts: Vec2[] = [a, { x: x0, y: a.y }, { x: x0, y: smd.box.maxY + 2.5 }, { x: b.x + 2.5, y: smd.box.maxY + 2.5 }, { x: b.x + 2.5, y: b.y }, b];
+  const ops: Op[] = [];
+  for (let k = 0; k + 1 < pts.length; k++)
+    ops.push({ op: 'add', parent: net.uid, index: net.children.length + k, tree: { nodes: [{ uid: `trgraze${k}`, type: 'trace', name: '', props: {}, rules: [{ name: 'start', value: pts[k]! }, { name: 'end', value: pts[k + 1]! }, { name: 'layer', value: 'F.Cu' }], parent: net.uid, children: [] }] } });
+  p.history.apply('Graze trace', ops);
+  return p;
+}
+
 /** Extra `autoroute` arguments per fixture. */
 export const FIXTURE_ARGS: Record<string, Record<string, unknown>> = { channel: { layers: ['F.Cu'] } };
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel } as const;
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze } as const;

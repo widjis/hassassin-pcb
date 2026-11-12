@@ -23,8 +23,19 @@ export interface AutorouteOptions {
   nets?: string[];
   /** Grid pitch in mm (default: picked from board size, 0.1–0.25). */
   grid?: number;
-  /** Extra cost of a via, in grid steps (default 12). */
+  /** Extra cost of a via, in grid steps, for every net (default: the net's `viaCost` rule, else 4 mm of trace). */
   viaCost?: number;
+  /**
+   * Preferred direction per copper layer (P8f), overriding the `routeDirection` rule: e.g.
+   * `{ 'F.Cu': 'horizontal', 'B.Cu': 'vertical' }`. Layers not named keep the rule's pattern.
+   */
+  directions?: Record<string, 'horizontal' | 'vertical' | 'any'>;
+  /** Cost factor of a straight step against a layer's direction (default 1.5; 1 = no preference). A 45° step costs half as much extra. */
+  directionCost?: number;
+  /** Cost per grid step of running right next to other nets' copper, fading out one trace pitch away (default 0.3; 0 = off). */
+  proximityCost?: number;
+  /** Order of connections: `short` (default: shortest first) or `difficulty` (fine-pitch pads first, then long connections). The `autoPlacePriority` rule comes before either. */
+  order?: 'difficulty' | 'short';
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
   /** Corner style for every net, overriding the `cornerStyle` rule (P8e). */
@@ -307,9 +318,45 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     paint(li, id, { edges: s.kind === 'fill' ? [] : s.edges, areas: s.kind === 'fill' || s.kind === 'pad' ? s.areas : [] }, clearanceFor(s.keepOut, 'trace'));
   }
 
-  // Order: short connections and small nets first.
-  const order = rats.slice().sort((a, b) => Math.hypot(a.a.x - a.b.x, a.a.y - a.b.y) - Math.hypot(b.a.x - b.b.x, b.a.y - b.b.y));
-  const viaCost = opts.viaCost ?? 12;
+  // Order (P8f): the `autoPlacePriority` rule first (higher first); then the shortest first (default), or by
+  // difficulty (`order: 'difficulty'`): connections with a fine-pitch pad at an end (pad centres closer
+  // than 0.85 mm to a pad of another net), then the long ones. On the benchmark board shortest-first gave
+  // fewer vias and less length; negotiated rip-up makes room for the hard ones afterwards.
+  const padShapes = shapes.filter((s) => s.kind === 'pad');
+  const finePitch = (q: Vec2, net: string) => {
+    const own = padShapes.find((s) => s.net === net && s.areas[0] && inArea(q, s.areas[0]));
+    if (!own) return false;
+    const b = own.box;
+    const mid = (x: { minX: number; minY: number; maxX: number; maxY: number }) => ({ x: (x.minX + x.maxX) / 2, y: (x.minY + x.maxY) / 2 });
+    const m = mid(b);
+    return padShapes.some((s) => s !== own && s.net !== net && s.layer === own.layer && Math.hypot(mid(s.box).x - m.x, mid(s.box).y - m.y) < 0.85);
+  };
+  const lenOf = (r: (typeof rats)[number]) => Math.hypot(r.a.x - r.b.x, r.a.y - r.b.y);
+  const prio = (r: (typeof rats)[number]) => netRule(r.net, 'autoPlacePriority', 0);
+  const fine = new Map(rats.map((r) => [r, finePitch(r.a, r.net) || finePitch(r.b, r.net)]));
+  const order = rats.slice().sort((a, b) => {
+    const p = prio(b) - prio(a);
+    if (p) return p;
+    if (opts.order !== 'difficulty') return lenOf(a) - lenOf(b);
+    const f = Number(fine.get(b)) - Number(fine.get(a));
+    return f || lenOf(b) - lenOf(a);
+  });
+  // Preferred direction per layer (P8f): from the `routeDirection` rule pattern over the copper stack
+  // (alternate = top horizontal, next vertical …), overridden per layer by `opts.directions`. 0 = any,
+  // 1 = horizontal, 2 = vertical. With a single routing layer there is no preference.
+  const dirK = opts.directionCost ?? 1.5;
+  const proxK = opts.proximityCost ?? 0.3;
+  const layerDirs = (net: string): number[] => {
+    const n = netNode.get(net);
+    const pat = (n ? engine.get(n.uid, 'routeDirection')?.value : undefined) ?? 'alternate';
+    return layers.map((l) => {
+      const o = opts.directions?.[l];
+      if (o) return o === 'horizontal' ? 1 : o === 'vertical' ? 2 : 0;
+      if (layers.length < 2 || pat === 'any') return 0;
+      const k = copper.indexOf(l);
+      return (k % 2 === 0) === (pat !== 'alternate-v') ? 1 : 2;
+    });
+  };
   const limit = opts.timeLimitMs ?? 30000;
   const maxRounds = opts.rounds ?? 30;
   const ops: Op[] = [];
@@ -325,6 +372,8 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   const viaMemo = new Int32Array(N);
   const dynStamp = new Int32Array(N * L);
   const dynCount = new Uint8Array(N * L);
+  const proxStamp = new Int32Array(N * L);
+  const proxVal = new Float32Array(N * L);
   let conn = 0;
   const DIRS = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]] as const;
   // The step between two cell centres can pass closer to a corner of copper than either centre;
@@ -379,6 +428,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const cn = netClear(r.net);
     const viaR = Math.ceil((viaD / 2 + cn - width / 2) / g);
     const soft = pres !== Infinity;
+    const viaRule = netRule(r.net, 'viaCost', 0);
+    const viaCost = opts.viaCost ?? (viaRule || 4) / g;
+    const ldir = layerDirs(r.net);
+    // Step cost factor per layer and direction index (DIRS order): along the layer's direction 1, against
+    // it dirK, a 45° step halfway.
+    const stepK = ldir.map((d) => DIRS.map(([di, dj]) => (d === 0 ? 1 : di && dj ? 1 + (dirK - 1) / 2 : (d === 1 ? dj : di) ? dirK : 1)));
     // Corner style (P8e): 45 = soften right angles into two 45° turns, arc = round every turn, 90 = keep
     // right angles. Acute corners are never made in any style.
     const styleRule = netNode.get(r.net) ? engine.get(netNode.get(r.net)!.uid, 'cornerStyle')?.value : undefined;
@@ -517,6 +572,11 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       for (let li = 0; li < L; li++) if (!out.has(li) && ownRouteAt(li, q) >= 0) out.add(li);
       return [...out];
     };
+    /** Is q on this net's copper on layer li with some margin (not on its very edge, where rounding can put an end outside)? */
+    const wellOn = (q: Vec2, li: number) => {
+      const e = 0.005;
+      return [q, { x: q.x + e, y: q.y }, { x: q.x - e, y: q.y }, { x: q.x, y: q.y + e }, { x: q.x, y: q.y - e }].every((x) => ownLayersAt(x).includes(li));
+    };
     /** Half-extent of the net's pad under q (how far an entry may run before it is out of the pad row). */
     const padExtentAt = (q: Vec2) => {
       let ext = 0;
@@ -625,52 +685,122 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       }
       nearShapes = shapes;
     };
-    /** Is cell c on layer li this net's copper (fixed copper on the grid, or a run-route of the net)? */
-    const ownCell = (li: number, c: number) => {
-      if (core[li]![c] === id) return true;
-      const i = c % W;
-      return ownRouteAt(li, { x: cx(i), y: cy((c - i) / W) }) >= 0;
+    // ---- Islands. The copper of this net (fixed shapes, and the run-routes of the net) is grouped into
+    // islands by the same rules the connectivity check uses (a trace joins a pad when one of its ends lies
+    // in the pad or it runs over the pad's centre, a trace or via when an end lies on it, a pour when an end
+    // lies in it; layers join only through one object on several layers: through-hole pads and vias). Copper
+    // that merely touches (a trace grazing a pad's edge, an SMD pad over a bottom trace) is not joined, so the
+    // router never counts a connection as made that the ratsnest still shows open.
+    interface Mem { kind: string; shapes: typeof shapes; route?: Route }
+    const mems: Mem[] = [];
+    const byUid = new Map<string, Mem>();
+    for (const sh of ownShapes) {
+      let m = byUid.get(sh.uid);
+      if (!m) byUid.set(sh.uid, (m = { kind: sh.kind, shapes: [] })), mems.push(m);
+      m.shapes.push(sh);
+    }
+    for (const rt of routes.values()) if (rt.id === id) mems.push({ kind: 'route', shapes: [], route: rt });
+    const onMem = (m: Mem, li: number, q: Vec2, extra: number) => {
+      if (m.route) {
+        for (const cp of m.route.caps) if (cp.li === li && distToSegment(q, cp.a, cp.b) <= cp.r + extra) return true;
+        return false;
+      }
+      for (const sh of m.shapes) {
+        if (layerIdx.get(sh.layer) !== li) continue;
+        if (q.x < sh.box.minX - extra - 1e-6 || q.x > sh.box.maxX + extra + 1e-6 || q.y < sh.box.minY - extra - 1e-6 || q.y > sh.box.maxY + extra + 1e-6) continue;
+        if (sh.kind === 'pad' || sh.kind === 'fill' ? sh.areas.some((ar) => inArea(q, ar)) : sh.edges.some(([a, b, rr]) => distToSegment(q, a, b) <= rr + extra)) return true;
+      }
+      return false;
     };
-    /** The net's copper group around q, flooded on the grid (4-neighbour, layers joined where copper is on both). */
-    const group = (q: Vec2): Set<number> => {
+    /** Points of a member that join it to copper they lie on: trace and route ends, via and pad centres. */
+    const endPts = (m: Mem, li: number): Vec2[] => {
+      if (m.route) {
+        const out: Vec2[] = [...m.route.vias];
+        for (const sg of m.route.segs) if (sg.li === li) out.push(sg.a, sg.b);
+        return out;
+      }
+      const out: Vec2[] = [];
+      for (const sh of m.shapes) {
+        if (layerIdx.get(sh.layer) !== li) continue;
+        if (sh.kind === 'pad') out.push({ x: (sh.box.minX + sh.box.maxX) / 2, y: (sh.box.minY + sh.box.maxY) / 2 });
+        else if (sh.kind !== 'fill') for (const [a, b] of sh.edges) out.push(a, b);
+      }
+      return out;
+    };
+    const memLayers = mems.map((m) => new Set(m.route ? m.route.caps.map((cp) => cp.li) : m.shapes.map((sh) => layerIdx.get(sh.layer)).filter((x): x is number => x !== undefined)));
+    const parent = mems.map((_, k) => k);
+    const findSet = (k: number): number => (parent[k] === k ? k : (parent[k] = findSet(parent[k]!)));
+    const flat = (m: Mem) => m.kind === 'pad' || m.kind === 'via' || m.kind === 'fill';
+    for (let x = 0; x < mems.length; x++)
+      for (let y = x + 1; y < mems.length; y++) {
+        const A = mems[x]!;
+        const B = mems[y]!;
+        if (flat(A) && flat(B) && !((A.kind === 'fill') !== (B.kind === 'fill'))) continue; // pad–pad, via–via, pad–via, fill–fill
+        for (const li of memLayers[x]!) {
+          if (!memLayers[y]!.has(li)) continue;
+          if (endPts(A, li).some((e) => onMem(B, li, e, 1e-3)) || endPts(B, li).some((e) => onMem(A, li, e, 1e-3))) {
+            parent[findSet(x)] = findSet(y);
+            break;
+          }
+        }
+      }
+    /**
+     * The island of a ratsnest end q. The ratsnest is made before the run, so q is on fixed copper (often
+     * on a pad's edge): only fixed copper at q counts, never a run-route that happens to pass there.
+     */
+    const islandOf = (q: Vec2): Set<number> => {
+      const roots = new Set<number>();
+      for (let k = 0; k < mems.length; k++) if (!mems[k]!.route) for (const li of memLayers[k]!) if (onMem(mems[k]!, li, q, 1e-6)) roots.add(findSet(k));
+      if (!roots.size) for (let k = 0; k < mems.length; k++) for (const li of memLayers[k]!) if (onMem(mems[k]!, li, q, 1e-6)) roots.add(findSet(k));
+      const out = new Set<number>();
+      for (let k = 0; k < mems.length; k++) if (roots.has(findSet(k))) out.add(k);
+      return out;
+    };
+    /** Grid states whose cell centre is on copper of the island (up to 60 000). */
+    const islandCells = (isl: Set<number>): Set<number> => {
       const seen = new Set<number>();
-      const stack: number[] = [];
-      const c0 = cellOf(q);
-      if (c0 < 0) return seen;
-      for (let li = 0; li < L; li++) if (ownCell(li, c0)) (seen.add(li * N + c0), stack.push(li * N + c0));
-      while (stack.length && seen.size < 60000) {
-        const st = stack.pop()!;
-        const li = Math.floor(st / N);
-        const c = st - li * N;
-        const i = c % W;
-        const j = (c - i) / W;
-        const next = (ns: number, lj: number, nc: number) => {
-          if (!seen.has(ns) && ownCell(lj, nc)) (seen.add(ns), stack.push(ns));
-        };
-        if (i > 0) next(st - 1, li, c - 1);
-        if (i < W - 1) next(st + 1, li, c + 1);
-        if (j > 0) next(st - W, li, c - W);
-        if (j < H - 1) next(st + W, li, c + W);
-        for (let lj = 0; lj < L; lj++) if (lj !== li) next(lj * N + c, lj, c);
+      for (const k of isl) {
+        const m = mems[k]!;
+        for (const li of memLayers[k]!) {
+          let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+          if (m.route) for (const cp of m.route.caps) if (cp.li === li) (bx0 = Math.min(bx0, cp.a.x - cp.r, cp.b.x - cp.r)), (by0 = Math.min(by0, cp.a.y - cp.r, cp.b.y - cp.r)), (bx1 = Math.max(bx1, cp.a.x + cp.r, cp.b.x + cp.r)), (by1 = Math.max(by1, cp.a.y + cp.r, cp.b.y + cp.r));
+          for (const sh of m.shapes) if (layerIdx.get(sh.layer) === li) (bx0 = Math.min(bx0, sh.box.minX)), (by0 = Math.min(by0, sh.box.minY)), (bx1 = Math.max(bx1, sh.box.maxX)), (by1 = Math.max(by1, sh.box.maxY));
+          const i0 = Math.max(0, Math.ceil((bx0 - minX) / g - 1e-9));
+          const i1 = Math.min(W - 1, Math.floor((bx1 - minX) / g + 1e-9));
+          const j0 = Math.max(0, Math.ceil((by0 - minY) / g - 1e-9));
+          const j1 = Math.min(H - 1, Math.floor((by1 - minY) / g + 1e-9));
+          for (let j = j0; j <= j1 && seen.size < 60000; j++)
+            for (let i = i0; i <= i1; i++) {
+              const st = li * N + j * W + i;
+              if (!seen.has(st) && onMem(m, li, { x: cx(i), y: cy(j) }, 0)) seen.add(st);
+            }
+        }
       }
       return seen;
     };
-    const groupA = group(r.a);
-    const cB = cellOf(r.b);
-    if (cB >= 0 && [...Array(L).keys()].some((li) => groupA.has(li * N + cB))) return { ok: false, reason: '', joined: true };
-    const groupB = group(r.b);
+    const islA = islandOf(r.a);
+    const islB = islandOf(r.b);
+    if ([...islB].some((k) => islA.has(k))) return { ok: false, reason: '', joined: true };
+    const groupA = islandCells(islA);
+    const groupB = islandCells(islB);
     const seeds: End = new Map();
     const goals: End = new Map();
-    // A group cell is a start or end only if its centre is really on the net's copper (the grid marks
-    // cells whose centre is on a pad's edge too) and the trace has room there.
-    const onOwn = (st: number) => {
+    // A cell is a start or end only if its centre is on the island's copper with some margin (not on its very
+    // edge, where rounding can put the end outside) and the trace has room there.
+    const onIsland = (isl: Set<number>, li: number, q: Vec2) => {
+      const e = 0.005;
+      return [q, { x: q.x + e, y: q.y }, { x: q.x - e, y: q.y }, { x: q.x, y: q.y + e }, { x: q.x, y: q.y - e }].every((x) => [...isl].some((k) => memLayers[k]!.has(li) && onMem(mems[k]!, li, x, 0)));
+    };
+    const onOwn = (st: number, isl: Set<number>) => {
       const li = Math.floor(st / N);
       const c = st % N;
       const i = c % W;
-      return usable(li, c) && ownLayersAt({ x: cx(i), y: cy((c - i) / W) }).includes(li);
+      return usable(li, c) && onIsland(isl, li, { x: cx(i), y: cy((c - i) / W) });
     };
-    for (const st of groupA) if (onOwn(st)) seeds.set(st, { cost: 0, pts: [] });
-    for (const st of groupB) if (onOwn(st)) goals.set(st, { cost: 0, pts: [] });
+    // A cell on copper of both islands (they overlap without being joined, e.g. a trace grazing a pad) is no
+    // start: a path must leave island A and end in island B, so it gets at least one piece of trace.
+    for (const st of groupA) if (!groupB.has(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
+    for (const st of groupB) if (onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
     entries(r.a, seeds);
     entries(r.b, goals);
     if (!seeds.size || !goals.size) return { ok: false, reason: 'no room to leave the pad with the current clearances' };
@@ -691,8 +821,33 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const dy = j < gj0 ? gj0 - j : j > gj1 ? j - gj1 : 0;
       return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
     };
-    /** Extra cost of entering a cell: run-routes in the way (soft only) and the cell's history. */
-    const extra = (li: number, c: number) => (soft ? pres * crowd(li, c) : 0) + hist[li * N + c]!;
+    /**
+     * Proximity (P8f): cost of running right next to other nets' copper (fixed copper and run-routes),
+     * fading to 0 one trace pitch (width + clearance) beyond the closest legal distance, so a long parallel
+     * run next to another net costs more than a short pass, and traces keep some air where there is room.
+     */
+    const band = width + cn;
+    const proximity = (li: number, c: number) => {
+      const s = li * N + c;
+      if (proxStamp[s] === call) return proxVal[s]!;
+      let v = 0;
+      if (proxK > 0) {
+        const f = field[li]!;
+        let m = Math.min(f.zd[c]! - cn, f.ze[c]!);
+        if (f.o1[c] !== id) m = Math.min(m, f.d1[c]! - cn, f.e1[c]!);
+        if (f.o2[c] !== id) m = Math.min(m, f.d2[c]! - cn, f.e2[c]!);
+        const i = c % W;
+        const p = { x: cx(i), y: cy((c - i) / W) };
+        for (const cp of capsNear(li, p)) if (cp.id !== id) m = Math.min(m, distToSegment(p, cp.a, cp.b) - cp.r - Math.max(cn, cp.cl));
+        const ex = m - halfFull - slackFull;
+        if (ex < band) v = proxK * (1 - Math.max(0, ex) / band);
+      }
+      proxStamp[s] = call;
+      proxVal[s] = v;
+      return v;
+    };
+    /** Extra cost of entering a cell: run-routes in the way (soft only), the cell's history and proximity. */
+    const extra = (li: number, c: number) => (soft ? pres * crowd(li, c) : 0) + hist[li * N + c]! + proximity(li, c);
     /** Direction of the last step into state s (grid units), or null after a via or at a plain start. */
     const predDir = (s: number, li: number, i: number, j: number): [number, number] | null => {
       const p = from[s]!;
@@ -739,7 +894,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const i = c % W;
       const j = (c - i) / W;
       const pd = predDir(s, li, i, j);
-      for (const [di, dj, w] of DIRS) {
+      const sk = stepK[li]!;
+      for (let dk = 0; dk < 8; dk++) {
+        const [di, dj, w0] = DIRS[dk]!;
+        const w = w0 * sk[dk]!;
         // Turns: straight is free, 45° costs little, 90° a little more, acute never.
         let turn = 0;
         if (pd) {
@@ -956,8 +1114,8 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
      */
     const trimEnds = (li: number, P: Vec2[], first: boolean, last: boolean) => {
       const short = (a: Vec2, b: Vec2) => Math.hypot(b.x - a.x, b.y - a.y) < Math.max(setback, width);
-      if (first && P.length > 2 && short(P[0]!, P[1]!) && ownLayersAt(P[1]!).includes(li)) P = P.slice(1);
-      if (last && P.length > 2 && short(P[P.length - 2]!, P[P.length - 1]!) && ownLayersAt(P[P.length - 2]!).includes(li)) P = P.slice(0, -1);
+      if (first && P.length > 2 && short(P[0]!, P[1]!) && wellOn(P[1]!, li)) P = P.slice(1);
+      if (last && P.length > 2 && short(P[P.length - 2]!, P[P.length - 1]!) && wellOn(P[P.length - 2]!, li)) P = P.slice(0, -1);
       return P;
     };
     for (const [ri, sgm] of raw.entries()) {
@@ -981,11 +1139,11 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     nearShapes = shapes;
     for (const v of vias) for (let li = 0; li < L; li++) route.caps.push({ li, a: v, b: v, r: viaD / 2, id, cl: cn, route: key });
     // Run-routes of this net that the new route starts or ends on: it depends on them.
-    const ends = [route.segs[0]?.a, route.segs[route.segs.length - 1]?.b];
-    for (const [k, q] of ends.entries()) {
+    // Checked on every layer: a route may end in a via onto copper on the other layer.
+    const ends = [route.segs[0]?.a ?? vias[0], route.segs[route.segs.length - 1]?.b ?? vias[vias.length - 1], ...vias];
+    for (const q of ends) {
       if (!q) continue;
-      const li = route.segs[k === 0 ? 0 : route.segs.length - 1]!.li;
-      for (const cp of capsNear(li, q)) if (cp.id === id && distToSegment(q, cp.a, cp.b) <= cp.r) route.deps.add(cp.route);
+      for (let li = 0; li < L; li++) for (const cp of capsNear(li, q)) if (cp.id === id && cp.route !== key && distToSegment(q, cp.a, cp.b) <= cp.r) route.deps.add(cp.route);
     }
     // Exact conflicts with run-routes of other nets: the routes to rip up for this one.
     const victims = new Set<number>();

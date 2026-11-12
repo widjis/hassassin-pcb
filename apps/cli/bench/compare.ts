@@ -55,7 +55,7 @@ const svgOf = async (path: string, title: string, onlyAuto: boolean) => {
   return { svg: `<svg viewBox="0 0 ${W.toFixed(2)} ${H.toFixed(2)}" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`, title, n, v };
 };
 const a = await svgOf(origPath, 'Original (hand-routed in KiCad)', false);
-const b = await svgOf(routedPath, 'Hassassin autorouter (P8e, style 45)', true);
+const b = await svgOf(routedPath, 'Hassassin autorouter', true);
 await writeFile(out, `<!doctype html><meta charset="utf-8"><title>RGB lamp r6 routing</title><style>
 body{margin:0;background:#111;color:#ddd;font:13px system-ui} .row{display:flex;gap:12px;padding:12px} .col{flex:1;min-width:0}
 h2{font-size:14px;margin:4px 0} svg{width:100%;height:auto;background:#1a1a1a;border:1px solid #333}

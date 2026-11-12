@@ -15,6 +15,9 @@
  * `--kicad-rules`: for a `.kicad_pcb`, apply the net classes and board rules of the `.kicad_pro` next to it
  * (track width, clearance, via size, minimum track, copper-to-edge clearance), which the importer does not
  * bring over yet, so the router works to the same rules as the original design.
+ * `--opt key=value` (repeatable): an `autoroute` tool argument for the boards, e.g. `--opt direction_cost=1`
+ * `--opt order=short` (numbers are read as numbers, `{…}` as JSON), to compare weights (P8f).
+ * `--drc`: list the DRC errors left after routing.
  * `--save <dir>`: also write `<board>.original.hpcb` (as read, rules applied) and `<board>.routed.hpcb`
  * (after the run) into that folder, to look at in the editor.
  */
@@ -86,7 +89,7 @@ function line(name: string, f: RouteFigures, extra = ''): string {
   return (
     `${name}: ${f.routed}/${f.connections} routed (${f.failed} failed, ${f.unroutedAfter} unrouted after), ` +
     `${f.vias} vias, ${f.length} mm, ${f.ms} ms, DRC errors ${f.drcErrors} ${JSON.stringify(f.drcByKind)}, ` +
-    `sharp corners ${f.sharpCorners}, off-angle ${f.offAngle}, bends/connection ${f.bendsPerConnection}; failed: ${JSON.stringify(f.reasons)}${extra}`
+    `sharp corners ${f.sharpCorners}, off-angle ${f.offAngle}, bends/connection ${f.bendsPerConnection}, against direction ${f.againstDirection}, grid ${f.grid}; failed: ${JSON.stringify(f.reasons)}${extra}`
   );
 }
 
@@ -97,6 +100,13 @@ const before = args.includes('--before');
 const kicadRules = args.includes('--kicad-rules');
 const saveAt = args.indexOf('--save');
 const saveDir = saveAt >= 0 ? args[saveAt + 1] : undefined;
+const routeArgs: Record<string, unknown> = {};
+for (const [i, a] of args.entries()) {
+  if (a !== '--opt') continue;
+  const [k, ...rest] = (args[i + 1] ?? '').split('=');
+  const v = rest.join('=');
+  routeArgs[k!] = v.startsWith('{') ? JSON.parse(v) : v !== '' && !Number.isNaN(Number(v)) ? Number(v) : v;
+}
 const save = async (name: string, tag: string, p: Project) => {
   if (!saveDir) return;
   await mkdir(saveDir, { recursive: true });
@@ -111,7 +121,7 @@ if (args.includes('--fixtures')) {
     console.log(json ? JSON.stringify({ board: name, ...f }) : line(name, f));
   }
 }
-for (const path of args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--save')) {
+for (const path of args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--save' && args[i - 1] !== '--opt')) {
   const { name, project, replayed } = await readBoard(path);
   if (kicadRules && path.toLowerCase().endsWith('.kicad_pcb')) console.log(`${name}: ${await applyKicadRules(project, path)}`);
   if (before) {
@@ -124,7 +134,9 @@ for (const path of args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== 
   }
   await save(basename(path), 'original', project);
   const ripped = ripUpUnpoured(project);
-  const f = await measureAutoroute(project);
+  const f = await measureAutoroute(project, routeArgs);
   await save(basename(path), 'routed', project);
+  // `--drc`: list the DRC errors left after routing.
+  if (args.includes('--drc')) for (const v of runDrc(project.doc, project.engine, project.copper).violations) if (v.severity === 'error') console.log(`  ${v.kind}: ${v.message}`);
   console.log(json ? JSON.stringify({ board: name, replayed, ripped, ...f }) : line(name, f, ` [log entries replayed: ${replayed}, items ripped up: ${ripped}]`));
 }

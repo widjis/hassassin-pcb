@@ -114,3 +114,42 @@ describe('autoroute fixtures: corner styles (P8e)', { timeout: 120_000 }, () => 
     }
   });
 });
+
+// P8f: layer directions, via cost, proximity and order.
+describe('autoroute fixtures: costs and order (P8f)', { timeout: 120_000 }, () => {
+  it('layer directions: a strong preference runs less copper against the layers\' directions, and routeDirection=any turns it off', async () => {
+    const free = await measureAutoroute(await fixtureReversedBus(), { direction_cost: 1 });
+    const strict = await measureAutoroute(await fixtureReversedBus(), { direction_cost: 4 });
+    expect(strict.failed).toBe(0);
+    expect(strict.drcByKind).toEqual({});
+    expect(strict.againstDirection).toBeLessThan(free.againstDirection);
+    const p = await fixtureReversedBus();
+    await runTool(p, 'set_rule', { target: 'net', rule: 'routeDirection', value: 'any' });
+    const any = await measureAutoroute(p, { direction_cost: 4 });
+    expect([any.vias, any.length]).toEqual([free.vias, free.length]);
+  });
+  it('the viaCost rule: dearer vias never give more of them', async () => {
+    const count = async (v: string) => {
+      const p = await fixtureReversedBus();
+      await runTool(p, 'set_rule', { target: 'net', rule: 'viaCost', value: v });
+      return measureAutoroute(p);
+    };
+    const cheap = await count('0.5mm');
+    const dear = await count('10mm');
+    expect(dear.failed).toBe(0);
+    expect(dear.vias).toBeLessThanOrEqual(cheap.vias);
+  });
+  it('autoPlacePriority routes a net first, whatever the order', async () => {
+    const p = await fixtureReversedBus();
+    const { report: plain } = planAutoroute(p.doc, p.engine, p.copper);
+    const last = plain.routed[plain.routed.length - 1]!.net;
+    const net = [...p.doc.nodes.values()].find((n) => n.type === 'net' && n.name === last)!;
+    await runTool(p, 'set_rule', { target: `net#${JSON.stringify(net.name)}`, rule: 'autoPlacePriority', value: '5' });
+    const { report } = planAutoroute(p.doc, p.engine, p.copper);
+    expect(report.routed[0]!.net).toBe(last);
+  });
+  it('graze: copper that only touches a pad does not count as connected; the pad is still routed (P8f)', async () => {
+    const f = await figures('graze');
+    expect([f.failed, f.unroutedAfter]).toEqual([0, 0]);
+  });
+});

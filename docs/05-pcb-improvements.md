@@ -336,6 +336,32 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - The signal classes of P16 set the costs per net: e.g. a high via cost and arc corners for RF, extra
     spacing from switching nodes for analog and sensitive nets, impedance width for high-speed nets.
   - The weights are options of the `autoroute` tool and the CLI, so the owner can try values.
+  - *Progress (2026-11-12), first part:* done: rule `routeDirection` (`alternate` = top horizontal, next
+    vertical …, `alternate-v`, `any`; layers are not nodes, so the rule gives the pattern over the stackup
+    and the tool option `directions` sets single layers), a step against the direction costs
+    `direction_cost` (default 1.5) times more, a 45° step half as much extra; rule `viaCost` (a length of
+    trace, default 4 mm, so the price no longer shrinks with the grid; it was 12 grid steps = 1.2 mm on a
+    0.1 mm grid); `proximity_cost` (default 0.3 per step right next to other nets' copper, fading out one
+    trace pitch away); `autoPlacePriority` routes first; `order=difficulty` (fine-pitch pads, then long
+    connections) as an option. All are `autoroute` arguments and `bench/autoroute.ts --opt key=value`;
+    the benchmark also reports the share of length against the layer directions.
+    Measured on the RGB lamp copy (P8a), the defaults chosen from about 20 runs: shortest-first beat
+    difficulty order on every pair (e.g. 35 vs 49 vias), a 4 mm via cost cut vias by a quarter, direction
+    cost 2 or more cost length and vias (55–89 vias), 1.5 kept them at the hand-routing level. Results
+    swing about ±10 % between nearby weights. With the defaults: 59 / 59 routed, **35 vias, 883 mm**
+    (hand routing 38 vias, 901 mm; P8e 51 vias, 1037 mm), 0 DRC errors from routing, 2 corners of 90°
+    left, 44 % of the length against the layer directions (the hand routing: 54 %), 22 s (P8e: 10.6 s;
+    proximity and the dearer vias make the search wider, P8g moves it off the UI thread).
+    The runs found three bugs, fixed here, where the router counted a connection as made that the
+    ratsnest still showed open: (1) its grid flood joined copper of two layers wherever both lay over one
+    another (an SMD pad over a bottom trace), (2) it joined copper that only touches (a trace grazing a
+    pad's edge), while the connectivity check needs a trace end in the pad or the trace over its centre,
+    (3) a route ending in a via on another route did not record that it rests on it, so ripping that
+    route left it dangling. The flood is replaced by islands built with the connectivity check's own
+    rules; fixture `graze` reproduces (2). Also: route ends never sit on a pad's very edge.
+    Still open in P8f: fanout first, the reference-plane cost, bundles, and the per-class costs (with P16).
+    The long B.Cu runs round the left board edge are still there, though shorter in total than the hand
+    routing.
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.
