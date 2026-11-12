@@ -311,8 +311,15 @@ export function resolveTargets(p: Project, target: string): DocNode[] {
   try {
     return querySelectorAll(p.doc, t);
   } catch (e) {
-    throw new ToolError(`"${t}" is not a part, pin, uid or valid selector: ${(e as Error).message}`);
+    const quoted = quoteSelectorIds(t);
+    const hint = quoted !== t ? ` Names with ( ) : , or spaces must be quoted: ${quoted}` : '';
+    throw new ToolError(`"${t}" is not a part, pin, uid or valid selector: ${(e as Error).message}.${hint}`);
   }
+}
+
+/** Quote every #id in a selector that holds characters the bare form does not allow, e.g. net#Net-(U1-SW1) → net#"Net-(U1-SW1)". */
+export function quoteSelectorIds(sel: string): string {
+  return sel.replace(/#(?!["'])([^\s>,[\]"']+)/g, (m, id: string) => (/[():*=]/.test(id) ? `#"${id}"` : m));
 }
 
 function one(p: Project, target: string, type?: DocNode['type']): DocNode {
@@ -427,7 +434,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'query',
-    description: 'Find objects with a CSS-like selector. Types: element (PCB part), pad, trace, via, fill (pour), net, symbol, pin, wire, label, sheet. Examples: "element", "#U1", "net[netClass=ground]", "net#GND > trace", "symbol[Value^=10k]", "pad[net=GND]".',
+    description: 'Find objects with a CSS-like selector. Types: element (PCB part), pad, trace, via, fill (pour), net, symbol, pin, wire, label, sheet. Examples: "element", "#U1", "net[netClass=ground]", "net#GND > trace", "symbol[Value^=10k]", "pad[net=GND]". Quote names with ( ) : , or spaces, as KiCad net names often have: net#"Net-(U1-SW1)" > trace, pad[net="Net-(R1-Pad2)"].',
     mutates: false,
     input: { type: 'object', properties: { selector: { type: 'string', description: 'Selector' }, limit: { type: 'number', description: 'Max results (default 100)' } }, required: ['selector'] },
     run: (p, a) => {
