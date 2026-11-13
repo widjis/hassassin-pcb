@@ -3,7 +3,7 @@
  * onto nets, and the default rulesets that give each class its width, clearance, via cost and corner style.
  */
 import { describe, expect, it } from 'vitest';
-import { clearanceForVoltage, impedance, lineGeometry, netSignals, stackupOf, widthForCurrent } from '@hassassin/core';
+import { clearanceForVoltage, impedance, lineGeometry, netSignals, segSegDist, stackupOf, widthForCurrent, type Vec2 } from '@hassassin/core';
 import { fixtureBus, measureAutoroute, newProject, runTool, type Project } from '@hassassin/tools';
 
 async function board(): Promise<Project> {
@@ -148,5 +148,33 @@ describe('signal classes (P16)', () => {
     const w2 = rule(p, 'DATA', 'traceWidth') as number;
     expect(w2).toBeLessThan(w);
     expect(Math.abs(impedance(lineGeometry(stackupOf(p.doc, p.copper), 'F.Cu')!, w2) - 50)).toBeLessThan(0.5);
+  });
+
+  it('switching nets keep their classClearance from analog / sensitive traces', { timeout: 60_000 }, async () => {
+    // Edge-to-edge distance between the autorouted traces of two nets.
+    const gap = (p: Project, a: string, b: string) => {
+      const segs = (net: string) =>
+        [...p.doc.nodes.values()]
+          .filter((n) => n.type === 'trace' && p.doc.nodes.get(n.parent!)?.name === net)
+          .map((t) => ({ a: p.engine.get(t.uid, 'start')!.value as Vec2, b: p.engine.get(t.uid, 'end')!.value as Vec2, w: p.engine.get(t.uid, 'traceWidth')!.value as number, l: p.engine.get(t.uid, 'layer')!.value }));
+      let m = Infinity;
+      for (const x of segs(a)) for (const y of segs(b)) if (x.l === y.l) m = Math.min(m, segSegDist(x.a, x.b, y.a, y.b) - x.w / 2 - y.w / 2);
+      return m;
+    };
+    const plain = await fixtureBus();
+    await measureAutoroute(plain);
+    expect(gap(plain, 'B4', 'B5')).toBeLessThan(2);
+    expect(gap(plain, 'B4', 'B3')).toBeLessThan(2);
+    const p = await fixtureBus();
+    await runTool(p, 'set_pin_signal', { target: 'B4', signal: 'switching', net: true });
+    await runTool(p, 'set_pin_signal', { target: 'B5', signal: 'sensitive', net: true });
+    await runTool(p, 'set_pin_signal', { target: 'B3', signal: 'analog', net: true });
+    // The default is 1 mm; this bus already keeps 1.5 mm, so ask for more on the switching net.
+    await runTool(p, 'set_rule', { target: 'net#"B4"', rule: 'classClearance', value: 'analog(2mm) sensitive(2mm)' });
+    const f = await measureAutoroute(p);
+    expect(f.failed).toBe(0);
+    expect(f.drcByKind).toEqual({});
+    expect(gap(p, 'B4', 'B5')).toBeGreaterThanOrEqual(2 - 1e-3);
+    expect(gap(p, 'B4', 'B3')).toBeGreaterThanOrEqual(2 - 1e-3);
   });
 });

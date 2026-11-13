@@ -163,6 +163,36 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     return k ? clearanceFor(k, 'pad') : 0.2;
   };
 
+  // Clearance between nets of particular signal classes (P16, rule `classClearance`, e.g. switching nets
+  // kept away from analog and sensitive ones): the larger of the two nets' values, 0 when neither asks.
+  // It applies between traces and vias, not to pads (two neighbouring pins of a header could never be
+  // routed otherwise), and is checked against the routes of this run and when a piece is placed; the
+  // distance field (copper that was on the board before) keeps the ordinary clearance.
+  const normCls = (s: unknown) => (typeof s === 'string' ? s.replace(/-/g, '').toLowerCase() : '');
+  const clsOf = new Map<number, string>();
+  const ccOf = new Map<number, KeepOut>();
+  for (const n of netNode.values()) {
+    const id = netId(n.name);
+    if (n.props.signal) clsOf.set(id, normCls(n.props.signal));
+    const k = engine.get(n.uid, 'classClearance')?.value as KeepOut | undefined;
+    if (k && Object.keys(k.byType ?? {}).length) ccOf.set(id, { byType: Object.fromEntries(Object.entries(k.byType).map(([t, v]) => [normCls(t), v])) });
+  }
+  const pairMemo = new Map<number, number>();
+  let maxPairCl = 0;
+  for (const k of ccOf.values()) for (const v of Object.values(k.byType)) maxPairCl = Math.max(maxPairCl, v);
+  const pairCl = (a: number, b: number): number => {
+    if (!ccOf.size || a === b || a < 0 || b < 0) return 0;
+    const key = a * 1048576 + b;
+    let v = pairMemo.get(key);
+    if (v === undefined) {
+      const ca = clsOf.get(a);
+      const cb = clsOf.get(b);
+      v = Math.max((cb && ccOf.get(a)?.byType[cb]) || 0, (ca && ccOf.get(b)?.byType[ca]) || 0);
+      pairMemo.set(key, v);
+    }
+    return v;
+  };
+
   // Per layer: `core` = copper owner (net id, -1 for no-net copper / outside the board).
   const core = layers.map(() => new Int32Array(N));
   // Distance field per layer. Slot 1 and 2: the two nearest different owners of copper near the
@@ -285,7 +315,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         for (const sh of [...shapes, ...fans.map((f) => f.stub)]) {
           if (!ok) break;
           if (sh.layer !== pad.layer || sh.net === pad.net || sh.kind === 'fill') continue;
-          const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace')) - 1e-6;
+          const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace'), sh.kind === 'pad' ? 0 : pairCl(netId(pad.net), netId(sh.net))) - 1e-6;
           if (sh.box.minX - need > Math.max(a.x, e.x) || sh.box.maxX + need < Math.min(a.x, e.x) || sh.box.minY - need > Math.max(a.y, e.y) || sh.box.maxY + need < Math.min(a.y, e.y)) continue;
           if (sh.edges.some(([p, q, rr]) => segSegDist(a, e, p, q) - rr < need) || (sh.kind === 'pad' && sh.areas[0] && inArea(e, sh.areas[0]))) ok = false;
         }
@@ -308,6 +338,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     reachC = Math.max(reachC, netClear(n));
   }
   for (const s of shapes) reachC = Math.max(reachC, clearanceFor(s.keepOut, 'trace'));
+  reachC = Math.max(reachC, maxPairCl);
   const reach = reachW + reachC + g * 1.5;
 
   /** Mark copper of `id` on layer `li` (copper core, and distances around it). `cl` = clearance it demands. */
@@ -666,7 +697,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       let n = 0;
       for (const cp of capsNear(li, p)) {
         if (cp.id === id) continue;
-        if (distToSegment(p, cp.a, cp.b) - cp.r < half + slack + Math.max(cn, cp.cl) - 1e-6) {
+        if (distToSegment(p, cp.a, cp.b) - cp.r < half + slack + Math.max(cn, cp.cl, pairCl(id, cp.id)) - 1e-6) {
           n++;
           out?.add(cp.route);
         }
@@ -796,12 +827,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       }
       for (const sh of nearShapes) {
         if (sh.layer !== layers[li] || sh.net === r.net || sh.kind === 'fill') continue;
-        const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace')) - 1e-6;
+        const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace'), sh.kind === 'pad' ? 0 : pairCl(id, netId(sh.net))) - 1e-6;
         if (sh.box.minX - need > Math.max(a.x, b.x) || sh.box.maxX + need < Math.min(a.x, b.x) || sh.box.minY - need > Math.max(a.y, b.y) || sh.box.maxY + need < Math.min(a.y, b.y)) continue;
         for (const [e0, e1, er] of sh.edges) if (segSegDist(a, b, e0, e1) - er < need) return false;
         if (sh.kind === 'pad' && sh.areas[0] && (inArea(a, sh.areas[0]) || inArea(b, sh.areas[0]))) return false;
       }
-      if (!soft) for (const cp of capsAlong(li, a, b)) if (cp.id !== id && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl) - 1e-6) return false;
+      if (!soft) for (const cp of capsAlong(li, a, b)) if (cp.id !== id && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl, pairCl(id, cp.id)) - 1e-6) return false;
       return true;
     };
     type End = Map<number, { cost: number; pts: Vec2[]; dir?: [number, number]; strict?: boolean }>;
@@ -1086,7 +1117,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         if (f.o2[c] !== id) m = Math.min(m, f.d2[c]! - cn, f.e2[c]!);
         const i = c % W;
         const p = { x: cx(i), y: cy((c - i) / W) };
-        for (const cp of capsNear(li, p)) if (cp.id !== id) m = Math.min(m, distToSegment(p, cp.a, cp.b) - cp.r - Math.max(cn, cp.cl));
+        for (const cp of capsNear(li, p)) if (cp.id !== id) m = Math.min(m, distToSegment(p, cp.a, cp.b) - cp.r - Math.max(cn, cp.cl, pairCl(id, cp.id)));
         const ex = m - halfFull - slackFull;
         if (ex < band) v = proxK * (1 - Math.max(0, ex) / band);
       }

@@ -42,7 +42,7 @@ export function systemDefaults(): Ruleset[] {
     def('Ground signal', 'net[signal=ground]', 'Nets of class ground', { traceWidth: '0.5mm' }),
     def('High-current net', 'net[signal=high-current]', 'Nets that carry more than about 1 A', { traceWidth: '1mm', viaDiameter: '0.8mm', viaHole: '0.4mm' }),
     def('High-voltage net', 'net[signal=high-voltage]', 'Nets above about 50 V', { keepOut: '0.6mm' }),
-    def('Switching net', 'net[signal=switching]', 'Switch nodes of converters: short and wide', { traceWidth: '0.6mm', viaDiameter: '0.8mm', viaHole: '0.4mm', viaCost: '8mm' }),
+    def('Switching net', 'net[signal=switching]', 'Switch nodes of converters: short and wide', { traceWidth: '0.6mm', viaDiameter: '0.8mm', viaHole: '0.4mm', viaCost: '8mm', classClearance: 'analog(1mm) sensitive(1mm)' }),
     def('Clock net', 'net[signal=clock]', 'Clocks: few vias, over a solid plane', { keepOut: '0.3mm', viaCost: '8mm', planeGapCost: '1' }),
     def('High-speed net', 'net[signal=high-speed]', 'Fast interfaces: few vias, over a solid plane', { keepOut: '0.3mm', viaCost: '10mm', planeGapCost: '2' }),
     def('Differential pair', 'net[signal=diff-pair]', 'Halves of a differential pair', { viaCost: '10mm', planeGapCost: '2' }),

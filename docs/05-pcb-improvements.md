@@ -371,9 +371,20 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     shown as such. Fixed on the way: the panel's lists (`len-list`, also the routed lengths) shrank to
     zero height inside the panel's flex column, so the lengths list had never shown; they no longer
     shrink (inline style in `board.ts`, `styles.css` left alone).
+  - *Progress (2026-11-13), fifth part:* spacing between classes. New rule `classClearance` (keepout
+    syntax, e.g. `analog(1mm) sensitive(1mm)`; hyphenated classes are written without the hyphen,
+    `highspeed`), added at the end of `ruleDefs.ts`; the `switching` default sets
+    `analog(1mm) sensitive(1mm)`. The router keeps the larger of the two nets' values between their
+    traces and vias: in the search against the routes of this run, when a piece is placed or tidied,
+    in the fanout stubs, and in the proximity cost. Pads are left out (two neighbouring header pins of a
+    switching and a sensitive net could never be routed otherwise), and copper that was on the board
+    before routing keeps the ordinary clearance (the distance field has no room for a per-pair value);
+    DRC does not check it yet (PM3). Test: on the bus fixture with a switching net between an analog
+    and a sensitive one and 2 mm asked, both neighbours stay at least 2 mm away (1.55 mm without the
+    rule), with no DRC errors. On the RGB lamp, with classes applied, the buck's switch node now keeps
+    1 mm from FB / COMP / FREQ: 59/59, 35 vias, 881.9 mm (882.4 mm without).
   - Still open in P16: the other parameters (frequency, pair partner, length group, interface presets);
-    extra spacing between `switching` and `analog` / `sensitive` nets
-    (a per-pair clearance the rules cannot express yet); the class in `project_status` (outside the
+    the class in `project_status` (outside the
     PM2 list: to be asked); the owner's review of the benchmark boards'
     classes.
 - [ ] **P8f. Layer directions, fanout and cost tuning.**

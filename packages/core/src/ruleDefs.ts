@@ -74,6 +74,7 @@ const defs: RuleDef[] = [
   { name: 'routeDirection', label: 'Route direction', kind: 'enum', inheritable: true, options: ['alternate', 'alternate-v', 'any'], help: 'Autorouter: preferred direction per copper layer. alternate (default) = top layer horizontal, the next vertical, and so on; alternate-v = top vertical; any = no preference. Runs against a layer\'s direction cost more.' },
   { name: 'viaCost', label: 'Via cost', kind: 'length', inheritable: true, help: 'Autorouter: a via costs as much as this length of trace (default 4 mm).' },
   { name: 'cornerSetback', label: 'Corner setback', kind: 'length', inheritable: true, help: 'How far before a corner its 45° piece or arc starts (default: 2 × trace width).' },
+  { name: 'classClearance', label: 'Clearance to signal classes', kind: 'keepout', inheritable: true, help: 'Autorouter: clearance from nets of the named signal classes, e.g. "analog(1mm) sensitive(1mm)" on switching nets (write high-speed as highspeed). Counts both ways; the larger value wins.' },
 ];
 
 export const RULE_DEFS: ReadonlyMap<string, RuleDef> = new Map(defs.map((d) => [d.name, d]));
