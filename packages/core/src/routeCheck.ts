@@ -84,6 +84,8 @@ export interface AutorouteSummary {
   grid: number;
   fanouts: number;
   bundled: number;
+  /** Connections routed by shoving routes aside instead of ripping them up (P9). */
+  shoved: number;
 }
 
 /** The figures the `autoroute` tool, the CLI bench and the Board panel all report (P8g). */
@@ -103,5 +105,6 @@ export function autorouteSummary(report: AutorouteReport): AutorouteSummary {
     grid: report.grid,
     fanouts: report.fanouts ?? 0,
     bundled: report.bundled ?? 0,
+    shoved: report.shoved ?? 0,
   };
 }

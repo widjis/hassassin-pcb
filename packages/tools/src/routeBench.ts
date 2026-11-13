@@ -45,6 +45,8 @@ export interface RouteFigures {
   fanouts: number;
   /** Connections in a bundle (neighbouring pins at both ends, P8f). */
   bundled: number;
+  /** Connections routed by shoving others aside (P9). */
+  shoved: number;
   /**
    * Share of the straight autorouted length (0–1) that runs against its layer's default direction (P8f:
    * even copper layers horizontal, odd ones vertical); 45° pieces count half.
@@ -218,6 +220,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     checkMs: r.checkMs ?? 0,
     fanouts: r.fanouts,
     bundled: r.bundled,
+    shoved: r.shoved ?? 0,
     againstDirection: againstDirection(p.doc, p.engine, p.copper),
     offPlane: offPlane(p.doc, p.engine, p.copper),
   };

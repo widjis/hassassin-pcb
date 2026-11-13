@@ -668,9 +668,25 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     laid on a pad are refused. Found on the way: the first octagon (sides along the pusher) could not hold
     a group of pieces, and B5 then pushed B4 back into the new copper; the board-axes octagon round the
     group fixed both.
-  - Still open in P9: the autorouter's use of it (a failing connection first tries to shove its
-    neighbours: the router's run-routes would need the same walk round in its own model); moving vias;
-    smoother corners on the way round (it keeps 45° geometry but may leave short jogs).
+  - *Progress (2026-11-13), second part:* the autorouter uses it. The walk round is now `shoveChains`, on
+    any set of segments with the clearance and the fixed points given by the caller; `planShove` wraps
+    it for the board's traces. In the rip-up loop, a connection whose route runs into routes of other
+    nets first tries to shove them (`tryShove`): their segments are walked round the new route, the
+    moved routes are checked like any piece of route (fixed copper, board edge, every other route, pads
+    entered only by their own net) and every route resting on a moved one must still touch it;
+    otherwise all goes back and the routes in the way are ripped as before. Option `shove` (default
+    true; `shove=false` turns it off), count `shoved` in the report, the tool's summary and the bench
+    line. Where the way round meets the hull at 90° or more, the corner is cut with a short 45° piece on
+    the outer side (without it the RGB lamp got one more sharp corner).
+    Measured: mcu with 90 corners now routes 32 / 32 (31 without), 4 connections shoved, no DRC error;
+    with 45° and arc corners unchanged (32 / 32, and 30 / 32: there the routes in the way end on pads or
+    stubs inside the hull, which do not move). RGB lamp 59 / 59, 35 vias, 882.2 mm (882.4), 1 sharp
+    corner, bends per connection 3.2 (3.1). Other fixtures unchanged. Tests: mcu with 90 corners fails a
+    connection with `shove=false` and routes all with the shove; mcu is back in the 90-corner style test.
+    A first try that shoved only after the rip-up rounds, for connections still open, never succeeded
+    (the same pad-bound chains).
+  - Still open in P9: moving vias; pushing a trace whose pad end lies inside the hull (it would need its
+    pad entry re-laid, not walked round).
 - [ ] **P10. Differential pairs and length tuning (automatic).**
   - Pairs are found by name (as today) or set by the `diff-pair` class with a partner (P16).
   - **Width and gap from the impedance.** The pair's target differential impedance (rule `diffImpedance`,

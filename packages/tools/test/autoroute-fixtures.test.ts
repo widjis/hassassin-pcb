@@ -111,7 +111,8 @@ describe('autoroute fixtures: corner styles (P8e)', { timeout: 120_000 }, () => 
     }
   });
   it('90: right angles allowed but never an acute corner, still legal and complete', async () => {
-    for (const name of names) {
+    // mcu too: with 90 corners it needs the shove (P9) to fit the last connection in.
+    for (const name of [...names, 'mcu' as const]) {
       const f = await styled(name, '90');
       expect([name, f.failed, f.unroutedAfter, f.acuteCorners, f.offAngle, f.collinear, f.arcs]).toEqual([name, 0, 0, 0, 0, 0, 0]);
       expect(f.drcByKind).toEqual({});
@@ -205,6 +206,18 @@ describe('autoroute fixtures: costs and order (P8f)', { timeout: 120_000 }, () =
     expect(computeRatsnest(p.doc, p.engine, p.copper).lines).toEqual([]);
     expect(f.vias).toBeGreaterThan(0);
     expect(f.ms).toBeLessThan(15000);
+  });
+  it('mcu with 90 corners: shoving routes aside routes the connection rip-up could not (P9)', async () => {
+    const styled = async (args: Record<string, unknown>) => {
+      const p = await ROUTE_FIXTURES.mcu();
+      await runTool(p, 'set_rule', { target: 'net', rule: 'cornerStyle', value: '90' });
+      return measureAutoroute(p, args);
+    };
+    const without = await styled({ shove: false });
+    const withShove = await styled({});
+    expect(without.failed).toBeGreaterThan(0);
+    expect([withShove.failed, withShove.drcErrors, withShove.unroutedAfter]).toEqual([0, 0, 0]);
+    expect(withShove.shoved).toBeGreaterThan(0);
   });
   it('mcu: the left bus keeps its order past the 2×5 header (bus lanes, P8f)', async () => {
     const p = await ROUTE_FIXTURES.mcu();

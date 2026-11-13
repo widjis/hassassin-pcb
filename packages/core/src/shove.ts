@@ -47,7 +47,7 @@ export interface ShoveResult {
   error?: string;
 }
 
-interface Seg {
+export interface ShoveSeg {
   uid: string;
   net: string;
   layer: string;
@@ -59,10 +59,18 @@ interface Seg {
   /** Present on the board before the shove (else added by it). */
   old: boolean;
   node?: DocNode;
+  /** The caller's grouping (e.g. the route a segment belongs to); new pieces keep their trace's group. */
+  group?: string;
+}
+export interface ShovePusher {
+  net: string;
+  layers: string[];
+  a: Vec2;
+  b: Vec2;
+  half: number;
 }
 
 const eq = (p: Vec2, q: Vec2) => Math.hypot(p.x - q.x, p.y - q.y) < 1e-6;
-const key = (p: Vec2) => `${Math.round(p.x * 1e5)},${Math.round(p.y * 1e5)}`;
 
 /**
  * The smallest octagon with sides at 0°, 45° and 90° (in board axes) around a set of capsules a–b of
@@ -155,7 +163,7 @@ export function planShove(doc: Doc, engine: StyleEngine, copper: string[], input
     return k ? clearanceFor(k, 'trace') : 0.2;
   };
   // Traces on the board.
-  const segs: Seg[] = [];
+  const segs: ShoveSeg[] = [];
   for (const n of doc.nodes.values()) {
     if (n.type !== 'trace' || !n.parent) continue;
     const net = doc.nodes.get(n.parent);
@@ -169,15 +177,14 @@ export function planShove(doc: Doc, engine: StyleEngine, copper: string[], input
   const shapes = collectCopper(doc, engine, copper);
   const viaAt = shapes.filter((s) => s.kind === 'via');
   const padAt = shapes.filter((s) => s.kind === 'pad');
-  const fixed = (net: string, layer: string, p: Vec2, live: Seg[]) => {
+  const fixed = (net: string, layer: string, p: Vec2, live: ShoveSeg[]) => {
     if (padAt.some((s) => s.net === net && s.layer === layer && s.areas[0] && inArea(p, s.areas[0]))) return true;
     if (viaAt.some((s) => s.net === net && s.areas[0] && inArea(p, s.areas[0]))) return true;
     return live.filter((s) => s.net === net && s.layer === layer && (eq(s.a, p) || eq(s.b, p))).length !== 2;
   };
 
   // The pushers: the new copper first, then every piece a pushed trace gets.
-  type Pusher = { net: string; layers: string[]; a: Vec2; b: Vec2; half: number };
-  const queue: Pusher[] = [];
+  const queue: ShovePusher[] = [];
   for (const t of input.traces ?? []) queue.push({ net: input.net, layers: [t.layer], a: t.a, b: t.b, half: t.width / 2 });
   for (const v of input.vias ?? []) queue.push({ net: input.net, layers: [...copper], a: v.at, b: v.at, half: v.diameter / 2 });
   // Vias of other nets in the way are not moved.
@@ -189,96 +196,10 @@ export function planShove(doc: Doc, engine: StyleEngine, copper: string[], input
       if (distToSegment(c, p.a, p.b) - r - p.half < Math.max(netClear(p.net), netClear(v.net ?? '')) - 1e-6) return fail(`a via of ${v.net ?? 'no net'} is in the way (vias are not shoved)`);
     }
   }
-  let live = segs.slice();
-  const removed = new Set<string>();
-  const movedNets = new Set<string>();
-  let steps = 0;
-  const maxSteps = opts.maxSteps ?? 60;
-  while (queue.length) {
-    const p = queue.shift()!;
-    for (;;) {
-      const hit = live.find((s) => s.net !== p.net && p.layers.includes(s.layer) && segSegDist(s.a, s.b, p.a, p.b) - s.w / 2 - p.half < Math.max(netClear(s.net), netClear(p.net)) - 1e-6);
-      if (!hit) break;
-      if (++steps > maxSteps) return fail('too many traces would have to move');
-      if (hit.locked) return fail(`a locked trace of ${hit.net} is in the way`);
-      if (hit.arc) return fail(`an arc of ${hit.net} is in the way (arcs are not shoved)`);
-      // The obstacles the hit trace must go round: the pusher, and any piece of the pusher's net or of the
-      // new copper that the way round would still touch (they cannot be pushed back); the hull grows
-      // round all of them.
-      const rOf = (o: { net: string; half: number }) => o.half + Math.max(netClear(hit.net), netClear(o.net)) + hit.w / 2 + 0.005;
-      const higher: Pusher[] = [
-        ...(input.traces ?? []).map((t) => ({ net: input.net, layers: [t.layer], a: t.a, b: t.b, half: t.width / 2 })),
-        ...(input.vias ?? []).map((v) => ({ net: input.net, layers: [...copper], a: v.at, b: v.at, half: v.diameter / 2 })),
-        ...live.filter((x) => x.net === p.net && x.net !== input.net).map((x) => ({ net: x.net, layers: [x.layer], a: x.a, b: x.b, half: x.w / 2 })),
-      ].filter((o) => o.layers.includes(hit.layer));
-      const obst: Pusher[] = [p];
-      let chain: Seg[] = [];
-      let way: Vec2[] | undefined;
-      for (let grown = 0; grown < 8; grown++) {
-        const hull = boundOctagon(obst.map((o) => ({ a: o.a, b: o.b, r: rOf(o) })));
-        const inside = (q: Vec2) => pointInPolygon(q, hull);
-        // The chain of the hit trace: from the hit segment outwards while the joints lie inside the hull.
-        chain = [hit];
-        const grow = (end: 'a' | 'b') => {
-          for (;;) {
-            const first = end === 'a';
-            const s0 = first ? chain[0]! : chain[chain.length - 1]!;
-            const sharedEnd = first ? s0.a : s0.b;
-            if (!inside(sharedEnd)) return true;
-            if (fixed(hit.net, hit.layer, sharedEnd, live)) return false;
-            const next = live.find((x) => x.uid !== s0.uid && !chain.some((c) => c.uid === x.uid) && x.net === hit.net && x.layer === hit.layer && (eq(x.a, sharedEnd) || eq(x.b, sharedEnd)));
-            if (!next || next.locked || next.arc) return false;
-            // Orient the neighbour so the chain reads a → b throughout.
-            const o = first ? (eq(next.b, sharedEnd) ? next : { ...next, a: next.b, b: next.a }) : eq(next.a, sharedEnd) ? next : { ...next, a: next.b, b: next.a };
-            if (first) chain.unshift(o);
-            else chain.push(o);
-          }
-        };
-        if (!grow('a') || !grow('b')) return fail(`a trace of ${hit.net} cannot move: a pad, via or branch of it lies in the way`);
-        const pts = [chain[0]!.a, ...chain.map((x) => x.b)];
-        const A = pts[0]!;
-        const B = pts[pts.length - 1]!;
-        // Entry into and exit from the hull along the chain.
-        const enter = crossings(pts[0]!, pts[1]!, hull)[0];
-        const exitC = crossings(pts[pts.length - 2]!, pts[pts.length - 1]!, hull);
-        const exit = exitC[exitC.length - 1];
-        if (!enter || !exit) return fail(`could not find a way round for ${hit.net}`);
-        // Walk the hull from the entry edge to the exit edge, both ways.
-        const walk = (dir: 1 | -1) => {
-          const out: Vec2[] = [enter.at];
-          let i = enter.edge;
-          for (let n = 0; n < hull.length && i !== exit.edge; n++) {
-            out.push(dir === 1 ? hull[(i + 1) % hull.length]! : hull[i]!);
-            i = (i + dir + hull.length) % hull.length;
-          }
-          out.push(exit.at);
-          return simplify([A, ...out, B]);
-        };
-        const touches = (w: Vec2[]) => higher.filter((o) => !obst.includes(o) && w.some((q, k) => k > 0 && segSegDist(w[k - 1]!, q, o.a, o.b) - o.half - hit.w / 2 < Math.max(netClear(hit.net), netClear(o.net)) - 1e-6));
-        const ways = [walk(1), walk(-1)].sort((x, y) => plen(x) - plen(y));
-        const clean = ways.find((w) => !touches(w).length);
-        if (clean) {
-          way = clean;
-          break;
-        }
-        const more = touches(ways[0]!);
-        obst.push(...more);
-      }
-      if (!way) return fail(`no way round for ${hit.net} that keeps clear of the new copper`);
-      // Replace the chain by the walk-around.
-      for (const s of chain) {
-        live = live.filter((x) => x.uid !== s.uid);
-        if (s.old) removed.add(s.uid);
-      }
-      const proto = segs.find((x) => x.uid === hit.uid) ?? hit;
-      for (let k = 0; k + 1 < way.length; k++) {
-        const s: Seg = { ...proto, uid: newUid('tr'), a: way[k]!, b: way[k + 1]!, old: false, node: proto.node };
-        live.push(s);
-        queue.push({ net: s.net, layers: [s.layer], a: s.a, b: s.b, half: s.w / 2 });
-      }
-      movedNets.add(hit.net);
-    }
-  }
+  const res = shoveChains(segs, queue, { clearance: (x, y) => Math.max(netClear(x), netClear(y)), fixed, ...(opts.maxSteps !== undefined ? { maxSteps: opts.maxSteps } : {}) });
+  if ('error' in res) return fail(res.error);
+  const { live, removed } = res;
+  const movedNets = res.nets;
   if (!removed.size && !live.some((s) => !s.old)) return { ops: [], moved: [], nets: [] };
   // Operations: remove the moved traces, add their new pieces (same net, layer, width and properties).
   const ops: Op[] = [];
@@ -323,4 +244,122 @@ export function planShove(doc: Doc, engine: StyleEngine, copper: string[], input
   }
   if (problem) return fail(problem);
   return { ops, moved: [...removed, ...live.filter((s) => !s.old).map((s) => s.uid)], nets: [...movedNets] };
+}
+
+/**
+ * The shove itself, on any set of trace segments (the board's traces, or the autorouter's routes): the
+ * pushers are the new copper, `env` says the clearance between two nets and which points of a net may not
+ * move. Returns the segments afterwards (moved ones replaced by new pieces, `old` false), the removed uids
+ * and the nets that moved, or why it cannot be done.
+ */
+export function shoveChains(
+  live0: ShoveSeg[],
+  input: ShovePusher[],
+  env: { clearance: (a: string, b: string) => number; fixed: (net: string, layer: string, p: Vec2, live: ShoveSeg[]) => boolean; maxSteps?: number },
+): { live: ShoveSeg[]; removed: Set<string>; nets: Set<string> } | { error: string } {
+  const fail2 = (error: string) => ({ error });
+  let live = live0.slice();
+  const removed = new Set<string>();
+  const movedNets = new Set<string>();
+  let steps = 0;
+  const maxSteps = env.maxSteps ?? 60;
+  const queue: ShovePusher[] = input.slice();
+  const inNet = input[0]?.net;
+  while (queue.length) {
+    const p = queue.shift()!;
+    for (;;) {
+      const hit = live.find((s) => s.net !== p.net && p.layers.includes(s.layer) && segSegDist(s.a, s.b, p.a, p.b) - s.w / 2 - p.half < env.clearance(s.net, p.net) - 1e-6);
+      if (!hit) break;
+      if (++steps > maxSteps) return fail2('too many traces would have to move');
+      if (hit.locked) return fail2(`a locked trace of ${hit.net} is in the way`);
+      if (hit.arc) return fail2(`an arc of ${hit.net} is in the way (arcs are not shoved)`);
+      // The obstacles the hit trace must go round: the pusher, and any piece of the pusher's net or of the
+      // new copper that the way round would still touch (they cannot be pushed back); the hull grows
+      // round all of them.
+      const rOf = (o: { net: string; half: number }) => o.half + env.clearance(hit.net, o.net) + hit.w / 2 + 0.005;
+      const higher: ShovePusher[] = [...input, ...live.filter((x) => x.net === p.net && x.net !== inNet).map((x) => ({ net: x.net, layers: [x.layer], a: x.a, b: x.b, half: x.w / 2 }))].filter((o) => o.layers.includes(hit.layer));
+      const obst: ShovePusher[] = [p];
+      let chain: ShoveSeg[] = [];
+      let way: Vec2[] | undefined;
+      for (let grown = 0; grown < 8; grown++) {
+        const hull = boundOctagon(obst.map((o) => ({ a: o.a, b: o.b, r: rOf(o) })));
+        const inside = (q: Vec2) => pointInPolygon(q, hull);
+        // The chain of the hit trace: from the hit segment outwards while the joints lie inside the hull.
+        chain = [hit];
+        const grow = (end: 'a' | 'b') => {
+          for (;;) {
+            const first = end === 'a';
+            const s0 = first ? chain[0]! : chain[chain.length - 1]!;
+            const sharedEnd = first ? s0.a : s0.b;
+            if (!inside(sharedEnd)) return true;
+            if (env.fixed(hit.net, hit.layer, sharedEnd, live)) return false;
+            const next = live.find((x) => x.uid !== s0.uid && !chain.some((c) => c.uid === x.uid) && x.net === hit.net && x.layer === hit.layer && (eq(x.a, sharedEnd) || eq(x.b, sharedEnd)));
+            if (!next || next.locked || next.arc) return false;
+            // Orient the neighbour so the chain reads a → b throughout.
+            const o = first ? (eq(next.b, sharedEnd) ? next : { ...next, a: next.b, b: next.a }) : eq(next.a, sharedEnd) ? next : { ...next, a: next.b, b: next.a };
+            if (first) chain.unshift(o);
+            else chain.push(o);
+          }
+        };
+        if (!grow('a') || !grow('b')) return fail2(`a trace of ${hit.net} cannot move: a pad, via or branch of it lies in the way`);
+        const pts = [chain[0]!.a, ...chain.map((x) => x.b)];
+        const A = pts[0]!;
+        const B = pts[pts.length - 1]!;
+        // Entry into and exit from the hull along the chain.
+        const enter = crossings(pts[0]!, pts[1]!, hull)[0];
+        const exitC = crossings(pts[pts.length - 2]!, pts[pts.length - 1]!, hull);
+        const exit = exitC[exitC.length - 1];
+        if (!enter || !exit) return fail2(`could not find a way round for ${hit.net}`);
+        // Walk the hull from the entry edge to the exit edge, both ways.
+        const walk = (dir: 1 | -1) => {
+          const out: Vec2[] = [enter.at];
+          let i = enter.edge;
+          for (let n = 0; n < hull.length && i !== exit.edge; n++) {
+            out.push(dir === 1 ? hull[(i + 1) % hull.length]! : hull[i]!);
+            i = (i + dir + hull.length) % hull.length;
+          }
+          out.push(exit.at);
+          // Where the trace meets the hull at 90° or more, cut the corner with a 45° piece on the outer side
+          // (away from the hull), as long as the pieces on either side are long enough for it.
+          const P = simplify([A, ...out, B]);
+          const soft: Vec2[] = [P[0]!];
+          for (let k = 1; k + 1 < P.length; k++) {
+            const a = P[k - 1]!, c = P[k]!, b = P[k + 1]!;
+            const u = { x: c.x - a.x, y: c.y - a.y }, v = { x: b.x - c.x, y: b.y - c.y };
+            const lu = Math.hypot(u.x, u.y), lv = Math.hypot(v.x, v.y);
+            const turnsHard = lu > 1e-9 && lv > 1e-9 && (u.x * v.x + u.y * v.y) / (lu * lv) < 1e-6;
+            const atEnd = eq(c, enter.at) || eq(c, exit.at);
+            const d = Math.min(2 * hit.w, lu / 2, lv / 2);
+            if (turnsHard && atEnd && d > 1e-3) soft.push({ x: c.x - (u.x / lu) * d, y: c.y - (u.y / lu) * d }, { x: c.x + (v.x / lv) * d, y: c.y + (v.y / lv) * d });
+            else soft.push(c);
+          }
+          soft.push(P[P.length - 1]!);
+          return simplify(soft);
+        };
+        const touches = (w: Vec2[]) => higher.filter((o) => !obst.includes(o) && w.some((q, k) => k > 0 && segSegDist(w[k - 1]!, q, o.a, o.b) - o.half - hit.w / 2 < env.clearance(hit.net, o.net) - 1e-6));
+        const ways = [walk(1), walk(-1)].sort((x, y) => plen(x) - plen(y));
+        const clean = ways.find((w) => !touches(w).length);
+        if (clean) {
+          way = clean;
+          break;
+        }
+        const more = touches(ways[0]!);
+        obst.push(...more);
+      }
+      if (!way) return fail2(`no way round for ${hit.net} that keeps clear of the new copper`);
+      // Replace the chain by the walk-around.
+      for (const s of chain) {
+        live = live.filter((x) => x.uid !== s.uid);
+        if (s.old) removed.add(s.uid);
+      }
+      const proto = live0.find((x) => x.uid === hit.uid) ?? hit;
+      for (let k = 0; k + 1 < way.length; k++) {
+        const s: ShoveSeg = { ...proto, uid: newUid('tr'), a: way[k]!, b: way[k + 1]!, old: false, node: proto.node };
+        live.push(s);
+        queue.push({ net: s.net, layers: [s.layer], a: s.a, b: s.b, half: s.w / 2 });
+      }
+      movedNets.add(hit.net);
+    }
+  }
+  return { live, removed, nets: movedNets };
 }

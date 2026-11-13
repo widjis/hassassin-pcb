@@ -17,6 +17,7 @@ import type { StyleEngine } from './style.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea } from './copper.ts';
 import { computeRatsnest } from './connectivity.ts';
 import { arcPoints, distToSegment, pointInPolygon } from './geom.ts';
+import { shoveChains, type ShovePusher, type ShoveSeg } from './shove.ts';
 
 export interface AutorouteOptions {
   /** Only these nets (default: every net with unrouted connections). */
@@ -52,6 +53,8 @@ export interface AutorouteOptions {
    * hold a route and how many there are.
    */
   onProgress?: (p: { round: number; routed: number; total: number }) => void;
+  /** Try to shove the routes in the way of a connection that is still open after rip-up (P9; default true). */
+  shove?: boolean;
   /** Corner style for every net, overriding the `cornerStyle` rule (P8e). */
   cornerStyle?: '45' | 'arc' | '90';
   /** Rounds of rip-up and retry (default 30; 1 = route once, no rip-up). */
@@ -70,6 +73,8 @@ export interface AutorouteReport {
   fanouts?: number;
   /** Connections that belong to a bundle (P8f): their pads neighbour another connection's at both ends. */
   bundled?: number;
+  /** Connections routed by shoving the routes in their way aside instead of ripping them up (P9). */
+  shoved?: number;
 }
 
 class Heap {
@@ -1692,6 +1697,91 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     // Connections counted as joined through this net's copper may be open now.
     for (const ci of [...joined]) if (order[ci]!.net === route.net) (joined.delete(ci), out.add(ci));
   };
+  // ---- Shove (P9): a route that runs into routes of other nets first tries to push them aside (walked round
+  // the new route, see shove.ts) before they are ripped up. The pushed routes are checked here like any
+  // piece of route: clear of fixed copper, the board edge and every other route, and still touching
+  // whatever rests on them; otherwise everything goes back as it was and the routes in the way are ripped.
+  const tryShove = (ci: number, res: { route: Route; victims: Set<number> }): boolean => {
+    if (opts.shove === false || !res.victims.size) return false;
+    const r = order[ci]!;
+    const live0: ShoveSeg[] = [];
+    for (const rt of routes.values()) rt.segs.forEach((sg, k) => live0.push({ uid: `${rt.key}:${k}`, net: rt.net, layer: String(sg.li), a: sg.a, b: sg.b, w: sg.w, locked: false, arc: !!sg.mid, old: true, group: String(rt.key) }));
+    const pushers: ShovePusher[] = [
+      ...res.route.segs.map((sg) => ({ net: r.net, layers: [String(sg.li)], a: sg.a, b: sg.b, half: sg.w / 2 })),
+      ...res.route.vias.map((v) => ({ net: r.net, layers: layers.map((_, li) => String(li)), a: v, b: v, half: netRule(r.net, 'viaDiameter', 0.6) / 2 })),
+    ];
+    const viaOf = (net: string) => [...routes.values()].filter((rt) => rt.net === net).flatMap((rt) => rt.vias);
+    const fixedPt = (net: string, layer: string, q: Vec2, live: ShoveSeg[]) => {
+      const li = Number(layer);
+      if (padShapes.some((sh) => sh.net === net && sh.layer === layers[li] && sh.areas[0] && inArea(q, sh.areas[0]))) return true;
+      if (viaOf(net).some((v) => Math.hypot(v.x - q.x, v.y - q.y) <= netRule(net, 'viaDiameter', 0.6) / 2 + 1e-6)) return true;
+      return live.filter((x) => x.net === net && x.layer === layer && (Math.hypot(x.a.x - q.x, x.a.y - q.y) < 1e-6 || Math.hypot(x.b.x - q.x, x.b.y - q.y) < 1e-6)).length !== 2;
+    };
+    const out = shoveChains(live0, pushers, { clearance: (x, y) => Math.max(netClear(x), netClear(y), pairCl(netId(x), netId(y))), fixed: fixedPt });
+    if ('error' in out) return false;
+    const changed = new Set<number>();
+    for (const u of out.removed) changed.add(Number(u.split(':')[0]));
+    for (const x of out.live) if (!x.old) changed.add(Number(x.group));
+    if (!changed.size) return false;
+    // Put the moved routes in place for a moment, check, and keep or undo.
+    const backup = new Map<number, { segs: Route['segs']; caps: Cap[]; length: number }>();
+    for (const k of changed) {
+      const rt = routes.get(k)!;
+      backup.set(k, { segs: rt.segs, caps: rt.caps, length: rt.length });
+      for (const cp of rt.caps) fileCap(cp, false);
+      const cl = netClear(rt.net);
+      const rid = netId(rt.net);
+      rt.segs = out.live.filter((x) => Number(x.group) === k).map((x) => ({ li: Number(x.layer), a: x.a, b: x.b, w: x.w }));
+      rt.caps = [...rt.segs.map((sg) => ({ li: sg.li, a: sg.a, b: sg.b, r: sg.w / 2, id: rid, cl, route: k })), ...rt.vias.flatMap((v) => layers.map((_, li) => ({ li, a: v, b: v, r: netRule(rt.net, 'viaDiameter', 0.6) / 2, id: rid, cl, route: k })))];
+      rt.length = rt.segs.reduce((t, sg) => t + Math.hypot(sg.b.x - sg.a.x, sg.b.y - sg.a.y), 0);
+      for (const cp of rt.caps) fileCap(cp, true);
+    }
+    const pieceOk = (net: string, li: number, a: Vec2, b: Vec2, half: number, own: number) => {
+      const id = netId(net);
+      const cn = netClear(net);
+      const edgeCl = netRule(net, 'boardEdgeClearance', 0.3);
+      if (outline && (!pointInPolygon(a, outline) || !pointInPolygon(b, outline))) return false;
+      if (!board.segments.every(([p, q]) => segSegDist(a, b, p, q) >= half + edgeCl - 1e-6)) return false;
+      for (const sh of shapes) {
+        if (sh.layer !== layers[li] || sh.net === net || sh.kind === 'fill') continue;
+        const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace'), sh.kind === 'pad' ? 0 : pairCl(id, netId(sh.net))) - 1e-6;
+        if (sh.box.minX - need > Math.max(a.x, b.x) || sh.box.maxX + need < Math.min(a.x, b.x) || sh.box.minY - need > Math.max(a.y, b.y) || sh.box.maxY + need < Math.min(a.y, b.y)) continue;
+        if (sh.edges.some(([p, q, rr]) => segSegDist(a, b, p, q) - rr < need)) return false;
+        if (sh.kind === 'pad' && sh.areas[0] && (inArea(a, sh.areas[0]) || inArea(b, sh.areas[0]))) return false;
+      }
+      for (const cp of capsAlong(li, a, b)) if (cp.id !== id && cp.route !== own && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl, pairCl(id, cp.id)) - 1e-6) return false;
+      return true;
+    };
+    let ok = true;
+    for (const k of changed) {
+      const rt = routes.get(k)!;
+      for (const sg of rt.segs) if (ok && !pieceOk(rt.net, sg.li, sg.a, sg.b, sg.w / 2, k)) ok = false;
+    }
+    // The new route itself, now that the others moved.
+    for (const sg of res.route.segs) if (ok && !pieceOk(r.net, sg.li, sg.a, sg.b, sg.w / 2, res.route.key)) ok = false;
+    for (const cp of res.route.caps) for (const o of capsAlong(cp.li, cp.a, cp.b)) if (ok && o.id !== cp.id && segSegDist(cp.a, cp.b, o.a, o.b) - o.r - cp.r < Math.max(cp.cl, o.cl, pairCl(cp.id, o.id)) - 1e-6) ok = false;
+    // Routes that end on a moved route must still touch it.
+    for (const other of routes.values()) {
+      if (!ok) break;
+      for (const k of changed) {
+        if (!other.deps.has(k)) continue;
+        const rt = routes.get(k)!;
+        const ends = [other.segs[0]?.a, other.segs[other.segs.length - 1]?.b, ...other.vias].filter((q): q is Vec2 => !!q);
+        if (!ends.some((q) => rt.caps.some((cp) => distToSegment(q, cp.a, cp.b) <= cp.r + 1e-6))) ok = false;
+      }
+    }
+    if (!ok) {
+      for (const [k, bk] of backup) {
+        const rt = routes.get(k)!;
+        for (const cp of rt.caps) fileCap(cp, false);
+        Object.assign(rt, bk);
+        for (const cp of rt.caps) fileCap(cp, true);
+      }
+      return false;
+    }
+    report.shoved = (report.shoved ?? 0) + 1;
+    return true;
+  };
   let pending = order.map((_, i) => i);
   let pres = 2;
   let timedOut = false;
@@ -1741,6 +1831,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         continue;
       }
       for (const s of res.contested) hist[s] = hist[s]! + 1;
+      if (tryShove(ci, res)) {
+        commit(ci, res.route);
+        continue;
+      }
       for (const v of res.victims) rip(v, again);
       commit(ci, res.route);
     }
@@ -1748,6 +1842,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     pres *= 1.6;
   }
   for (const ci of pending) if (!routeOf.has(ci) && !joined.has(ci)) failReason.set(ci, timedOut ? 'time limit' : 'congestion: could not be fitted in after rip-up and retry');
+
 
   // ---- Emit, in the order the connections were planned.
   const nextIndex = new Map<string, number>();
