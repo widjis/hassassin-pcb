@@ -47,6 +47,8 @@ export interface RouteFigures {
   bundled: number;
   /** Connections routed by shoving others aside (P9). */
   shoved: number;
+  /** Differential pairs routed together (P10). */
+  pairs: number;
   /**
    * Share of the straight autorouted length (0–1) that runs against its layer's default direction (P8f:
    * even copper layers horizontal, odd ones vertical); 45° pieces count half.
@@ -221,6 +223,7 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     fanouts: r.fanouts,
     bundled: r.bundled,
     shoved: r.shoved ?? 0,
+    pairs: r.pairs ?? 0,
     againstDirection: againstDirection(p.doc, p.engine, p.copper),
     offPlane: offPlane(p.doc, p.engine, p.copper),
   };
@@ -433,6 +436,28 @@ export async function fixturePlaneSlot(): Promise<Project> {
 }
 
 /** Extra `autoroute` arguments per fixture. */
+/**
+ * Differential pairs (P10): a USB 2.0 pair and a 100 Ω pair between two 1 × 6 headers set apart and
+ * offset, so the pairs must turn; a 0.8 mm board, so the pair widths stay modest. Classes applied.
+ */
+export async function fixturePairs(): Promise<Project> {
+  const p = newProject('fixture-pairs');
+  await runTool(p, 'add_part', { kind: 'connector', pins: 6, x: 0, y: 0 });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 6, x: 40, y: 0 });
+  await wire(p, 'USB_P', 'J1.1', 'J2.1');
+  await wire(p, 'USB_N', 'J1.2', 'J2.2');
+  await wire(p, 'S1', 'J1.3', 'J2.3');
+  await wire(p, 'LV_P', 'J1.4', 'J2.4');
+  await wire(p, 'LV_N', 'J1.5', 'J2.5');
+  await wire(p, 'S2', 'J1.6', 'J2.6');
+  await finish(p, { x: 100, y: 100, width: 40, height: 34 }, [['J1', 106, 113], ['J2', 134, 121]]);
+  await runTool(p, 'set_stackup', { thickness: 0.8 });
+  await runTool(p, 'set_pin_signal', { target: 'USB_P', net: true, interface: 'usb2' });
+  await runTool(p, 'set_pin_signal', { target: 'LV_P', net: true, interface: 'lvds' });
+  await runTool(p, 'classify_nets', { apply: true });
+  return p;
+}
+
 export const FIXTURE_ARGS: Record<string, Record<string, unknown>> = { channel: { layers: ['F.Cu'] } };
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot, bus: fixtureBus, mcu: fixtureMcu } as const;
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot, bus: fixtureBus, mcu: fixtureMcu, pairs: fixturePairs } as const;

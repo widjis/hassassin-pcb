@@ -16,7 +16,8 @@ import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea } from './copper.ts';
 import { computeRatsnest } from './connectivity.ts';
-import { arcPoints, distToSegment, pointInPolygon } from './geom.ts';
+import { arcPoints, distToSegment, pointInPolygon, route45 } from './geom.ts';
+import { netSignals } from './signal.ts';
 import { shoveChains, type ShovePusher, type ShoveSeg } from './shove.ts';
 
 export interface AutorouteOptions {
@@ -55,6 +56,8 @@ export interface AutorouteOptions {
   onProgress?: (p: { round: number; routed: number; total: number }) => void;
   /** Try to shove the routes in the way of a connection that is still open after rip-up (P9; default true). */
   shove?: boolean;
+  /** Route differential pairs (nets with a `diffGap`) together as coupled traces (P10; default true). */
+  pairs?: boolean;
   /** Corner style for every net, overriding the `cornerStyle` rule (P8e). */
   cornerStyle?: '45' | 'arc' | '90';
   /** Rounds of rip-up and retry (default 30; 1 = route once, no rip-up). */
@@ -75,6 +78,8 @@ export interface AutorouteReport {
   bundled?: number;
   /** Connections routed by shoving the routes in their way aside instead of ripping them up (P9). */
   shoved?: number;
+  /** Differential pairs routed together (P10). */
+  pairs?: number;
 }
 
 class Heap {
@@ -163,6 +168,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
 
   const netNode = new Map<string, DocNode>();
   for (const n of doc.nodes.values()) if (n.type === 'net') netNode.set(n.name, n);
+  const pairSignals = netSignals(doc);
   const netRule = (net: string, name: string, d: number) => {
     const n = netNode.get(net);
     const v = n ? engine.get(n.uid, name)?.value : undefined;
@@ -347,6 +353,13 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   for (const n of routedNets) {
     reachW = Math.max(reachW, netRule(n, 'traceWidth', 0.25) / 2, netRule(n, 'viaDiameter', 0.6) / 2);
     reachC = Math.max(reachC, netClear(n));
+    // A pair routed together (P10) is a body of half width w + gap / 2, its vias side by side.
+    const gp = netRule(n, 'diffGap', 0);
+    if (gp) {
+      const w = netRule(n, 'traceWidth', 0.25);
+      const vd = netRule(n, 'viaDiameter', 0.6);
+      reachW = Math.max(reachW, w + gp / 2, Math.max((w + gp) / 2, (vd + Math.max(gp, netClear(n))) / 2) + vd / 2);
+    }
   }
   for (const s of shapes) reachC = Math.max(reachC, clearanceFor(s.keepOut, 'trace'));
   reachC = Math.max(reachC, maxPairCl);
@@ -1697,6 +1710,24 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     // Connections counted as joined through this net's copper may be open now.
     for (const ci of [...joined]) if (order[ci]!.net === route.net) (joined.delete(ci), out.add(ci));
   };
+  /** A finished piece of route of `net` (half width `half`): inside the board and clear of the edge, of other
+   *  nets' fixed copper and of other routes (`own`: the route it belongs to, left out). */
+  const pieceOk = (net: string, li: number, a: Vec2, b: Vec2, half: number, own: number) => {
+    const id = netId(net);
+    const cn = netClear(net);
+    const edgeCl = netRule(net, 'boardEdgeClearance', 0.3);
+    if (outline && (!pointInPolygon(a, outline) || !pointInPolygon(b, outline))) return false;
+    if (!board.segments.every(([p, q]) => segSegDist(a, b, p, q) >= half + edgeCl - 1e-6)) return false;
+    for (const sh of shapes) {
+      if (sh.layer !== layers[li] || sh.net === net || sh.kind === 'fill') continue;
+      const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace'), sh.kind === 'pad' ? 0 : pairCl(id, netId(sh.net))) - 1e-6;
+      if (sh.box.minX - need > Math.max(a.x, b.x) || sh.box.maxX + need < Math.min(a.x, b.x) || sh.box.minY - need > Math.max(a.y, b.y) || sh.box.maxY + need < Math.min(a.y, b.y)) continue;
+      if (sh.edges.some(([p, q, rr]) => segSegDist(a, b, p, q) - rr < need)) return false;
+      if (sh.kind === 'pad' && sh.areas[0] && (inArea(a, sh.areas[0]) || inArea(b, sh.areas[0]))) return false;
+    }
+    for (const cp of capsAlong(li, a, b)) if (cp.id !== id && cp.route !== own && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl, pairCl(id, cp.id)) - 1e-6) return false;
+    return true;
+  };
   // ---- Shove (P9): a route that runs into routes of other nets first tries to push them aside (walked round
   // the new route, see shove.ts) before they are ripped up. The pushed routes are checked here like any
   // piece of route: clear of fixed copper, the board edge and every other route, and still touching
@@ -1736,22 +1767,6 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       rt.length = rt.segs.reduce((t, sg) => t + Math.hypot(sg.b.x - sg.a.x, sg.b.y - sg.a.y), 0);
       for (const cp of rt.caps) fileCap(cp, true);
     }
-    const pieceOk = (net: string, li: number, a: Vec2, b: Vec2, half: number, own: number) => {
-      const id = netId(net);
-      const cn = netClear(net);
-      const edgeCl = netRule(net, 'boardEdgeClearance', 0.3);
-      if (outline && (!pointInPolygon(a, outline) || !pointInPolygon(b, outline))) return false;
-      if (!board.segments.every(([p, q]) => segSegDist(a, b, p, q) >= half + edgeCl - 1e-6)) return false;
-      for (const sh of shapes) {
-        if (sh.layer !== layers[li] || sh.net === net || sh.kind === 'fill') continue;
-        const need = half + Math.max(cn, clearanceFor(sh.keepOut, 'trace'), sh.kind === 'pad' ? 0 : pairCl(id, netId(sh.net))) - 1e-6;
-        if (sh.box.minX - need > Math.max(a.x, b.x) || sh.box.maxX + need < Math.min(a.x, b.x) || sh.box.minY - need > Math.max(a.y, b.y) || sh.box.maxY + need < Math.min(a.y, b.y)) continue;
-        if (sh.edges.some(([p, q, rr]) => segSegDist(a, b, p, q) - rr < need)) return false;
-        if (sh.kind === 'pad' && sh.areas[0] && (inArea(a, sh.areas[0]) || inArea(b, sh.areas[0]))) return false;
-      }
-      for (const cp of capsAlong(li, a, b)) if (cp.id !== id && cp.route !== own && segSegDist(a, b, cp.a, cp.b) - cp.r < half + Math.max(cn, cp.cl, pairCl(id, cp.id)) - 1e-6) return false;
-      return true;
-    };
     let ok = true;
     for (const k of changed) {
       const rt = routes.get(k)!;
@@ -1782,6 +1797,348 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     report.shoved = (report.shoved ?? 0) + 1;
     return true;
   };
+  /** One pair, routed together (see below). Returns the two routes, or undefined to route them one by one. */
+  const routePair = (pNet: string, nNet: string, pa: Vec2, pb: Vec2, na: Vec2, nb: Vec2, gap: number): { p: Route; n: Route } | undefined => {
+    const idP = netId(pNet);
+    const idN = netId(nNet);
+    const w = Math.max(netRule(pNet, 'traceWidth', 0.25), netRule(nNet, 'traceWidth', 0.25));
+    const cn = Math.max(netClear(pNet), netClear(nNet), pairCl(idP, idN) ? 0 : 0);
+    const viaD = Math.max(netRule(pNet, 'viaDiameter', 0.6), netRule(nNet, 'viaDiameter', 0.6));
+    const edgeCl = Math.max(netRule(pNet, 'boardEdgeClearance', 0.3), netRule(nNet, 'boardEdgeClearance', 0.3));
+    const off = (w + gap) / 2; // trace centre from the path centre
+    const half = off + w / 2; // half width of the pair
+    const viaOff = Math.max(off, (viaD + Math.max(gap, cn)) / 2); // via centre from the path centre
+    const viaHalf = viaOff + viaD / 2;
+    const own = (k: number) => k === 0 || k === idP || k === idN;
+    // Room for the pair's body (half width h) at cell c of layer li.
+    const room = (li: number, c: number, h: number) => {
+      if (!own(core[li]![c]!)) return false;
+      if (edgeDist[c]! < h + edgeCl - 1e-6) return false;
+      const f = field[li]!;
+      let m = Math.min(f.zd[c]! - cn, f.ze[c]!);
+      if (!own(f.o1[c]!)) m = Math.min(m, f.d1[c]! - cn, f.e1[c]!);
+      if (!own(f.o2[c]!)) m = Math.min(m, f.d2[c]! - cn, f.e2[c]!);
+      if (m < h + g * 0.71 - 1e-6) return false;
+      const i = c % W;
+      const q = { x: cx(i), y: cy((c - i) / W) };
+      for (const cp of capsNear(li, q)) if (cp.id !== idP && cp.id !== idN && distToSegment(q, cp.a, cp.b) - cp.r < h + Math.max(cn, cp.cl) - 1e-6) return false;
+      return true;
+    };
+    const ma = { x: (pa.x + na.x) / 2, y: (pa.y + na.y) / 2 };
+    const minRun = Math.ceil(((w + gap) / 2) / g) + 1;
+    const endR = Math.max(Math.hypot(pa.x - na.x, pa.y - na.y), Math.hypot(pb.x - nb.x, pb.y - nb.y)) / 2 + 1.5;
+    const mb = { x: (pb.x + nb.x) / 2, y: (pb.y + nb.y) / 2 };
+    // Search box: the two middles and a margin.
+    const margin = 8;
+    const i0 = Math.max(0, toI(Math.min(ma.x, mb.x) - margin)), i1 = Math.min(W - 1, toI(Math.max(ma.x, mb.x) + margin));
+    const j0 = Math.max(0, toJ(Math.min(ma.y, mb.y) - margin)), j1 = Math.min(H - 1, toJ(Math.max(ma.y, mb.y) + margin));
+    const D8: [number, number][] = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+    const viaSteps = (netRule(pNet, 'viaCost', 0) || 4) / g;
+    // Start and goal: cells with room for the pair near each middle, any first direction.
+    const near = (m: Vec2) => {
+      const out: number[] = [];
+      const R = Math.ceil(Math.max(Math.hypot(pa.x - na.x, pa.y - na.y) / 4, 2 * g) / g);
+      const ci = toI(m.x), cj = toJ(m.y);
+      for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) {
+        const i = ci + di, j = cj + dj;
+        if (i < i0 || i > i1 || j < j0 || j > j1 || di * di + dj * dj > R * R) continue;
+        for (let li = 0; li < L; li++) if (room(li, j * W + i, half)) out.push(li * N + j * W + i);
+      }
+      return out;
+    };
+    const starts = near(ma);
+    const goals = new Set(near(mb));
+    if (!starts.length || !goals.size) return undefined;
+    const gi = toI(mb.x), gj = toJ(mb.y);
+    const hcost = (c: number) => {
+      const i = c % W, j = (c - i) / W;
+      const dx = Math.abs(i - gi), dy = Math.abs(j - gj);
+      // Weighted a little (1.3): the pair's search space is eight directions per cell, and an exact A* spends
+      // its time on equal-cost detours.
+      return (Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy));
+    };
+    const best = new Map<number, number>();
+    const from = new Map<number, number>();
+    const heap = new Heap();
+    const sid = (st: number, d: number) => st * 8 + d;
+    // Direction d runs square to the line between the two pads of an end (within a few degrees).
+    const square = (d: number, p: Vec2, q: Vec2) => {
+      const [di, dj] = D8[d]!;
+      const l = Math.hypot(q.x - p.x, q.y - p.y) * Math.hypot(di, dj);
+      return l < 1e-9 || Math.abs((q.x - p.x) * di + (q.y - p.y) * dj) / l < 0.1;
+    };
+    for (const st of starts) {
+      const i = st % N % W, j = ((st % N) - i) / W;
+      // Starting away from the middle costs extra, so both breakouts stay short and alike.
+      const startCost = (4 * Math.hypot(cx(i) - ma.x, cy(j) - ma.y)) / g;
+      for (let d = 0; d < 8; d++) {
+        // The pair leaves its pads square to the line between them, as a person draws it.
+        if (!square(d, pa, na)) continue;
+        const k = sid(st, d);
+        best.set(k, startCost);
+        from.set(k, -1);
+        heap.push(startCost + hcost(st % N), k);
+      }
+    }
+    // Ending away from the middle costs extra too: a goal cell is a candidate end at its cost plus that; the
+    // search stops once nothing left in the heap can beat the best candidate.
+    let found = -1;
+    let foundCost = Infinity;
+    let pops = 0;
+    const closed = new Set<number>();
+    while (heap.size) {
+      const k = heap.pop();
+      // Each state is expanded once (later, stale heap entries for it are skipped).
+      if (closed.has(k)) continue;
+      closed.add(k);
+      if (++pops > 600000) break;
+      const st = Math.floor(k / 8), d = k % 8;
+      const cost = best.get(k)!;
+      if (cost + hcost(st % N) >= foundCost) break;
+      if (goals.has(st) && square(d, pb, nb)) {
+        const c0 = st % N, i0g = c0 % W;
+        const end = cost + (4 * Math.hypot(cx(i0g) - mb.x, cy((c0 - i0g) / W) - mb.y)) / g;
+        if (end < foundCost) (foundCost = end), (found = k);
+      }
+      const li = Math.floor(st / N), c = st % N;
+      const i = c % W, j = (c - i) / W;
+      // Straight on, or a 45° turn either way; never 90° or more in one place. Close to either end the pair
+      // runs straight (square to its pads), so the breakouts stay short and mirror each other.
+      const qx = cx(i), qy = cy(j);
+      const nearEnd = Math.hypot(qx - ma.x, qy - ma.y) < endR || Math.hypot(qx - mb.x, qy - mb.y) < endR;
+      // A turn only after a straight run of a few cells, so the two traces' corners (offset to either
+      // side) do not fold over each other.
+      let run = 0;
+      for (let q = k; q >= 0 && q % 8 === d && run < minRun; q = from.get(q)!) run++;
+      const turns = !nearEnd && run >= minRun;
+      for (const nd of turns ? [d, (d + 1) % 8, (d + 7) % 8] : [d]) {
+        const [di, dj] = D8[nd]!;
+        const ni = i + di, nj = j + dj;
+        if (ni < i0 || ni > i1 || nj < j0 || nj > j1) continue;
+        const nc = nj * W + ni;
+        if (!room(li, nc, half)) continue;
+        // No corner cutting on diagonals.
+        if (di && dj && (!room(li, j * W + ni, half) || !room(li, nj * W + i, half))) continue;
+        const ns = li * N + nc;
+        const nk = sid(ns, nd);
+        const nCost = cost + (di && dj ? Math.SQRT2 : 1) + (nd !== d ? 2.5 : 0);
+        if (nCost < (best.get(nk) ?? Infinity) - 1e-9) {
+          best.set(nk, nCost);
+          from.set(nk, k);
+          heap.push(nCost + hcost(nc), nk);
+        }
+      }
+      // A pair of vias here, on a straight run (the path goes on in the same direction on the other layer):
+      // room for them on every layer.
+      for (let lj = 0; lj < L && run >= minRun; lj++) {
+        if (lj === li) continue;
+        let ok = true;
+        for (let lk = 0; lk < L && ok; lk++) if (!room(lk, c, viaHalf)) ok = false;
+        if (!ok) continue;
+        const ns = lj * N + c;
+        const nk = sid(ns, d);
+        const nCost = cost + 2 * viaSteps;
+        if (nCost < (best.get(nk) ?? Infinity) - 1e-9) {
+          best.set(nk, nCost);
+          from.set(nk, k);
+          heap.push(nCost + hcost(c), nk);
+        }
+      }
+    }
+    if (found < 0) return undefined;
+    // The centre path per layer, corners only where the direction changes.
+    const states: number[] = [];
+    for (let k = found; k >= 0; k = from.get(k)!) states.push(k);
+    states.reverse();
+    type Leg = { li: number; pts: Vec2[] };
+    const legs: Leg[] = [];
+    const viaAt: Vec2[] = [];
+    for (const k of states) {
+      const st = Math.floor(k / 8), li = Math.floor(st / N), c = st % N, i = c % W;
+      const q = { x: cx(i), y: cy((c - i) / W) };
+      const cur = legs[legs.length - 1];
+      if (!cur || cur.li !== li) {
+        if (cur) viaAt.push(q);
+        legs.push({ li, pts: [q] });
+      } else {
+        const P = cur.pts;
+        if (P.length >= 2) {
+          const a = P[P.length - 2]!, b = P[P.length - 1]!;
+          if (Math.abs((b.x - a.x) * (q.y - b.y) - (b.y - a.y) * (q.x - b.x)) < 1e-9) P.pop();
+        }
+        P.push(q);
+      }
+    }
+    // Which side P runs on: the side of its pad at the start; it must be the same side at the end (a pair
+    // that swaps sides would have to cross).
+    const sideAt = (P: Vec2[], at: 'start' | 'end', q: Vec2) => {
+      const a = at === 'start' ? P[0]! : P[P.length - 2] ?? P[0]!;
+      const b = at === 'start' ? P[1] ?? P[0]! : P[P.length - 1]!;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const o = at === 'start' ? a : b;
+      return Math.sign(dx * (q.y - o.y) - dy * (q.x - o.x));
+    };
+    const first = legs[0]!, last = legs[legs.length - 1]!;
+    if (first.pts.length < 2 || last.pts.length < 2) return undefined;
+    const sP = sideAt(first.pts, 'start', pa);
+    if (!sP || sideAt(last.pts, 'end', pb) !== sP) return undefined;
+    // Offset a polyline by s (left normal positive), corners where the offset lines meet.
+    const offset = (P: Vec2[], s: number): Vec2[] => {
+      const nrm = (a: Vec2, b: Vec2) => {
+        const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy);
+        return { x: -dy / l, y: dx / l };
+      };
+      const out: Vec2[] = [];
+      for (let k = 0; k < P.length; k++) {
+        if (k === 0 || k === P.length - 1) {
+          const n = k === 0 ? nrm(P[0]!, P[1]!) : nrm(P[k - 1]!, P[k]!);
+          out.push({ x: P[k]!.x + n.x * s, y: P[k]!.y + n.y * s });
+          continue;
+        }
+        const n1 = nrm(P[k - 1]!, P[k]!), n2 = nrm(P[k]!, P[k + 1]!);
+        const bx = n1.x + n2.x, by = n1.y + n2.y;
+        const dot = (bx * n1.x + by * n1.y) || 1;
+        out.push({ x: P[k]!.x + (bx / dot) * s, y: P[k]!.y + (by / dot) * s });
+      }
+      return out;
+    };
+    const build = (net: string, side: number, from: Vec2, to: Vec2) => {
+      const pieces: { li: number; a: Vec2; b: Vec2 }[] = [];
+      const vias: Vec2[] = [];
+      const add = (li: number, pts: Vec2[]) => {
+        for (let k = 0; k + 1 < pts.length; k++) if (Math.hypot(pts[k + 1]!.x - pts[k]!.x, pts[k + 1]!.y - pts[k]!.y) > 1e-6) pieces.push({ li, a: pts[k]!, b: pts[k + 1]! });
+      };
+      let prevEnd: Vec2 = from;
+      // A 45° breakout: from the pad straight onto this net's line, meeting it as far along as the pad lies
+      // to the side of it (the line's first or last piece runs straight, see the search above).
+      const onto = (q: Vec2, a: Vec2, b: Vec2, atStart: boolean) => {
+        const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        const u = { x: (b.x - a.x) / l, y: (b.y - a.y) / l };
+        const o = atStart ? a : b;
+        const v = { x: q.x - o.x, y: q.y - o.y };
+        const along = v.x * u.x + v.y * u.y;
+        const perp = Math.abs(v.x * u.y - v.y * u.x);
+        const t = atStart ? Math.max(0, along + perp) : Math.min(0, along - perp);
+        return { x: o.x + u.x * t, y: o.y + u.y * t, t: Math.abs(t), l };
+      };
+      // Near a via the line steps out by the difference of the via's and the line's offsets, at 45°.
+      const step = Math.max(0, viaOff - off);
+      const trim = (P: Vec2[], atStart: boolean): Vec2[] => {
+        if (step < 1e-6 || P.length < 2) return P;
+        const a = atStart ? P[0]! : P[P.length - 1]!;
+        const b = atStart ? P[1]! : P[P.length - 2]!;
+        const l = Math.hypot(b.x - a.x, b.y - a.y);
+        if (l <= step + 1e-6) return P;
+        const q = { x: a.x + ((b.x - a.x) / l) * step, y: a.y + ((b.y - a.y) / l) * step };
+        return atStart ? [q, ...P.slice(1)] : [...P.slice(0, -1), q];
+      };
+      legs.forEach((leg, li) => {
+        let line = offset(leg.pts, side * off);
+        if (li > 0) line = trim(line, true);
+        if (li + 1 < legs.length) line = trim(line, false);
+        // Breakout from the pad (first leg) or from this net's via (later legs).
+        const startPt = li === 0 ? from : vias[vias.length - 1]!;
+        if (li === 0 && line.length >= 2) {
+          const X = onto(startPt, line[0]!, line[1]!, true);
+          if (X.t < X.l - 1e-6) line = [{ x: X.x, y: X.y }, ...line.slice(1)];
+        }
+        if (li === legs.length - 1 && line.length >= 2) {
+          const Y = onto(to, line[line.length - 2]!, line[line.length - 1]!, false);
+          if (Y.t < Y.l - 1e-6 && (line.length > 2 || li > 0 || Y.t + 1e-6 < Math.hypot(line[1]!.x - line[0]!.x, line[1]!.y - line[0]!.y))) line = [...line.slice(0, -1), { x: Y.x, y: Y.y }];
+        }
+        add(leg.li, li === 0 ? [startPt, ...route45(startPt, line[0]!, false).slice(1), ...line.slice(1)] : [startPt, ...line]);
+        if (li + 1 < legs.length) {
+          // This net's via, beside the centre path's via, across the direction of travel.
+          const P = leg.pts;
+          const a = P[P.length - 2] ?? P[0]!, b = P[P.length - 1]!;
+          const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+          const v = { x: viaAt[li]!.x - (dy / l) * side * viaOff, y: viaAt[li]!.y + (dx / l) * side * viaOff };
+          add(leg.li, [line[line.length - 1]!, v]);
+          vias.push(v);
+        } else {
+          prevEnd = line[line.length - 1]!;
+          add(leg.li, [prevEnd, ...route45(prevEnd, to, true).slice(1)]);
+        }
+      });
+      return { pieces, vias, net };
+    };
+    const P = build(pNet, sP, pa, pb);
+    const Nn = build(nNet, -sP, na, nb);
+    // Check every piece and via like any route.
+    for (const side of [P, Nn]) {
+      const id = netId(side.net);
+      for (const pc of side.pieces) if (!pieceOk(side.net, pc.li, pc.a, pc.b, w / 2, -1)) return undefined;
+      for (const v of side.vias) for (let li = 0; li < L; li++) if (!pieceOk(side.net, li, v, v, viaD / 2, -1)) return undefined;
+      // The two halves keep their gap from each other (the partner is another net).
+      const other = side === P ? Nn : P;
+      for (const pc of side.pieces)
+        for (const oc of other.pieces)
+          if (pc.li === oc.li && segSegDist(pc.a, pc.b, oc.a, oc.b) < w + Math.min(gap, cn) - 1e-6) return undefined;
+      for (const v of side.vias) for (const u of other.vias) if (Math.hypot(v.x - u.x, v.y - u.y) < viaD + cn - 1e-6) return undefined;
+      void id;
+    }
+    const mk = (side: typeof P): Route => {
+      const key = ++routeKey;
+      const id = netId(side.net);
+      const cl = netClear(side.net);
+      const route: Route = { key, conn: -1, net: side.net, id, caps: [], segs: [], vias: side.vias, length: 0, deps: new Set() };
+      for (const pc of side.pieces) {
+        route.segs.push({ li: pc.li, a: pc.a, b: pc.b, w });
+        route.caps.push({ li: pc.li, a: pc.a, b: pc.b, r: w / 2, id, cl, route: key });
+        route.length += Math.hypot(pc.b.x - pc.a.x, pc.b.y - pc.a.y);
+      }
+      for (const v of side.vias) for (let li = 0; li < L; li++) route.caps.push({ li, a: v, b: v, r: viaD / 2, id, cl, route: key });
+      return route;
+    };
+    return { p: mk(P), n: mk(Nn) };
+  };
+  // ---- Differential pairs routed together (P10). Two connections of a pair (nets with a `diffGap`, each the
+  // other's partner) whose ends lie side by side are routed as one path of width 2·w + gap between the
+  // middles of their pad pairs, with 45° turns only, then split into two traces (w each, gap apart) on
+  // either side of it; a layer change becomes two vias side by side. Each pad is joined to its trace with a
+  // short 45° breakout. Every piece is checked like any piece of route; if anything fails, the two
+  // connections are routed one by one as before.
+  const pairOf = new Map<string, string>();
+  for (const n of netNode.values()) {
+    const w = n.props.pairWith;
+    if (typeof w === 'string' && netNode.has(w)) pairOf.set(n.name, w), pairOf.set(w, n.name);
+  }
+  // Partners by name too (X_P / X_N …), as netSignals finds them.
+  for (const x of pairSignals) if (x.pair && !pairOf.has(x.net)) pairOf.set(x.net, x.pair);
+  const pairedConn = new Set<number>();
+  if (opts.pairs !== false) {
+    const done = new Set<string>();
+    for (const [pNet, nNet] of pairOf) {
+      if (done.has(pNet) || done.has(nNet)) continue;
+      done.add(pNet).add(nNet);
+      const gap = netRule(pNet, 'diffGap', 0);
+      if (!gap || !netRule(nNet, 'diffGap', 0)) continue;
+      const cP = order.map((r, i) => [r, i] as const).filter(([r]) => r.net === pNet);
+      const cN = order.map((r, i) => [r, i] as const).filter(([r]) => r.net === nNet);
+      for (const [rp, ip] of cP) {
+        // The partner's connection with its ends next to these (either way round).
+        let best: { rn: (typeof rats)[number]; inn: number; flip: boolean; d: number } | undefined;
+        for (const [rn, inn] of cN) {
+          if (pairedConn.has(inn)) continue;
+          for (const flip of [false, true]) {
+            const na = flip ? rn.b : rn.a;
+            const nb = flip ? rn.a : rn.b;
+            const d = Math.max(Math.hypot(na.x - rp.a.x, na.y - rp.a.y), Math.hypot(nb.x - rp.b.x, nb.y - rp.b.y));
+            if (d <= 5 && (!best || d < best.d)) best = { rn, inn, flip, d };
+          }
+        }
+        if (!best || routeOf.has(ip) || routeOf.has(best.inn)) continue;
+        const na = best.flip ? best.rn.b : best.rn.a;
+        const nb = best.flip ? best.rn.a : best.rn.b;
+        const res = routePair(rp.net, best.rn.net, rp.a, rp.b, na, nb, gap);
+        if (!res) continue;
+        commit(ip, res.p);
+        commit(best.inn, res.n);
+        pairedConn.add(ip).add(best.inn);
+        report.pairs = (report.pairs ?? 0) + 1;
+      }
+    }
+  }
   let pending = order.map((_, i) => i);
   let pres = 2;
   let timedOut = false;

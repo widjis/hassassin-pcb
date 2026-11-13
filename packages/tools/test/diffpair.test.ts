@@ -3,8 +3,8 @@
  * and lengths compared in time with each layer's propagation delay.
  */
 import { describe, expect, it } from 'vitest';
-import { defaultStackup, diffImpedance, diffPairs, lineGeometry, netLengths, netSignals, newUid, pairGeometry, propagationDelay, stackupOf, type Stackup, type Vec2 } from '@hassassin/core';
-import { newProject, runTool, type Project } from '@hassassin/tools';
+import { defaultStackup, diffImpedance, diffPairs, lineGeometry, netLengths, netSignals, newUid, pairGeometry, propagationDelay, segSegDist, stackupOf, type Stackup, type Vec2 } from '@hassassin/core';
+import { fixturePairs, measureAutoroute, newProject, runTool, type Project } from '@hassassin/tools';
 
 async function board(): Promise<Project> {
   const p = newProject('pairs');
@@ -73,5 +73,57 @@ describe('differential pairs (P10, first part)', () => {
     expect(pair.skewPs).toBeCloseTo(2 * d, 0);
     const r = (await runTool(p, 'net_lengths', {})) as { pairs: { skewPs?: number }[] };
     expect(r.pairs.some((x) => x.skewPs !== undefined)).toBe(true);
+  });
+
+  const traces = (p: Project, net: string) =>
+    [...p.doc.nodes.values()]
+      .filter((n) => n.type === 'trace' && p.doc.nodes.get(n.parent!)?.name === net)
+      .map((n) => ({ a: p.engine.get(n.uid, 'start')!.value as Vec2, b: p.engine.get(n.uid, 'end')!.value as Vec2, layer: String(p.engine.get(n.uid, 'layer')!.value), w: p.engine.get(n.uid, 'traceWidth')!.value as number }));
+  const vias = (p: Project, net: string) => [...p.doc.nodes.values()].filter((n) => n.type === 'via' && p.doc.nodes.get(n.parent!)?.name === net).map((n) => p.engine.get(n.uid, 'position')!.value as Vec2);
+  /** Length over which the two halves run side by side at the pair's gap (within 0.02 mm). */
+  const coupled = (p: Project, a: string, b: string, gap: number) => {
+    let len = 0;
+    for (const x of traces(p, a))
+      for (const y of traces(p, b))
+        if (x.layer === y.layer && Math.abs(segSegDist(x.a, x.b, y.a, y.b) - x.w / 2 - y.w / 2 - gap) < 0.02) {
+          const dx = x.b.x - x.a.x, dy = x.b.y - x.a.y, ex = y.b.x - y.a.x, ey = y.b.y - y.a.y;
+          if (Math.abs(dx * ey - dy * ex) < 1e-6 * Math.hypot(dx, dy) * Math.hypot(ex, ey) + 1e-9) len += Math.min(Math.hypot(dx, dy), Math.hypot(ex, ey));
+        }
+    return len;
+  };
+
+  it('routes both pairs together: coupled at their gap, mirrored breakouts, tiny skew, no sharp corner', { timeout: 60_000 }, async () => {
+    const p = await fixturePairs();
+    const f = await measureAutoroute(p);
+    expect([f.failed, f.unroutedAfter, f.drcErrors, f.sharpCorners, f.acuteCorners]).toEqual([0, 0, 0, 0, 0]);
+    expect(f.pairs).toBe(2);
+    for (const [a, b] of [['USB_P', 'USB_N'], ['LV_P', 'LV_N']] as const) {
+      const gap = rule(p, a, 'diffGap') as number;
+      // Most of the way (about 30 mm between the headers) side by side at the gap.
+      expect(coupled(p, a, b, gap)).toBeGreaterThan(20);
+    }
+    const lens = diffPairs(netLengths(p.doc, p.engine, stackupOf(p.doc, p.copper)));
+    // USB 2.0 allows 1.27 mm; together they come out far inside it.
+    for (const d of lens) expect(d.skew).toBeLessThan(0.2);
+  });
+
+  it('a pair that must change layer gets two vias side by side', { timeout: 60_000 }, async () => {
+    const p = await fixturePairs();
+    // Copper of S1 across the board: on B.Cu at x = 115, on F.Cu at x = 125, so the pairs change layer between.
+    const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === 'S1')!;
+    const wall = (x: number, layer: string) => ({ op: 'add' as const, parent: n.uid, index: n.children.length, tree: { nodes: [{ uid: newUid('tr'), type: 'trace' as const, name: '', props: {}, rules: [{ name: 'start', value: { x, y: 100.6 } }, { name: 'end', value: { x, y: 133.4 } }, { name: 'layer', value: layer }], parent: n.uid, children: [] }] } });
+    p.history.apply('walls', [wall(115, 'B.Cu'), wall(125, 'F.Cu')]);
+    const f = await measureAutoroute(p);
+    expect([f.failed, f.drcErrors, f.sharpCorners]).toEqual([0, 0, 0]);
+    expect(f.pairs).toBe(2);
+    for (const [a, b] of [['USB_P', 'USB_N'], ['LV_P', 'LV_N']] as const) {
+      const va = vias(p, a), vb = vias(p, b);
+      expect([va.length, vb.length]).toEqual([1, 1]);
+      // Side by side: across the direction of travel, between 115 and 125.
+      const d = Math.hypot(va[0]!.x - vb[0]!.x, va[0]!.y - vb[0]!.y);
+      expect(d).toBeGreaterThan(0.6);
+      expect(d).toBeLessThan(1.2);
+      for (const v of [...va, ...vb]) expect(v.x > 115 && v.x < 125).toBe(true);
+    }
   });
 });

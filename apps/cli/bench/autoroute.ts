@@ -91,7 +91,7 @@ function line(name: string, f: RouteFigures, extra = ''): string {
   return (
     `${name}: ${f.routed}/${f.connections} routed (${f.failed} failed, ${f.unroutedAfter} unrouted after), ` +
     `${f.vias} vias, ${f.length} mm, ${f.ms} ms (+ check ${f.checkMs} ms, ${f.removedByDrc} taken out), DRC errors ${f.drcErrors} ${JSON.stringify(f.drcByKind)}, ` +
-    `sharp corners ${f.sharpCorners}, off-angle ${f.offAngle}, bends/connection ${f.bendsPerConnection}, against direction ${f.againstDirection}, fanouts ${f.fanouts}, bundled ${f.bundled}, shoved ${f.shoved}, off plane ${f.offPlane}, grid ${f.grid}; failed: ${JSON.stringify(f.reasons)}${extra}`
+    `sharp corners ${f.sharpCorners}, off-angle ${f.offAngle}, bends/connection ${f.bendsPerConnection}, against direction ${f.againstDirection}, fanouts ${f.fanouts}, bundled ${f.bundled}, shoved ${f.shoved}, pairs ${f.pairs}, off plane ${f.offPlane}, grid ${f.grid}; failed: ${JSON.stringify(f.reasons)}${extra}`
   );
 }
 

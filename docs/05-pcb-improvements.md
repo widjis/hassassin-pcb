@@ -737,9 +737,34 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     Tests (`diffpair.test.ts`): stripline slower than microstrip (≈ 7.0 ps/mm); the pair geometry meets
     90 Ω within 1 Ω; a USB 2.0 preset on one half sizes both halves, and a `diffImpedance` rule set by
     hand wins; delays and the skew in length and time of a pair set by hand.
-  - Still open in P10: routing a pair together (one path split into two traces, symmetric vias and
-    breakout, `diffUncoupledMax`), tuning (`diffSkewMax`, serpentines on any segment with 45° / arc
-    corners and 3 × width spacing), `diffPairClearance`, and the acceptance board.
+  - *Progress (2026-11-14), second part:* pairs routed together.
+    - Before the rip-up loop, every pair (partner by `pairWith` or by name, both nets with a `diffGap`)
+      whose two connections end side by side (ends at most 5 mm apart) is routed as one: its own A*
+      over (layer, cell, direction) finds a centre path between the middles of the two pad pairs for a
+      body of half width w + gap / 2, both nets' copper counting as its own. Only straight steps and 45°
+      turns; a turn or a via only after a straight run of about (w + gap) / 2, so the two traces' corners
+      do not fold; near either end (half the pad spacing + 1.5 mm) the path runs straight and square to
+      the line between the two pads; starting or ending away from the middle costs 4 × the distance; a
+      layer change is a pair of vias (cost of two), with room for both on every layer.
+    - The path is split into two lines offset by ±(w + gap) / 2 (corners where the offset lines meet).
+      Each pad joins its line with a mirrored 45° breakout; at a via the line steps out at 45° to its via,
+      which sits across the direction of travel at (via diameter + max(gap, clearance)) / 2 from the centre.
+    - Every piece and via is checked like any route piece, and the halves keep their gap; otherwise the
+      two connections are routed one by one as before. Committed routes are ordinary routes from then on.
+    - Found on the way: the distance field did not reach far enough for a pair's body or its via pair
+      (it was sized for single traces), so a wall 0.7 mm away went unseen; it now reaches far enough for
+      the pairs on the board. The pair search first ran out of steps (no closed set, stale heap entries
+      expanded again); with a closed set it finds a path with a layer change in about 0.4 M steps.
+    - Option `pairs` (default true), count `pairs` in the report, the summary and the bench line.
+    New fixture `pairs` (a USB 2.0 pair and an LVDS pair between two 1 × 6 headers, 0.8 mm board, classes
+    applied): both pairs routed together, 6 / 6, no DRC error, no sharp corner, skew 0.03 and 0.07 mm
+    (0.2 and 0.4 ps), > 20 mm of each pair side by side at its gap. With S1 copper across the board on
+    B.Cu at x = 115 and F.Cu at x = 125, both pairs change layer between them with two vias side by side
+    (0.8 mm apart), still no sharp corner. Other fixtures and the RGB lamp unchanged.
+  - Still open in P10: arc corners for a pair (with `cornerStyle: arc` a pair keeps 45° corners, so the
+    arc style test leaves the fixture out); `diffUncoupledMax`; tuning (`diffSkewMax`, serpentines on any
+    segment with 45° / arc corners and 3 × width spacing); `diffPairClearance`; a pair whose halves swap
+    sides between its ends (routed one by one today); ground return vias.
 - [ ] **P11. Autoplacer that uses the schematic.**
   - The greedy placement of today stays as the start; an improvement pass follows (simulated annealing or
     pairwise swaps, written from textbook descriptions) that minimises total ratsnest length (half-perimeter

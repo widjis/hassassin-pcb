@@ -86,6 +86,8 @@ export interface AutorouteSummary {
   bundled: number;
   /** Connections routed by shoving routes aside instead of ripping them up (P9). */
   shoved: number;
+  /** Differential pairs routed together (P10). */
+  pairs: number;
 }
 
 /** The figures the `autoroute` tool, the CLI bench and the Board panel all report (P8g). */
@@ -106,5 +108,6 @@ export function autorouteSummary(report: AutorouteReport): AutorouteSummary {
     fanouts: report.fanouts ?? 0,
     bundled: report.bundled ?? 0,
     shoved: report.shoved ?? 0,
+    pairs: report.pairs ?? 0,
   };
 }
