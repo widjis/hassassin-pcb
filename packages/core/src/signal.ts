@@ -11,12 +11,14 @@
  * (`net[signal=rf]` …) and the router pick it up; a net's `signal` without `signalSource` (or with
  * `signalSource=net`) is the owner's and is never overwritten.
  */
-import type { Doc, DocNode, RuleDecl } from './model.ts';
+import type { Doc, DocNode, KeepOut, RuleDecl } from './model.ts';
 import type { Op } from './commands.ts';
 import { diffPairs } from './lengths.ts';
 import { parseRuleValue } from './ruleDefs.ts';
 import { matches } from './selector.ts';
-import { lineGeometry, widthForImpedance, type Stackup } from './stackup.ts';
+import { lineGeometry, pairGeometry, widthForImpedance, type Stackup } from './stackup.ts';
+import { clearanceFor } from './copper.ts';
+import type { StyleEngine } from './style.ts';
 
 export const SIGNAL_CLASSES = ['general', 'analog', 'sensitive', 'clock', 'switching', 'high-speed', 'diff-pair', 'rf', 'power', 'high-current', 'high-voltage', 'ground'] as const;
 export type SignalClass = (typeof SIGNAL_CLASSES)[number];
@@ -268,16 +270,25 @@ export function netSignals(doc: Doc): NetSignal[] {
     else if (handPair.has(n.name)) raise('diff-pair', `pair with ${partner.get(n.name)}`);
     out.push({ net: n.name, ...best, ...extra });
   }
+  // The two halves of a pair share the interface preset given on either of them (P10).
+  const sigOf = new Map(out.map((x) => [x.net, x]));
+  for (const x of out) {
+    const o = x.pair ? sigOf.get(x.pair) : undefined;
+    if (!o || x.interface || !o.interface) continue;
+    x.interface = o.interface;
+    x.diffImpedance = o.diffImpedance;
+    if (x.source !== 'net' && signalRank('diff-pair') > signalRank(x.signal)) Object.assign(x, { signal: 'diff-pair', source: 'pin', why: `pair with ${o.net} (${SIGNAL_INTERFACES[o.interface]!.label})` });
+  }
   return out.sort((a, b) => a.net.localeCompare(b.net, undefined, { numeric: true }));
 }
 
 /** Rules `classify_nets` may compute per net from the parameters; listed in the net's `signalRules`. */
-const COMPUTED_RULES = ['traceWidth', 'keepOut'] as const;
+const COMPUTED_RULES = ['traceWidth', 'keepOut', 'diffGap'] as const;
 
 export interface SignalPlan {
   ops: Op[];
   /** Per net: the computed rules written, and hand-set rules that were kept although smaller. */
-  rules: { net: string; traceWidth?: number; keepOut?: number; kept?: string[]; note?: string }[];
+  rules: { net: string; traceWidth?: number; keepOut?: number; diffGap?: number; kept?: string[]; note?: string }[];
 }
 
 /**
@@ -286,7 +297,7 @@ export interface SignalPlan {
  * voltage, as the net's own rules. Rules written this way are listed in the net's `signalRules`, so a
  * later run may change or remove them; a rule of the same name set by hand is kept (and reported).
  */
-export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: string[]; stackup?: Stackup; layer?: string } = {}): SignalPlan {
+export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: string[]; stackup?: Stackup; layer?: string; engine?: StyleEngine } = {}): SignalPlan {
   const geom = opts.stackup && opts.layer ? lineGeometry(opts.stackup, opts.layer) : null;
   const byName = new Map([...doc.nodes.values()].filter((n) => n.type === 'net').map((n) => [n.name, n]));
   const ops: Op[] = [];
@@ -317,6 +328,21 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
         if (zr > 1.5) notes.push(`${s.impedance} Ω needs ${zr} mm on ${opts.layer}: a thinner dielectric to the plane (more layers) would make it narrower`);
       }
     }
+    // A differential pair (P10): width and gap for the pair's differential impedance (the net's
+    // diffImpedance rule, else its interface preset), the gap kept at the nets' clearance.
+    const zRule = opts.engine?.get(n.uid, 'diffImpedance')?.value;
+    const zDiff = typeof zRule === 'number' && zRule > 0 ? zRule : s.diffImpedance;
+    if (zDiff && (s.pair || s.signal === 'diff-pair')) {
+      const ko = opts.engine?.get(n.uid, 'keepOut')?.value as KeepOut | undefined;
+      const pg = geom ? pairGeometry(geom, zDiff, ko ? clearanceFor(ko, 'trace') : 0.2) : null;
+      if (!geom) notes.push(`no stackup line geometry for ${opts.layer ?? 'the outer layer'}: pair width for ${zDiff} Ω not set`);
+      else if (!pg) notes.push(`${zDiff} Ω differential cannot be reached on ${opts.layer} with this stackup`);
+      else {
+        value.traceWidth = pg.width;
+        value.diffGap = pg.gap;
+        if (pg.width > 1) notes.push(`${zDiff} Ω differential needs ${pg.width} mm traces ${pg.gap} mm apart on ${opts.layer}: a thinner dielectric to the plane (more layers) would make them narrower`);
+      }
+    }
     const c = s.voltage ? clearanceForVoltage(s.voltage) : 0;
     if (c) value.keepOut = c;
     const nextMine = new Set<string>();
@@ -344,8 +370,8 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
     }
     const list = [...nextMine].join(' ') || null;
     if ((n.props.signalRules ?? null) !== list) ops.push({ op: 'setProp', uid: n.uid, key: 'signalRules', value: list });
-    if (value.traceWidth || value.keepOut || kept.length || notes.length)
-      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
+    if (value.traceWidth || value.keepOut || value.diffGap || kept.length || notes.length)
+      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(nextMine.has('diffGap') ? { diffGap: value.diffGap! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
   }
   return { ops, rules };
 }

@@ -127,12 +127,41 @@ export function impedance(g: LineGeometry, w: number): number {
   const u = we / h;
   const a = 1 + Math.log((Math.pow(u, 4) + Math.pow(u / 52, 2)) / (Math.pow(u, 4) + 0.432)) / 49 + Math.log(1 + Math.pow(u / 18.1, 3)) / 18.7;
   const b = 0.564 * Math.pow((g.er - 0.9) / (g.er + 3), 0.053);
-  const eeff = (g.er + 1) / 2 + ((g.er - 1) / 2) * Math.pow(1 + 10 / u, -a * b);
+  const eeff = microstripEeff(g.er, u, a, b);
   const f = 6 + (2 * Math.PI - 6) * Math.exp(-Math.pow(30.666 / u, 0.7528));
   let z = (60 / Math.sqrt(eeff)) * Math.log(f / u + Math.sqrt(1 + 4 / (u * u)));
   // Solder mask over the trace lowers impedance by a few percent.
   if (g.masked) z *= 0.97;
   return z;
+}
+
+const microstripEeff = (er: number, u: number, a: number, b: number) => (er + 1) / 2 + ((er - 1) / 2) * Math.pow(1 + 10 / u, -a * b);
+
+/**
+ * Effective relative permittivity of a trace of width w (mm): the stripline's dielectric, or for a
+ * microstrip the Hammerstad–Jensen value (part of the field runs in air, so outer layers are faster).
+ */
+export function effectivePermittivity(g: LineGeometry, w: number): number {
+  if (g.kind === 'stripline') return g.er;
+  const u = Math.max(1e-6, w / g.h);
+  const a = 1 + Math.log((Math.pow(u, 4) + Math.pow(u / 52, 2)) / (Math.pow(u, 4) + 0.432)) / 49 + Math.log(1 + Math.pow(u / 18.1, 3)) / 18.7;
+  const b = 0.564 * Math.pow((g.er - 0.9) / (g.er + 3), 0.053);
+  return microstripEeff(g.er, u, a, b);
+}
+
+/** Propagation delay of a trace (ps per mm): √εeff / c. */
+export function propagationDelay(g: LineGeometry, w: number): number {
+  return Math.sqrt(effectivePermittivity(g, w)) * (1e12 / 299792458e3);
+}
+
+/**
+ * Width and gap of an edge-coupled pair for a differential impedance: the gap is kept at `minGap` (the
+ * clearance the nets ask for, at least 0.15 mm) and the width solved for it. null when out of range.
+ */
+export function pairGeometry(g: LineGeometry, target: number, minGap: number): { width: number; gap: number } | null {
+  const gap = Math.max(0.15, minGap);
+  const width = widthForImpedance(g, target, gap);
+  return width === null ? null : { width, gap: Math.round(gap * 1000) / 1000 };
 }
 
 /** Differential impedance of an edge-coupled pair (width w, gap s). */

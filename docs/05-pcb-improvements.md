@@ -719,6 +719,27 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     routed coupled at the computed width and gap, with symmetric vias, skew within the preset and no
     corner of 90° or sharper.
   - *Moved to PM1 (with P4):* routing a pair together by hand and showing its skew while routing.
+  - *Progress (2026-11-13), first part:* the pair's numbers, before routing it.
+    - Rules `diffImpedance` (Ω) and `diffGap` (mm), added at the end of `ruleDefs.ts`.
+    - `pairGeometry` in `stackup.ts`: the gap is kept at the nets' clearance (at least 0.15 mm) and the
+      width solved for the differential impedance with the existing calculator. On the outer layer, 90 Ω
+      at a 0.2 mm gap needs 1.08 mm traces on a 1.6 mm two-layer board, 0.60 mm on 0.8 mm, and 0.27 mm on a
+      1.6 mm four-layer board (0.23 mm on its inner layer); 100 Ω needs 0.83, 0.47 and 0.22 mm.
+    - `classify_nets apply=true` writes `traceWidth` and `diffGap` onto both halves of a pair (partner by
+      name or `pairWith`, or class `diff-pair`) from the net's `diffImpedance` rule, else its interface
+      preset; an interface given on one half counts for both. The width is noted when over 1 mm. These
+      computed rules follow the same bookkeeping as the others (`signalRules`; a rule set by hand stays).
+    - **Skew in time.** `effectivePermittivity` and `propagationDelay` (ps/mm) in `stackup.ts`: 5.7 – 5.8
+      ps/mm on outer layers, 7.0 ps/mm on an FR-4 inner layer. `netLengths(doc, engine, stackup)` adds each
+      net's `delay` (every trace with its own layer and width); `diffPairs` gives `skewPs`, `lengthGroups`
+      `spreadPs`; pairs set by hand (`pairWith`) are found before the name patterns. `net_lengths` and the
+      Board panel show them.
+    Tests (`diffpair.test.ts`): stripline slower than microstrip (≈ 7.0 ps/mm); the pair geometry meets
+    90 Ω within 1 Ω; a USB 2.0 preset on one half sizes both halves, and a `diffImpedance` rule set by
+    hand wins; delays and the skew in length and time of a pair set by hand.
+  - Still open in P10: routing a pair together (one path split into two traces, symmetric vias and
+    breakout, `diffUncoupledMax`), tuning (`diffSkewMax`, serpentines on any segment with 45° / arc
+    corners and 3 × width spacing), `diffPairClearance`, and the acceptance board.
 - [ ] **P11. Autoplacer that uses the schematic.**
   - The greedy placement of today stays as the start; an improvement pass follows (simulated annealing or
     pairwise swaps, written from textbook descriptions) that minimises total ratsnest length (half-perimeter

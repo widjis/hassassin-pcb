@@ -7,6 +7,7 @@ import type { Doc, DocNode, Vec2 } from './model.ts';
 import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { arcPoints } from './geom.ts';
+import { lineGeometry, propagationDelay, type Stackup } from './stackup.ts';
 
 const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x' in v ? (v as Vec2) : undefined);
 
@@ -17,6 +18,10 @@ export interface NetLength {
   vias: number;
   /** Length-match group (net property `lengthGroup`). */
   group?: string;
+  /** Partner of a differential pair set by hand (net property `pairWith`, P16). */
+  pairWith?: string;
+  /** Delay of the routed copper (ps), each trace with its own layer's propagation delay (P10; needs the stackup). */
+  delay?: number;
 }
 
 export function traceLength(engine: StyleEngine, t: DocNode): number {
@@ -31,19 +36,47 @@ export function traceLength(engine: StyleEngine, t: DocNode): number {
   return s;
 }
 
-export function netLengths(doc: Doc, engine: StyleEngine): NetLength[] {
+/**
+ * Routed length per net. With the stackup, also the delay: outer layers are faster than inner ones, so
+ * nets that change layer are compared in time as well (P10).
+ */
+export function netLengths(doc: Doc, engine: StyleEngine, stackup?: Stackup): NetLength[] {
   const out: NetLength[] = [];
+  const perMm = new Map<string, number>();
+  const delayOf = (layer: string, w: number) => {
+    const k = `${layer}|${w}`;
+    let d = perMm.get(k);
+    if (d === undefined) {
+      const g = stackup ? lineGeometry(stackup, layer) : null;
+      d = g ? propagationDelay(g, w) : NaN;
+      perMm.set(k, d);
+    }
+    return d;
+  };
   for (const n of doc.nodes.values()) {
     if (n.type !== 'net' || n.name === '(no net)') continue;
     let length = 0;
+    let delay = 0;
     let segments = 0;
     let vias = 0;
     for (const c of n.children) {
       const k = doc.nodes.get(c);
-      if (k?.type === 'trace') (length += traceLength(engine, k)), segments++;
-      else if (k?.type === 'via') vias++;
+      if (k?.type === 'trace') {
+        const l = traceLength(engine, k);
+        length += l;
+        segments++;
+        if (stackup) delay += l * delayOf(String(engine.get(k.uid, 'layer')?.value ?? ''), Number(engine.get(k.uid, 'traceWidth')?.value ?? 0.25));
+      } else if (k?.type === 'via') vias++;
     }
-    out.push({ net: n.name, length: Math.round(length * 1000) / 1000, segments, vias, ...(n.props.lengthGroup ? { group: String(n.props.lengthGroup) } : {}) });
+    out.push({
+      net: n.name,
+      length: Math.round(length * 1000) / 1000,
+      segments,
+      vias,
+      ...(n.props.lengthGroup ? { group: String(n.props.lengthGroup) } : {}),
+      ...(typeof n.props.pairWith === 'string' && n.props.pairWith ? { pairWith: n.props.pairWith } : {}),
+      ...(stackup && Number.isFinite(delay) ? { delay: Math.round(delay * 10) / 10 } : {}),
+    });
   }
   return out.sort((a, b) => a.net.localeCompare(b.net));
 }
@@ -55,6 +88,8 @@ export interface DiffPair {
   lengthP: number;
   lengthN: number;
   skew: number;
+  /** Skew in time (ps), when the lengths carry delays. */
+  skewPs?: number;
 }
 
 /** Pairs found by name: X_P/X_N, X+/X-, XP/XN (case-insensitive, also DP/DM). */
@@ -67,6 +102,24 @@ export function diffPairs(lengths: NetLength[]): DiffPair[] {
     [/^(.*?)DP$/i, (b) => b],
   ];
   const seen = new Set<string>();
+  const pair = (p: NetLength, n: NetLength, name: string): DiffPair => ({
+    name,
+    p: p.net,
+    n: n.net,
+    lengthP: p.length,
+    lengthN: n.length,
+    skew: Math.round(Math.abs(p.length - n.length) * 1000) / 1000,
+    ...(p.delay !== undefined && n.delay !== undefined ? { skewPs: Math.round(Math.abs(p.delay - n.delay) * 10) / 10 } : {}),
+  });
+  // Partners set by hand first.
+  for (const l of lengths) {
+    const other = l.pairWith ? by.get(l.pairWith) : undefined;
+    if (!other || seen.has(l.net) || seen.has(other.net)) continue;
+    seen.add(l.net);
+    seen.add(other.net);
+    const [p, n] = l.net < other.net ? [l, other] : [other, l];
+    out.push(pair(p, n, `${p.net}/${n.net}`));
+  }
   for (const l of lengths) {
     for (const [re] of pats) {
       const m = re.exec(l.net);
@@ -74,10 +127,10 @@ export function diffPairs(lengths: NetLength[]): DiffPair[] {
       const base = m[1]!;
       const cands = l.net.endsWith('+') ? [`${base}-`] : /DP$/i.test(l.net) ? [`${base}DM`, `${base}dm`, `${base}DN`] : [`${base}${m[2] ?? ''}N`, `${base}${m[2] ?? ''}n`];
       const other = cands.map((c) => by.get(c)).find(Boolean);
-      if (!other || seen.has(l.net)) continue;
+      if (!other || seen.has(l.net) || seen.has(other.net)) continue;
       seen.add(l.net);
       seen.add(other.net);
-      out.push({ name: (base || l.net).replace(/[_/]+$/, '') || l.net, p: l.net, n: other.net, lengthP: l.length, lengthN: other.length, skew: Math.round(Math.abs(l.length - other.length) * 1000) / 1000 });
+      out.push(pair(l, other, (base || l.net).replace(/[_/]+$/, '') || l.net));
       break;
     }
   }
@@ -86,10 +139,12 @@ export function diffPairs(lengths: NetLength[]): DiffPair[] {
 
 export interface LengthGroup {
   group: string;
-  nets: { net: string; length: number }[];
+  nets: { net: string; length: number; delay?: number }[];
   longest: number;
   shortest: number;
   spread: number;
+  /** Spread in time (ps), when the lengths carry delays. */
+  spreadPs?: number;
 }
 
 export function lengthGroups(lengths: NetLength[]): LengthGroup[] {
@@ -98,7 +153,15 @@ export function lengthGroups(lengths: NetLength[]): LengthGroup[] {
   return [...groups].map(([group, ls]) => {
     const longest = Math.max(...ls.map((x) => x.length));
     const shortest = Math.min(...ls.map((x) => x.length));
-    return { group, nets: ls.map((x) => ({ net: x.net, length: x.length })), longest, shortest, spread: Math.round((longest - shortest) * 1000) / 1000 };
+    const ds = ls.map((x) => x.delay).filter((d): d is number => d !== undefined);
+    return {
+      group,
+      nets: ls.map((x) => ({ net: x.net, length: x.length, ...(x.delay !== undefined ? { delay: x.delay } : {}) })),
+      longest,
+      shortest,
+      spread: Math.round((longest - shortest) * 1000) / 1000,
+      ...(ds.length === ls.length && ds.length ? { spreadPs: Math.round((Math.max(...ds) - Math.min(...ds)) * 10) / 10 } : {}),
+    };
   });
 }
 

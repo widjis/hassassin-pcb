@@ -1545,11 +1545,11 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'net_lengths',
-    description: 'Routed length per net, differential pairs found by name (X_P/X_N, X+/X-, DP/DM) with their skew, and length-match groups (net property lengthGroup) with their spread.',
+    description: 'Routed length and delay (ps, from each layer\'s propagation delay in the stackup) per net, differential pairs (partner set with set_pin_signal pair, or found by name: X_P/X_N, X+/X-, DP/DM) with their skew in length and time, and length-match groups (net property lengthGroup) with their spread in length and time.',
     mutates: false,
     input: { type: 'object', properties: { filter: { type: 'string' } } },
     run: (p, a) => {
-      const all = netLengths(p.doc, p.engine);
+      const all = netLengths(p.doc, p.engine, stackupOf(p.doc, p.copper));
       const f = typeof a.filter === 'string' ? a.filter.toLowerCase() : '';
       const cls = new Map(netSignals(p.doc).map((s) => [s.net, s.signal]));
       return { nets: all.filter((l) => !f || l.net.toLowerCase().includes(f)).filter((l) => l.segments).map((l) => ({ ...l, signal: cls.get(l.net) ?? 'general' })), pairs: diffPairs(all), groups: lengthGroups(all) };
@@ -1568,7 +1568,7 @@ export const TOOLS: ToolDef[] = [
       if (a.apply === true) {
         const st = stackupOf(p.doc, p.copper);
         const top = st.layers.find((l) => l.kind === 'copper');
-        const plan = planSignalClasses(p.doc, { stackup: st, ...(top ? { copperMm: top.thickness, layer: top.name } : {}), ...(f ? { nets: list.map((x) => x.net) } : {}) });
+        const plan = planSignalClasses(p.doc, { stackup: st, engine: p.engine, ...(top ? { copperMm: top.thickness, layer: top.name } : {}), ...(f ? { nets: list.map((x) => x.net) } : {}) });
         if (plan.ops.length) apply(p, 'Classify nets', plan.ops);
         rules = plan.rules;
       }

@@ -120,7 +120,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
     const sigStatus = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em;flex-shrink:0' });
     const applyClasses = () => {
       const top = st.layers.find((l) => l.kind === 'copper');
-      const plan = planSignalClasses(doc, { stackup: st, ...(top ? { copperMm: top.thickness, layer: top.name } : {}) });
+      const plan = planSignalClasses(doc, { stackup: st, engine, ...(top ? { copperMm: top.thickness, layer: top.name } : {}) });
       if (!plan.ops.length) return void (sigStatus.textContent = 'The nets already carry these classes.');
       app.apply('Classify nets', plan.ops);
       const notes = plan.rules.filter((r) => r.note || r.kept).map((r) => `${r.net}: ${r.note ?? `kept your ${r.kept!.join(', ')}`}`);
@@ -220,7 +220,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
     compute();
 
     // ---- lengths
-    const lens = netLengths(doc, engine).filter((l) => l.segments);
+    const lens = netLengths(doc, engine, st).filter((l) => l.segments);
     const pairs = diffPairs(lens);
     const groups = lengthGroups(lens);
     root.append(h('div', { class: 'section-title', style: 'margin-top:12px' }, h('span', {}, `Lengths · ${pairs.length} pair(s)`)));
@@ -245,7 +245,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
           { class: 'len-row' },
           h('strong', {}, p.name),
           h('span', { class: 'dim' }, `${p.lengthP.toFixed(2)} / ${p.lengthN.toFixed(2)} mm`),
-          h('span', { class: p.skew > 0.15 ? 'err-text' : 'dim' }, `skew ${p.skew.toFixed(2)}`),
+          h('span', { class: p.skew > 0.15 ? 'err-text' : 'dim', title: 'Skew in length, and in time from each layer\'s propagation delay' }, `skew ${p.skew.toFixed(2)} mm${p.skewPs !== undefined ? ` · ${p.skewPs.toFixed(1)} ps` : ''}`),
           p.skew > 0.05 ? h('button', { onclick: () => tune(short, Math.max(p.lengthP, p.lengthN)), title: `Add a serpentine to ${short} to match ${long}` }, 'Match') : null,
         ),
       );
