@@ -86,8 +86,8 @@ describe('autoroute fixtures: invariants', { timeout: 60_000 }, () => {
 // P8e: corner styles. `45` (default): no corner of 90° or sharper. `arc`: every bend is an arc.
 // `90`: right angles allowed. In every style: no acute corner, no off-angle segment, no collinear joint.
 describe('autoroute fixtures: corner styles (P8e)', { timeout: 120_000 }, () => {
-  // mcu leaves two IO nets open (docs/05 P8f), so it is left out of the styles that expect a complete
-  // routing; its corners are checked with the default style.
+  // mcu routes completely in the default style, but with arc or 90 corners it still leaves one or two
+  // connections open (docs/05 P8f), so those two tests leave it out.
   const all = Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[];
   const names = all.filter((n) => n !== 'mcu');
   const styled = async (name: keyof typeof ROUTE_FIXTURES, style: '45' | 'arc' | '90') => {
@@ -202,12 +202,26 @@ describe('autoroute fixtures: costs and order (P8f)', { timeout: 120_000 }, () =
     const p = await ROUTE_FIXTURES.mcu();
     const f = await measureAutoroute(p);
     expect(f.drcErrors).toBe(0);
-    const open = computeRatsnest(p.doc, p.engine, p.copper).lines;
-    // Known gap: the left bus crosses itself at the 2×5 header and one or two IO nets stay open (see docs/05).
-    expect(open.filter((l) => !/^IO\d$/.test(l.net))).toEqual([]);
-    expect(open.length).toBeLessThanOrEqual(2);
+    expect(computeRatsnest(p.doc, p.engine, p.copper).lines).toEqual([]);
     expect(f.vias).toBeGreaterThan(0);
     expect(f.ms).toBeLessThan(15000);
+  });
+  it('mcu: the left bus keeps its order past the 2×5 header (bus lanes, P8f)', async () => {
+    const p = await ROUTE_FIXTURES.mcu();
+    await measureAutoroute(p);
+    // Where each IO net's copper crosses the line just right of the header's front (right-hand) row.
+    const X = 108.7;
+    const at: Record<string, number> = {};
+    for (const n of p.doc.nodes.values()) {
+      const net = n.parent ? p.doc.nodes.get(n.parent)?.name : undefined;
+      if (n.type !== 'trace' || !net || !/^IO\d$/.test(net)) continue;
+      const a = p.engine.get(n.uid, 'start')!.value as { x: number; y: number };
+      const b = p.engine.get(n.uid, 'end')!.value as { x: number; y: number };
+      if ((a.x - X) * (b.x - X) > 0 || a.x === b.x) continue;
+      at[net] = a.y + ((X - a.x) / (b.x - a.x)) * (b.y - a.y);
+    }
+    expect(Object.keys(at).sort()).toEqual(['IO1', 'IO2', 'IO3', 'IO4', 'IO5', 'IO6', 'IO7', 'IO8']);
+    expect(Object.entries(at).sort((x, y) => x[1] - y[1]).map(([k]) => k)).toEqual(['IO1', 'IO2', 'IO3', 'IO4', 'IO5', 'IO6', 'IO7', 'IO8']);
   });
   it('fanout=false routes from the pads as before', async () => {
     const f = await measureAutoroute(await ROUTE_FIXTURES['qfn-fine'](), { fanout: false });

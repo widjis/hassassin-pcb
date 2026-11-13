@@ -520,6 +520,8 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   // pulled the routes tighter than the pins' pitch, crossed them and added vias (bus fixture, RGB lamp),
   // while proximity and the layer directions already lay a bus side by side.
   const bundled = new Set<(typeof rats)[number]>();
+  /** Per connection of a bus: where it may cross the front row of its pins' part (see Lanes below). */
+  const lanes = new Map<(typeof rats)[number], { alongX: boolean; sg: number; uLo: number; uHi: number; vLo: number; vHi: number }>();
   {
     const midOf = (s: (typeof shapes)[number]) => ({ x: (s.box.minX + s.box.maxX) / 2, y: (s.box.minY + s.box.maxY) / 2 });
     const partPads = new Map<string, Vec2[]>();
@@ -564,6 +566,88 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         if (!da || !db) (da = near(a1, b2)), (db = near(b1, a2));
         if (!da || !db) continue;
         bundled.add(rats[x]!).add(rats[y]!);
+      }
+    }
+    // Lanes (P8f): a bus that leaves a part with more than one row of pins (a 2 × n header) has to keep its
+    // order. The nets are ordered by their pins at the other part; a net whose pin sits in a rear row then
+    // gets the gap in the front row (the row towards the other part) that keeps that order, e.g. the odd
+    // pins of a header pass above their even neighbours, not below them, and the traces need not cross.
+    // While routing, such a net may cross the front row only through its gap. Nothing is planned when the
+    // front row's own nets are out of order or a gap is too narrow.
+    const groups = new Map<string, number[]>();
+    rats.forEach((r, i) => {
+      const [a, b] = ends[i]!;
+      if (!bundled.has(r) || !a || !b) return;
+      const k = [a.part, b.part].sort().join('|');
+      (groups.get(k) ?? groups.set(k, []).get(k)!).push(i);
+    });
+    const padBoxAt = (q: Vec2) => padShapes.find((x) => x.box.minX - 1e-6 <= q.x && q.x <= x.box.maxX + 1e-6 && x.box.minY - 1e-6 <= q.y && q.y <= x.box.maxY + 1e-6 && (!x.areas[0] || inArea(q, x.areas[0])));
+    for (const idx of groups.values()) {
+      if (idx.length < 3) continue;
+      const [e0a, e0b] = ends[idx[0]!]!;
+      for (const [P, Q] of [[e0a!.part, e0b!.part], [e0b!.part, e0a!.part]] as const) {
+        const atP = (i: number) => (ends[i]![0]!.part === P ? 0 : 1);
+        const ptsP = idx.map((i) => (atP(i) === 0 ? rats[i]!.a : rats[i]!.b));
+        const ptsQ = idx.map((i) => (atP(i) === 0 ? rats[i]!.b : rats[i]!.a));
+        const cP = { x: ptsP.reduce((t, q) => t + q.x, 0) / ptsP.length, y: ptsP.reduce((t, q) => t + q.y, 0) / ptsP.length };
+        const cQ = { x: ptsQ.reduce((t, q) => t + q.x, 0) / ptsQ.length, y: ptsQ.reduce((t, q) => t + q.y, 0) / ptsQ.length };
+        const alongX = Math.abs(cQ.x - cP.x) >= Math.abs(cQ.y - cP.y);
+        const sg = Math.sign(alongX ? cQ.x - cP.x : cQ.y - cP.y) || 1;
+        const U = (q: Vec2) => (alongX ? q.x : q.y) * sg;
+        const V = (q: Vec2) => (alongX ? q.y : q.x);
+        const partPadsP = padShapes.filter((x) => doc.nodes.get(x.uid)?.parent === P);
+        const uniq = new Map<string, (typeof shapes)[number]>();
+        for (const x of partPadsP) uniq.set(`${midOf(x).x.toFixed(3)},${midOf(x).y.toFixed(3)}`, x);
+        const pads = [...uniq.values()];
+        const front = Math.max(...pads.map((x) => U(midOf(x))));
+        const frontPads = pads.filter((x) => U(midOf(x)) > front - 0.1).sort((x, y) => V(midOf(x)) - V(midOf(y)));
+        const own = idx.map((i, k) => padBoxAt(ptsP[k]!));
+        if (own.some((x) => !x)) continue;
+        const isFront = own.map((x) => U(midOf(x!)) > front - 0.1);
+        if (isFront.every(Boolean) || frontPads.length < 2) continue;
+        // Order along the front row as the pins at Q run (either way round, whichever the front nets follow).
+        let seq = idx.map((_, k) => k).sort((x, y) => V(ptsQ[x]!) - V(ptsQ[y]!));
+        const frontV = (ks: number[]) => ks.filter((k) => isFront[k]).map((k) => V(midOf(own[k]!)));
+        const mono = (vs: number[]) => vs.every((v, j) => j === 0 || v > vs[j - 1]!);
+        if (!mono(frontV(seq))) {
+          seq = seq.reverse();
+          if (!mono(frontV(seq))) continue;
+        }
+        const lo = (x: (typeof shapes)[number]) => (alongX ? x.box.minY : x.box.minX);
+        const hi = (x: (typeof shapes)[number]) => (alongX ? x.box.maxY : x.box.maxX);
+        const gaps = [{ lo: -Infinity, hi: lo(frontPads[0]!), used: 0 }];
+        for (let j = 0; j + 1 < frontPads.length; j++) gaps.push({ lo: hi(frontPads[j]!), hi: lo(frontPads[j + 1]!), used: 0 });
+        gaps.push({ lo: hi(frontPads[frontPads.length - 1]!), hi: Infinity, used: 0 });
+        const need = (i: number) => netRule(rats[i]!.net, 'traceWidth', 0.25) + netClear(rats[i]!.net);
+        let cur = -Infinity;
+        const plan = new Map<number, (typeof gaps)[number]>();
+        let ok = true;
+        for (let j = 0; j < seq.length && ok; j++) {
+          const k = seq[j]!;
+          if (isFront[k]) {
+            cur = Math.max(cur, V(midOf(own[k]!)));
+            continue;
+          }
+          const next = seq.slice(j + 1).find((x) => isFront[x]);
+          const limit = next === undefined ? Infinity : V(midOf(own[next]!));
+          const i = idx[k]!;
+          // A gap after the last placed net and before the next front-row net, with room for one more trace.
+          const fits = gaps.filter((gp) => gp.lo >= cur - 1e-6 && gp.hi <= limit + 1e-6 && gp.hi - gp.lo >= (gp.used + 1) * need(i) + netClear(rats[i]!.net) - 1e-6);
+          if (!fits.length) {
+            ok = false;
+            break;
+          }
+          const mine = V(midOf(own[k]!));
+          const gp = fits.reduce((x, y) => (Math.abs((Math.max(x.lo, mine - 50) + Math.min(x.hi, mine + 50)) / 2 - mine) <= Math.abs((Math.max(y.lo, mine - 50) + Math.min(y.hi, mine + 50)) / 2 - mine) ? x : y));
+          gp.used++;
+          plan.set(i, gp);
+          cur = Math.max(cur, gp.lo);
+        }
+        if (!ok || !plan.size) continue;
+        const uLo = Math.min(...frontPads.map((x) => (alongX ? (sg > 0 ? x.box.minX : -x.box.maxX) : sg > 0 ? x.box.minY : -x.box.maxY)));
+        const uHi = Math.max(...frontPads.map((x) => (alongX ? (sg > 0 ? x.box.maxX : -x.box.minX) : sg > 0 ? x.box.maxY : -x.box.minY)));
+        for (const [i, gp] of plan) lanes.set(rats[i]!, { alongX, sg, uLo, uHi, vLo: gp.lo, vHi: gp.hi });
+        break;
       }
     }
   }
@@ -648,7 +732,8 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   };
 
   /** Try one connection. `pres` = cost per run-route in the way (Infinity: only free room). */
-  const routeConn = (r: (typeof rats)[number], pres: number, hist: Float32Array): { ok: true; route: Route; victims: Set<number>; contested: number[] } | { ok: false; reason: string; joined?: boolean } => {
+  const routeConn = (r: (typeof rats)[number], pres: number, hist: Float32Array, noLane = false): { ok: true; route: Route; victims: Set<number>; contested: number[] } | { ok: false; reason: string; joined?: boolean } => {
+    const lane = noLane ? undefined : lanes.get(r);
     const id = netId(r.net);
     const width = netRule(r.net, 'traceWidth', 0.25);
     const viaD = netRule(r.net, 'viaDiameter', 0.6);
@@ -723,6 +808,16 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       if (m >> 1 === call) return (m & 1) === 1;
       const k = core[li]![c]!;
       let ok = k === 0 || k === id;
+      if (ok && lane) {
+        // A bus net crosses the front row of its part only through its own gap (Lanes).
+        const i = c % W;
+        const x = cx(i);
+        const y = cy((c - i) / W);
+        const u = (lane.alongX ? x : y) * lane.sg;
+        const v = lane.alongX ? y : x;
+        const m = halfFull + cn;
+        if (u >= lane.uLo - m && u <= lane.uHi + m && (v < lane.vLo || v > lane.vHi)) ok = false;
+      }
       if (ok) {
         const h = halfAt(c);
         ok = clear(li, c, h, h === halfFull ? slackFull : slackFor(h + cn));
@@ -1634,7 +1729,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         failReason.set(ci, hard.reason);
         continue;
       }
-      const res = round + 1 < maxRounds ? routeConn(r, pres, hist) : hard;
+      let res = round + 1 < maxRounds ? routeConn(r, pres, hist) : hard;
+      // A bus lane that cannot be kept (even by ripping up others) is given up for this connection.
+      if (!res.ok && lanes.has(r)) {
+        const free = routeConn(r, Infinity, hist, true);
+        res = free.ok ? free : round + 1 < maxRounds ? routeConn(r, pres, hist, true) : free;
+      }
       if (!res.ok) {
         // Blocked by fixed copper, not by other routes of this run: no rip-up can help.
         failReason.set(ci, res.ok === false && !res.joined ? res.reason : hard.reason);

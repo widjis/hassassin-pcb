@@ -519,7 +519,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     Pours are tested by a raster made once per run instead of their polygons, which took GND from 14.8 s to
     0.65 s and the board from 21.5 s to 2.3 s. Result: 30 / 32 connections, 15 vias, 323 mm, no DRC errors,
     every GND pad joined to the pour; a test checks it. The RGB lamp copy is unchanged (35 vias, 882.4 mm).
-    Open, found on this board:
+    Open, found on this board (both fixed since, see below):
     - two IO nets of the left bus stay open: the router lays the odd pins' traces through the gaps *below*
       the header's right-hand pads, which reverses the order against the QFN's pins, so the traces must
       cross and two even pads are fenced in; rip-up then swaps the same two nets for 30 rounds (each one's
@@ -551,8 +551,23 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     planned as a whole (the order of its nets at the header, which side of each pad a trace passes), or a
     negotiation that re-routes all nets each round with a bounded present cost.
     The per-class costs came with P16 (default rulesets per signal class; the router reads `viaCost`,
-    `cornerStyle`, `planeGapCost`, `keepOut`, `traceWidth` and `classClearance` per net). Still open in P8f:
-    the left bus of the mcu fixture (whole-bus planning or a reworked negotiation, see above).
+    `cornerStyle`, `planeGapCost`, `keepOut`, `traceWidth` and `classClearance` per net).
+  - *Progress (2026-11-13), bus lanes:* the left bus of the mcu fixture is fixed by planning where each
+    bus net leaves a part with more than one row of pins. For every group of bundled connections between
+    two parts (three or more), seen from each part in turn: the row nearest the other part is the front
+    row; the nets are ordered by their pins at the other part (either way round, whichever the front-row
+    nets already follow; nothing is planned if they follow neither); each net whose pin sits in a rear
+    row then gets the gap in the front row that keeps that order (between the last net placed and the
+    next front-row net, with room for one more trace: width plus clearance), the gap nearest its pin.
+    While routing, such a net may cross the front row's band only through its gap, on every layer; if it
+    cannot be routed that way (also after rip-up), it is routed without the lane. On the 2 × 5 header the
+    odd pins now pass above their even neighbours: mcu 32 / 32 routed (30 before), 15 vias, 355.5 mm
+    (14 and 320.6 for 30), no corner of 90° or sharper, no DRC errors; a test checks the order IO1 … IO8
+    where the bus passes the header's front row, and that every connection is routed. The RGB lamp and
+    the other fixtures are unchanged (no bus there leaves a part with two rows). With `arc` or `90` corners
+    mcu still leaves one or two connections open, so those two style tests leave it out.
+    Still open in P8f: lanes for a bus that turns (the front row is taken along the straight line between
+    the two parts' pins) and for parts with pins on several sides.
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.
