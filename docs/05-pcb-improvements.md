@@ -527,8 +527,17 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
       wants a view of the bus as a whole (the order of the nets along it), not one connection at a time;
       more rounds, `order=difficulty` or no proximity cost do not help;
     - a second connection at a fanned pad starts at the stub's end even when its target lies behind it, so
-      it turns back in two short pieces (a sharp-looking U-turn, GND at U1.16);
-    the corner-style tests skip this fixture until then.
+      it turns back in two short pieces (a sharp-looking U-turn, GND at U1.16). *Fixed (2026-11-13):* a
+      connection from a fanned pad to a pad of the same part that has no stub of its own (the exposed pad)
+      leaves from the pad inwards, not from the stub's end; a pin on the far side of the part still goes
+      round through both stubs. The check whether a stub is already taken now looks for a piece running
+      out along it (the inward route starts at the pad's centre too and had counted as taking it, so the
+      next connection ended next to the stub, 0.05 mm off, with a 90° jog). A stub that a route ends on
+      without taking it in is written anyway, so the copper reaches the pad. mcu: 30 / 32, 14 vias,
+      320.6 mm (15 and 323 before), no corner of 90° or sharper; the 45° corner test now includes it (the
+      arc and 90 tests still leave it out, as they expect every connection routed). RGB lamp unchanged.
+      Tried and dropped on the way: folding micrometre pieces left by the corner passes into the next piece
+      (it moved a joint off the stub's end and made a new 90° corner at VCC).
     Tried for the left bus and dropped (2026-11-13), none kept in the code:
     - an exit lane, a short straight run in front of each stub's end kept for its own net: three nets open
       instead of two (IO4, IO5, P3);
@@ -541,7 +550,9 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     cost grows 1.6× per round and the history by 1, so the history never decides). A real fix wants the bus
     planned as a whole (the order of its nets at the header, which side of each pad a trace passes), or a
     negotiation that re-routes all nets each round with a bounded present cost.
-    Still open in P8f: the per-class costs (with P16).
+    The per-class costs came with P16 (default rulesets per signal class; the router reads `viaCost`,
+    `cornerStyle`, `planeGapCost`, `keepOut`, `traceWidth` and `classClearance` per net). Still open in P8f:
+    the left bus of the mcu fixture (whole-bus planning or a reworked negotiation, see above).
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.

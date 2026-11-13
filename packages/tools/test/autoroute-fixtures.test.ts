@@ -86,15 +86,17 @@ describe('autoroute fixtures: invariants', { timeout: 60_000 }, () => {
 // P8e: corner styles. `45` (default): no corner of 90° or sharper. `arc`: every bend is an arc.
 // `90`: right angles allowed. In every style: no acute corner, no off-angle segment, no collinear joint.
 describe('autoroute fixtures: corner styles (P8e)', { timeout: 120_000 }, () => {
-  // mcu has known gaps (two IO nets left open, a U-turn off a stub; docs/05 P8f), checked on its own below.
-  const names = (Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[]).filter((n) => n !== 'mcu');
+  // mcu leaves two IO nets open (docs/05 P8f), so it is left out of the styles that expect a complete
+  // routing; its corners are checked with the default style.
+  const all = Object.keys(ROUTE_FIXTURES) as (keyof typeof ROUTE_FIXTURES)[];
+  const names = all.filter((n) => n !== 'mcu');
   const styled = async (name: keyof typeof ROUTE_FIXTURES, style: '45' | 'arc' | '90') => {
     const p = await ROUTE_FIXTURES[name]();
     await runTool(p, 'set_rule', { target: 'net', rule: 'cornerStyle', value: style });
     return measureAutoroute(p, FIXTURE_ARGS[name] ?? {});
   };
   it('45: no corner of 90° or sharper on any fixture', async () => {
-    for (const name of names) {
+    for (const name of all) {
       const f = await figures(name);
       expect([name, f.sharpCorners, f.acuteCorners, f.collinear, f.offAngle]).toEqual([name, 0, 0, 0, 0]);
     }

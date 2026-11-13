@@ -1047,17 +1047,35 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     // stub's outer end, straight on or at 45°.
     const myFans = fans.filter((f) => !f.off && f.pad.net === r.net);
     const fanAt = (q: Vec2) => myFans.find((f) => q.x >= f.pad.box.minX - 1e-6 && q.x <= f.pad.box.maxX + 1e-6 && q.y >= f.pad.box.minY - 1e-6 && q.y <= f.pad.box.maxY + 1e-6);
+    // A stub points away from its part. When the other end lies behind the pad (e.g. a pin to the exposed
+    // pad of its own part), leaving from the stub's end means turning straight back: the connection then
+    // leaves from the pad, and the stub stays for the connections that go outwards.
+    // Only towards a pad of the same part: a target across the board may lie "behind" too, and that one
+    // still wants the stub to get out of the pad row…
+    const partOf = (uid: string) => doc.nodes.get(uid)?.parent;
+    const behind = (f: Fan | undefined, other: Vec2) => {
+      if (!f) return false;
+      const c = { x: (f.pad.box.minX + f.pad.box.maxX) / 2, y: (f.pad.box.minY + f.pad.box.maxY) / 2 };
+      if ((other.x - c.x) * f.out[0] + (other.y - c.y) * f.out[1] >= 0) return false;
+      const part = partOf(f.pad.uid);
+      // …and one without a stub of its own (the exposed pad): a pin on the far side of the part is fanned
+      // out itself and is reached around the part, through both stubs.
+      return shapes.some((sh) => sh.kind === 'pad' && sh.net === r.net && !!sh.areas[0] && partOf(sh.uid) === part && inArea(other, sh.areas[0]) && !fans.some((g) => g.pad === sh));
+    };
+    const fa0 = fanAt(r.a);
+    const fb0 = fanAt(r.b);
+    const fa = behind(fa0, r.b) ? undefined : fa0;
+    const fb = behind(fb0, r.a) ? undefined : fb0;
+    const freed = new Set([fa0 !== fa ? fa0 : undefined, fb0 !== fb ? fb0 : undefined].filter(Boolean));
     const fanned = (st: number) => {
       if (!myFans.length) return false;
       const li = Math.floor(st / N);
       const c = st % N;
       const p = { x: cx(c % W), y: cy(Math.floor(c / W)) };
-      return myFans.some((f) => f.li === li && ((f.pad.areas[0] && inArea(p, f.pad.areas[0])) || distToSegment(p, f.a, f.e) <= f.half + 1e-6));
+      return myFans.some((f) => !freed.has(f) && f.li === li && ((f.pad.areas[0] && inArea(p, f.pad.areas[0])) || distToSegment(p, f.a, f.e) <= f.half + 1e-6));
     };
     for (const st of groupA) if (!groupB.has(st) && !fanned(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
     for (const st of groupB) if (!fanned(st) && onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
-    const fa = fanAt(r.a);
-    const fb = fanAt(r.b);
     entries(fa ? fa.e : r.a, seeds, fa?.out, islA);
     entries(fb ? fb.e : r.b, goals, fb?.out, islB);
     // No way out of a stub's end: start from the pad after all.
@@ -1230,7 +1248,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const vias: Vec2[] = [];
     // A route that leaves from a fanout stub's end takes the stub in as its first (or last) piece, unless a
     // route of the net already holds it, so the corner passes treat the escape like any other corner.
-    const stubFree = (f: Fan) => ![...routes.values()].some((rt) => rt.id === id && rt.segs.some((sg) => sg.li === f.li && (Math.hypot(sg.a.x - f.a.x, sg.a.y - f.a.y) < 1e-6 || Math.hypot(sg.b.x - f.a.x, sg.b.y - f.a.y) < 1e-6)));
+    // Held = a piece that starts at the pad's centre and runs out along the stub (a route of the net that
+    // leaves the pad inwards, to the exposed pad, starts there too but does not hold the stub).
+    const alongStub = (f: Fan, from: Vec2, to: Vec2) => Math.hypot(from.x - f.a.x, from.y - f.a.y) < 1e-6 && (to.x - f.a.x) * f.out[0] + (to.y - f.a.y) * f.out[1] > 1e-6 && distToSegment(to, f.a, { x: f.a.x + f.out[0] * 1e3, y: f.a.y + f.out[1] * 1e3 }) < 1e-6;
+    const stubFree = (f: Fan) => ![...routes.values()].some((rt) => rt.id === id && rt.segs.some((sg) => sg.li === f.li && (alongStub(f, sg.a, sg.b) || alongStub(f, sg.b, sg.a))));
     const atStub = (f: Fan | undefined, q: Vec2 | undefined, li: number) => !!f && !!q && li === f.li && Math.hypot(q.x - f.e.x, q.y - f.e.y) < 1e-6 && stubFree(f);
     let cur: { layer: number; pts: Vec2[] } = { layer: cells[0]!.li, pts: [...seeds.get(first)!.pts] };
     if (atStub(fa, cur.pts[0], cur.layer)) cur.pts.unshift(fa!.a);
@@ -1614,6 +1635,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
 
   // ---- Emit, in the order the connections were planned.
   const nextIndex = new Map<string, number>();
+  const emitted: Route[] = [];
   for (const [ci, r] of order.entries()) {
     if (joined.has(ci)) {
       report.routed.push({ net: r.net, from: r.a, to: r.b, length: 0, vias: 0 });
@@ -1641,6 +1663,25 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     for (const v of route.vias) ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('via'), type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
     nextIndex.set(node.uid, idx);
     report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(route.length * 1000) / 1000, vias: route.vias.length });
+    emitted.push(route);
+  }
+  // A fanout stub is written by the route that leaves from it. A route may also end on a stub without
+  // taking it in (its ratsnest point lay on the stub, or the pad's own connection went inwards to the
+  // exposed pad): then the stub is written here, so the copper reaches the pad.
+  for (const f of fans) {
+    if (f.off) continue;
+    const mine = emitted.filter((rt) => rt.net === f.pad.net);
+    const onStub = (q: Vec2) => distToSegment(q, f.a, f.e) <= f.half + 1e-6 && !(f.pad.areas[0] && inArea(q, f.pad.areas[0]));
+    const touched = mine.some((rt) => rt.segs.some((sg) => sg.li === f.li && (onStub(sg.a) || onStub(sg.b))) || rt.vias.some(onStub));
+    const has = mine.some((rt) => rt.segs.some((sg) => sg.li === f.li && [sg.a, sg.b].some((q) => Math.hypot(q.x - f.a.x, q.y - f.a.y) < 1e-6) && [sg.a, sg.b].some((q) => distToSegment(q, f.a, f.e) <= 1e-6 && Math.hypot(q.x - f.a.x, q.y - f.a.y) > 1e-6)));
+    const node = netNode.get(f.pad.net!);
+    if (!touched || has || !node) continue;
+    const width = netRule(f.pad.net!, 'traceWidth', 0.25);
+    let idx = nextIndex.get(node.uid) ?? node.children.length;
+    const rules: RuleDecl[] = [{ name: 'start', value: f.a }, { name: 'end', value: f.e }, { name: 'layer', value: layers[f.li]! }];
+    if (2 * f.half < width - 1e-9) rules.push({ name: 'traceWidth', value: Math.round(2 * f.half * 1000) / 1000 });
+    ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+    nextIndex.set(node.uid, idx);
   }
   report.ms = Math.round(performance.now() - t0);
   return { ops, report };
