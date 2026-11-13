@@ -570,6 +570,32 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     | Both | DRC errors after refill | RGB lamp 0, solar to be measured | 0 |
     | Both | Vias, total length | RGB lamp 23 vias, 680 mm (79 connections) | not worse per routed connection |
     | Both | Run time | RGB lamp 31.8 s | ≤ 30 s each |
+  - *Progress (2026-11-13):* done:
+    - **DRC check before applying.** New core module `routeCheck.ts`, `checkAutoroute`: the plan is put
+      on the board for a moment, pours are planned and refilled, DRC runs, and every connection whose new
+      copper takes part in an error is taken out of the plan and listed as failed with reason
+      `DRC: <kind> (<message>)`; repeated (up to 4 rounds) until nothing new is found; the document and
+      engine are restored exactly (a test compares the saved text). The router now records the uids of
+      each connection's copper (`routed[].uids`); a stub written for routes that end on it belongs to all
+      of them, and is kept while one of them stays. The `autoroute` tool checks by default (`check=false`
+      skips it) and reports `checked`, `removedByDrc`, `checkMs`. Cost: 4.3 s on the RGB lamp (routing
+      21.9 s, so 26 s in all), under 50 ms on the fixtures; nothing was taken out on any benchmark board.
+      Tests: a plan spoiled on purpose (a trace run through another net's pad) loses that connection, the
+      rest applies with no DRC errors, and the board is unchanged by the check.
+    - **One set of figures.** `autorouteSummary` (routed, failed with reasons, reasons counted, vias,
+      length, time, grid, fanouts, bundled) is what the tool returns, what the bench reads (plus the check
+      time and the connections taken out, now on its line) and what the Board panel shows.
+    - **Web Worker.** `apps/web/src/routeWorker.ts` gets the board as text, loads the polygon engine,
+      routes with a progress callback (new router option `onProgress`: round, connections holding a
+      route, total; at most every 150 ms), checks, and sends back the ops and the summary. The Board
+      panel's Autoroute button starts it and turns into Cancel; the status line shows
+      "Routing: 27/32 connections, round 2 · 1 s", then "Checking the result with DRC…", then the
+      summary. Cancel terminates the worker and leaves the board as it was; if the board changes while
+      routing, nothing is applied and the panel says so; a finished run is one undo step. Checked in
+      the browser on the mcu fixture: progress, Cancel, and the same result as the CLI (30 connections,
+      14 vias, 320.57 mm). The panel's status lines no longer shrink in its flex column.
+  - Still open in P8g: the acceptance run on the solar MPPT board (needs the owner's permission) and a
+    progress report from the tool / CLI (they wait for the result as before).
 - [ ] **P9. Shove engine (core).**
   - A core function that, given a new trace or via, moves traces and vias of other nets in its way aside
     (walk-around first, then push), keeping their clearance and connections, and refuses when they cannot

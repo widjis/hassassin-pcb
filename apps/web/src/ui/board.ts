@@ -18,13 +18,65 @@ import {
   planMeander,
   runDrc,
   stackupOf,
+  stringifyDoc,
+  type Op,
   widthForImpedance,
 } from '@hassassin/core';
 import type { App } from '../app.ts';
 import { clear, h } from './dom.ts';
+import type { RouteMessage, RouteRequest } from '../routeWorker.ts';
 
 export function mountBoard(app: App, root: HTMLElement): void {
   let calc = { layer: '', width: 0.25, gap: 0.15, target: 50, diff: false };
+  // The autorouter runs in a Web Worker (P8g); the panel is redrawn on every change, so its state lives here.
+  let job: { worker: Worker; changed: boolean } | null = null;
+  let routeMsg = '';
+  let statusEl: HTMLElement | null = null;
+  const setMsg = (m: string) => {
+    routeMsg = m;
+    if (statusEl) statusEl.textContent = m;
+  };
+  const stopJob = () => {
+    job?.worker.terminate();
+    job = null;
+  };
+  const startRoute = () => {
+    const doc = app.doc;
+    if (!doc || job) return;
+    const worker = new Worker(new URL('../routeWorker.ts', import.meta.url), { type: 'module' });
+    job = { worker, changed: false };
+    const t0 = performance.now();
+    setMsg('Routing…');
+    worker.onmessage = (e: MessageEvent<RouteMessage>) => {
+      const m = e.data;
+      if (m.type === 'progress') {
+        const s = ((performance.now() - t0) / 1000).toFixed(0);
+        setMsg(m.stage === 'check' ? `Checking the result with DRC… ${s} s` : `Routing: ${m.routed}/${m.total} connections, round ${(m.round ?? 0) + 1} · ${s} s`);
+        return;
+      }
+      const changed = job?.changed;
+      stopJob();
+      if (m.type === 'error') return void (setMsg(`Autoroute failed: ${m.message}`), render());
+      if (changed) return void (setMsg('The board changed while routing, so nothing was applied. Run Autoroute again.'), render());
+      const r = m.summary;
+      if (m.ops.length) app.apply('Autoroute', m.ops as Op[]);
+      const reasons = Object.entries(r.reasons).map(([k, n]) => `${n} × ${k}`).join('; ');
+      setMsg(
+        `Routed ${r.routed} connection(s), ${r.vias} via(s), ${r.totalLength} mm in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
+          `${m.removed ? `; ${m.removed} left out after the DRC check` : ''}${r.failed.length ? `; ${r.failed.length} not routed (${reasons}, see Review)` : ''}. Refill pours (B) next.`,
+      );
+      app.runDrcSoon(0);
+      render();
+    };
+    worker.onerror = (e) => {
+      stopJob();
+      setMsg(`Autoroute failed: ${e.message}`);
+      render();
+    };
+    const req: RouteRequest = { doc: stringifyDoc(doc), copper: app.copper };
+    worker.postMessage(req);
+    render();
+  };
 
   const render = () => {
     clear(root);
@@ -35,7 +87,8 @@ export function mountBoard(app: App, root: HTMLElement): void {
       return;
     }
     // ---- automatic placement & routing
-    const status = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em' });
+    const status = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em;flex-shrink:0' }, routeMsg);
+    statusEl = status;
     root.append(
       h('div', { class: 'section-title' }, h('span', {}, 'Automatic')),
       h(
@@ -45,24 +98,14 @@ export function mountBoard(app: App, root: HTMLElement): void {
           title: 'Move parts that are not on the board yet onto it, connected parts close together',
           onclick: () => {
             const { ops, report } = planAutoplace(doc, engine, app.copper);
-            if (!ops.length) return (status.textContent = report.failed.length ? `No room for: ${report.failed.join(', ')}` : 'Every part is already on the board.');
+            if (!ops.length) return setMsg(report.failed.length ? `No room for: ${report.failed.join(', ')}` : 'Every part is already on the board.');
             app.apply('Auto-place parts', ops);
-            status.textContent = `Placed ${report.placed.length} part(s)${report.failed.length ? `; no room for ${report.failed.join(', ')}` : ''}.`;
+            setMsg(`Placed ${report.placed.length} part(s)${report.failed.length ? `; no room for ${report.failed.join(', ')}` : ''}.`);
           },
         }, 'Auto-place'),
-        h('button', {
-          title: 'Route the unrouted connections (45°, vias, clearances kept). Undo removes it in one step.',
-          onclick: () => {
-            status.textContent = 'Routing…';
-            setTimeout(() => {
-              const { ops, report } = planAutoroute(doc, engine, app.copper);
-              if (ops.length) app.apply('Autoroute', ops);
-              const vias = report.routed.reduce((s, r) => s + r.vias, 0);
-              status.textContent = `Routed ${report.routed.length} connection(s), ${vias} via(s) in ${(report.ms / 1000).toFixed(1)} s${report.failed.length ? `; ${report.failed.length} could not be routed (see Review)` : ''}. Refill pours (B) next.`;
-              app.runDrcSoon(0);
-            }, 20);
-          },
-        }, 'Autoroute'),
+        job
+          ? h('button', { title: 'Stop routing; the board stays as it is', onclick: () => (stopJob(), setMsg('Autoroute cancelled; nothing changed.'), render()) }, 'Cancel')
+          : h('button', { title: 'Route the unrouted connections (45°, vias, clearances kept), checked with DRC before it is applied. Runs in the background; undo removes it in one step.', onclick: startRoute }, 'Autoroute'),
       ),
       status,
     );
@@ -74,7 +117,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
     const counts = new Map<string, number>();
     for (const x of sigs) counts.set(x.signal, (counts.get(x.signal) ?? 0) + 1);
     const pending = sigs.filter((x) => x.source !== 'net' && (netNode.get(x.net)?.props.signal ?? 'general') !== x.signal).length;
-    const sigStatus = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em' });
+    const sigStatus = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em;flex-shrink:0' });
     const applyClasses = () => {
       const top = st.layers.find((l) => l.kind === 'copper');
       const plan = planSignalClasses(doc, { stackup: st, ...(top ? { copperMm: top.thickness, layer: top.name } : {}) });
@@ -217,8 +260,14 @@ export function mountBoard(app: App, root: HTMLElement): void {
     clearTimeout(t);
     t = window.setTimeout(() => root.offsetParent && render(), 300);
   };
-  app.on('doc', render);
-  app.on('change', later);
+  app.on('doc', () => {
+    if (job) job.changed = true;
+    render();
+  });
+  app.on('change', () => {
+    if (job) job.changed = true;
+    later();
+  });
   render();
   (root as HTMLElement & { refresh?: () => void }).refresh = render;
 }

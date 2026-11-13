@@ -5,7 +5,7 @@
  * Shared by `apps/cli/bench/autoroute.ts` (real boards, on copies) and the Vitest fixtures, so both
  * measure the same way.
  */
-import { collectCopper, computeRatsnest, inArea, runDrc, type Doc, type Op, type StyleEngine, type Vec2 } from '@hassassin/core';
+import { collectCopper, computeRatsnest, inArea, runDrc, type AutorouteSummary, type Doc, type Op, type StyleEngine, type Vec2 } from '@hassassin/core';
 import { newProject, type Project } from './project.ts';
 import { runTool } from './tools.ts';
 
@@ -38,6 +38,9 @@ export interface RouteFigures {
   arcs: number;
   /** Grid pitch the router used (mm). */
   grid: number;
+  /** Connections the DRC check took out of the plan (P8g), and the check's time in ms. */
+  removedByDrc: number;
+  checkMs: number;
   /** Pads fanned out before routing (P8f). */
   fanouts: number;
   /** Connections in a bundle (neighbouring pins at both ends, P8f). */
@@ -186,13 +189,12 @@ export function cornerFigures(doc: Doc, engine: StyleEngine, copper: string[] = 
 export async function measureAutoroute(p: Project, args: Record<string, unknown> = {}): Promise<RouteFigures> {
   await runTool(p, 'refill_pours', {});
   const connections = computeRatsnest(p.doc, p.engine, p.copper).lines.length;
-  const r = (await runTool(p, 'autoroute', args)) as { routed: number; failed: { reason: string }[]; vias: number; totalLength: number; ms: number; grid: number; fanouts: number; bundled: number };
+  const r = (await runTool(p, 'autoroute', args)) as AutorouteSummary & { removedByDrc: number; checkMs: number };
   await runTool(p, 'refill_pours', {});
   const errors = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted');
   const drcByKind: Record<string, number> = {};
   for (const v of errors) drcByKind[v.kind] = (drcByKind[v.kind] ?? 0) + 1;
-  const reasons: Record<string, number> = {};
-  for (const f of r.failed) reasons[f.reason] = (reasons[f.reason] ?? 0) + 1;
+  const reasons = r.reasons;
   const c = cornerFigures(p.doc, p.engine, p.copper);
   return {
     connections,
@@ -212,6 +214,8 @@ export async function measureAutoroute(p: Project, args: Record<string, unknown>
     collinear: c.collinear,
     arcs: c.arcs,
     grid: Math.round(r.grid * 1000) / 1000,
+    removedByDrc: r.removedByDrc ?? 0,
+    checkMs: r.checkMs ?? 0,
     fanouts: r.fanouts,
     bundled: r.bundled,
     againstDirection: againstDirection(p.doc, p.engine, p.copper),

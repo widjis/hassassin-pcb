@@ -47,6 +47,11 @@ export interface AutorouteOptions {
   fanout?: boolean;
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
+  /**
+   * Called now and then while routing (P8g, for a progress line): the rip-up round, the connections that
+   * hold a route and how many there are.
+   */
+  onProgress?: (p: { round: number; routed: number; total: number }) => void;
   /** Corner style for every net, overriding the `cornerStyle` rule (P8e). */
   cornerStyle?: '45' | 'arc' | '90';
   /** Rounds of rip-up and retry (default 30; 1 = route once, no rip-up). */
@@ -56,7 +61,8 @@ export interface AutorouteOptions {
 }
 
 export interface AutorouteReport {
-  routed: { net: string; from: Vec2; to: Vec2; length: number; vias: number }[];
+  /** `uids`: the trace and via objects the plan adds for this connection (P8g: to take it out again). */
+  routed: { net: string; from: Vec2; to: Vec2; length: number; vias: number; uids?: string[] }[];
   failed: { net: string; from: Vec2; to: Vec2; reason: string }[];
   grid: number;
   ms: number;
@@ -1594,9 +1600,19 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   let pending = order.map((_, i) => i);
   let pres = 2;
   let timedOut = false;
+  let told = 0;
+  const tell = (round: number, force = false) => {
+    if (!opts.onProgress) return;
+    const now = performance.now();
+    if (!force && now - told < 150) return;
+    told = now;
+    opts.onProgress({ round, routed: routeOf.size + joined.size, total: order.length });
+  };
   for (let round = 0; round < maxRounds && pending.length && !timedOut; round++) {
     const again = new Set<number>();
+    tell(round, true);
     for (const ci of pending) {
+      tell(round);
       if (routeOf.has(ci) || joined.has(ci)) continue;
       if (performance.now() - t0 > limit) {
         timedOut = true;
@@ -1636,6 +1652,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   // ---- Emit, in the order the connections were planned.
   const nextIndex = new Map<string, number>();
   const emitted: Route[] = [];
+  const emittedAt: number[] = [];
   for (const [ci, r] of order.entries()) {
     if (joined.has(ci)) {
       report.routed.push({ net: r.net, from: r.a, to: r.b, length: 0, vias: 0 });
@@ -1654,16 +1671,24 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     }
     let idx = nextIndex.get(node.uid) ?? node.children.length;
     const width = netRule(r.net, 'traceWidth', 0.25);
+    const uids: string[] = [];
     for (const s of route.segs) {
       const rules: RuleDecl[] = [{ name: 'start', value: s.a }, { name: 'end', value: s.b }, { name: 'layer', value: layers[s.li]! }];
       if (s.mid) rules.push({ name: 'mid', value: s.mid });
       if (s.w < width) rules.push({ name: 'traceWidth', value: s.w });
-      ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+      const uid = newUid('tr');
+      uids.push(uid);
+      ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid, type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
     }
-    for (const v of route.vias) ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('via'), type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
+    for (const v of route.vias) {
+      const uid = newUid('via');
+      uids.push(uid);
+      ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid, type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: v }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
+    }
     nextIndex.set(node.uid, idx);
-    report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(route.length * 1000) / 1000, vias: route.vias.length });
+    report.routed.push({ net: r.net, from: r.a, to: r.b, length: Math.round(route.length * 1000) / 1000, vias: route.vias.length, uids });
     emitted.push(route);
+    emittedAt.push(report.routed.length - 1);
   }
   // A fanout stub is written by the route that leaves from it. A route may also end on a stub without
   // taking it in (its ratsnest point lay on the stub, or the pad's own connection went inwards to the
@@ -1680,7 +1705,12 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     let idx = nextIndex.get(node.uid) ?? node.children.length;
     const rules: RuleDecl[] = [{ name: 'start', value: f.a }, { name: 'end', value: f.e }, { name: 'layer', value: layers[f.li]! }];
     if (2 * f.half < width - 1e-9) rules.push({ name: 'traceWidth', value: Math.round(2 * f.half * 1000) / 1000 });
-    ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+    const uid = newUid('tr');
+    ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid, type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+    // The stub belongs to every connection that ends on it: taking one of them out takes the stub too.
+    emitted.forEach((rt, k) => {
+      if (rt.net === f.pad.net && (rt.segs.some((sg) => sg.li === f.li && (onStub(sg.a) || onStub(sg.b))) || rt.vias.some(onStub))) report.routed[emittedAt[k]!]!.uids!.push(uid);
+    });
     nextIndex.set(node.uid, idx);
   }
   report.ms = Math.round(performance.now() - t0);
