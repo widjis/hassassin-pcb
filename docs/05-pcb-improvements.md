@@ -312,6 +312,43 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - Editing the `signal` property in the symbol editor and the footprint generator UI waits until the
     schematic agreement's S17 / S18 are merged (those files belong to that work); until then it is set
     with the tool, the inspector of a pad on the board, or the net.
+  - *Progress (2026-11-13), first part:* done: core module `signal.ts` (`netSignals`): the twelve classes
+    in order of strictness, a pin's `signal` from the board pad or the schematic pin, and guesses from pin
+    names (via the schematic pin of the same designator and number), net names (without the sheet path),
+    pair partners (the `net_lengths` pairing: X_P / X_N, X+ / X-, DP / DM), crystals (designator Y / X or
+    "crystal" / "XTAL" in the value; a frequency alone is not enough, since timing resistors carry one) and
+    a converter's inductor whose other end is a supply. KiCad's one-pad `unconnected-(…)` nets are not
+    guessed. A net takes its strictest pin class; a pin set by hand beats any guess; a class set on the net
+    (`signalSource` absent or `net`) beats its pins and is never overwritten. New tools `classify_nets`
+    (lists class, source and reason per net for review; `apply=true` writes `signal` and `signalSource`
+    onto the nets) and `set_pin_signal` (a part, a pin, or a net with `net=true`; sets both the board pad
+    and the schematic pin through ordinary ops, no schematic file changed). `net_lengths` shows each net's
+    class. Default rulesets per class appended to `defaults.ts` (the one file outside the PM2 list this
+    needed, as the item asks for default rules): power / ground as before, `high-current` 1 mm width and
+    0.8 / 0.4 mm vias, `high-voltage` 0.6 mm clearance, `switching` 0.6 mm width and via cost 8 mm, `clock`
+    0.3 mm clearance, via cost 8 mm and plane-gap cost 1, `high-speed` 0.3 mm, 10 mm and 2, `diff-pair`
+    10 mm and 2, `rf` 0.5 mm, 20 mm, 3 and `cornerStyle: arc`, `analog` / `sensitive` 0.3 mm clearance.
+    The router already reads every one of these rules per net, so nothing changed in `autoroute.ts`.
+    Benchmark flag `--classify` applies the classes before routing.
+  - Measured: the RGB lamp is guessed as 4 power, 1 ground, 1 switching (the buck's SW node, from U3's
+    SW pin), 3 sensitive (FB, COMP, FREQ of the buck controller) and 1 analog (ADC), 28 general; with the
+    classes applied it routes exactly as without (59/59, 35 vias, 882.4 mm). The mcu fixture has no
+    hints in its names and stays general. Tests (`signal.test.ts`): the guesses on a board with one net of
+    each kind; the rules each class gets once applied; a pin set by hand and a net set by hand winning;
+    an RF class on two bus nets giving arc corners with no DRC errors.
+  - *Dropped:* a via cost on `analog` (6 mm) and `sensitive` (8 mm) nets. On the RGB lamp it took the ADC
+    net from 3 vias to 1, but the nets around it lost their paths: 51 vias and 1048 mm in all (UART_TX
+    54 → 178 mm, GPIO15 30 → 148 mm), the same for any value from 5 to 8 mm, and routing those classes
+    first (`autoPlacePriority`) gave 48 vias and 1090 mm. This is the rip-up instability noted for the mcu
+    bus: a small change on a few nets moves many others. The classes that keep a via cost (clock,
+    high-speed, diff-pair, rf, switching) do not occur on the RGB lamp; their effect on a real board is
+    still to be measured, after the negotiation is reworked.
+  - Still open in P16: parameters (frequency, impedance, current, voltage, pair partner, length group,
+    interface presets) and the rules computed from them (width from the current, clearance from the
+    voltage, width from the impedance); extra spacing between `switching` and `analog` / `sensitive` nets
+    (a per-pair clearance the rules cannot express yet); the class in the Board panel and in
+    `project_status` (outside the PM2 list: to be asked); the owner's review of the benchmark boards'
+    classes.
 - [ ] **P8f. Layer directions, fanout and cost tuning.**
   - *Owner's reference (2026-11-12): perpendicular (orthogonal) routing* — on a two-layer board the top
     layer runs horizontal and the bottom layer vertical, joined by vias where a net changes direction; on

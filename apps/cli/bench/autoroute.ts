@@ -18,6 +18,8 @@
  * `--opt key=value` (repeatable): an `autoroute` tool argument for the boards, e.g. `--opt direction_cost=1`
  * `--opt order=short` (numbers are read as numbers, `{…}` as JSON), to compare weights (P8f).
  * `--drc`: list the DRC errors left after routing.
+ * `--classify`: apply the signal classes of the nets first (P16, `classify_nets` with apply=true), so the
+ * per-class default rules (via cost, corner style, width, clearance) take part.
  * `--save <dir>`: also write `<board>.original.hpcb` (as read, rules applied) and `<board>.routed.hpcb`
  * (after the run) into that folder, to look at in the editor.
  */
@@ -124,6 +126,7 @@ if (args.includes('--fixtures')) {
 for (const path of args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--save' && args[i - 1] !== '--opt')) {
   const { name, project, replayed } = await readBoard(path);
   if (kicadRules && path.toLowerCase().endsWith('.kicad_pcb')) console.log(`${name}: ${await applyKicadRules(project, path)}`);
+  if (args.includes('--classify')) console.log(`${name}: classes ${JSON.stringify(((await runTool(project, 'classify_nets', { apply: true })) as { counts: unknown }).counts)}`);
   if (before) {
     const drc = runDrc(project.doc, project.engine, project.copper).violations;
     const kinds: Record<string, number> = {};
