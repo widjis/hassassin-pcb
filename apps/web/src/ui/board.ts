@@ -110,7 +110,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
       if (x.source !== 'net') (sel as HTMLSelectElement).value = '';
       sel.addEventListener('change', () => setNet(x.net, (sel as HTMLSelectElement).value));
       const applied = (netNode.get(x.net)?.props.signal ?? 'general') === x.signal;
-      const params = [x.current ? `${x.current} A` : '', x.voltage ? `${x.voltage} V` : '', x.impedance ? `${x.impedance} Ω` : ''].filter(Boolean).join(' ');
+      const params = [x.current ? `${x.current} A` : '', x.voltage ? `${x.voltage} V` : '', x.impedance ? `${x.impedance} Ω` : '', x.frequency ? `${x.frequency} MHz` : '', x.interface ?? '', x.pair ? `↔ ${x.pair}` : ''].filter(Boolean).join(' ');
       sigList.append(
         h(
           'div',

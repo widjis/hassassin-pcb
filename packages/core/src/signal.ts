@@ -42,7 +42,36 @@ export interface NetSignal {
   voltage?: number;
   /** Single-ended target impedance (Ω) given on the net or its pins (`signalImpedance`; the smallest). */
   impedance?: number;
+  /** Highest frequency (MHz) given on the net or its pins (`signalFrequency`). */
+  frequency?: number;
+  /** Interface preset given on the net or its pins (`signalInterface`), see SIGNAL_INTERFACES. */
+  interface?: string;
+  /** Differential impedance (Ω) of the interface preset, for the pair rules of P10. */
+  diffImpedance?: number;
+  /** The net's length-match group (net property `lengthGroup`). */
+  lengthGroup?: string;
 }
+
+/**
+ * Interface presets: the differential impedance their cables and connectors are commonly designed for
+ * (typical values from design guides; the part's datasheet decides). They make a net a `diff-pair`; the
+ * pair width, gap and skew from them are P10.
+ */
+export const SIGNAL_INTERFACES: Record<string, { label: string; diffImpedance: number }> = {
+  usb2: { label: 'USB 2.0', diffImpedance: 90 },
+  usb3: { label: 'USB 3.x', diffImpedance: 90 },
+  ethernet: { label: 'Ethernet (10/100/1000BASE-T, MDI)', diffImpedance: 100 },
+  lvds: { label: 'LVDS', diffImpedance: 100 },
+  hdmi: { label: 'HDMI (TMDS)', diffImpedance: 100 },
+  mipi: { label: 'MIPI D-PHY', diffImpedance: 100 },
+  pcie: { label: 'PCI Express', diffImpedance: 85 },
+  can: { label: 'CAN', diffImpedance: 120 },
+  rs485: { label: 'RS-485', diffImpedance: 120 },
+};
+export const isSignalInterface = (s: unknown): s is string => typeof s === 'string' && s in SIGNAL_INTERFACES;
+
+/** From this frequency (MHz) a net is at least `high-speed` (our own threshold). */
+export const HIGH_SPEED_MHZ = 50;
 
 /** Above these a net is at least `high-current` / `high-voltage` (our own thresholds). */
 export const HIGH_CURRENT_A = 1;
@@ -99,6 +128,8 @@ interface PinRef {
   current?: number;
   voltage?: number;
   impedance?: number;
+  frequency?: number;
+  iface?: string;
   part: DocNode;
 }
 
@@ -129,7 +160,9 @@ function pinsOf(doc: Doc): PinRef[] {
     const current = numProp(n.props.signalCurrent, sp?.props.signalCurrent);
     const voltage = numProp(n.props.signalVoltage, sp?.props.signalVoltage);
     const impedance = numProp(n.props.signalImpedance, sp?.props.signalImpedance);
-    out.push({ ref: el.name, pin, pinName: String(sp?.props.pinName ?? n.props.pinName ?? ''), net: n.props.net, ...(set ? { set } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), ...(impedance ? { impedance } : {}), part: el });
+    const frequency = numProp(n.props.signalFrequency, sp?.props.signalFrequency);
+    const iface = [n.props.signalInterface, sp?.props.signalInterface].find(isSignalInterface);
+    out.push({ ref: el.name, pin, pinName: String(sp?.props.pinName ?? n.props.pinName ?? ''), net: n.props.net, ...(set ? { set } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), ...(impedance ? { impedance } : {}), ...(frequency ? { frequency } : {}), ...(iface ? { iface } : {}), part: el });
   }
   return out;
 }
@@ -144,6 +177,19 @@ export function netSignals(doc: Doc): NetSignal[] {
   const names = nets.map((n) => n.name);
   const partner = new Map<string, string>();
   for (const d of diffPairs(names.map((net) => ({ net, length: 0, segments: 0, vias: 0 })))) partner.set(d.p, d.n), partner.set(d.n, d.p);
+  // A partner set by hand (net property `pairWith`, either side) beats the name pairing.
+  const nameSet = new Set(names);
+  for (const n of nets) {
+    const w = n.props.pairWith;
+    if (typeof w !== 'string' || !nameSet.has(w) || w === n.name) continue;
+    for (const [a, b] of [[n.name, w], [w, n.name]] as const) {
+      const old = partner.get(a);
+      if (old && old !== b) partner.delete(old);
+      partner.set(a, b);
+    }
+  }
+  const handPair = new Set<string>();
+  for (const n of nets) if (typeof n.props.pairWith === 'string' && nameSet.has(n.props.pairWith)) handPair.add(n.name), handPair.add(n.props.pairWith);
   const pins = pinsOf(doc);
   const byNet = new Map<string, PinRef[]>();
   for (const p of pins) byNet.set(p.net, [...(byNet.get(p.net) ?? []), p]);
@@ -152,8 +198,8 @@ export function netSignals(doc: Doc): NetSignal[] {
   const out: NetSignal[] = [];
   for (const n of nets) {
     const ps = byNet.get(n.name) ?? [];
-    const valsOf = (k: 'current' | 'voltage' | 'impedance', prop: string) => [numProp(n.props[prop]), ...ps.map((p) => p[k])].filter((x): x is number => x !== undefined);
-    const maxOf = (k: 'current' | 'voltage', prop: string) => {
+    const valsOf = (k: 'current' | 'voltage' | 'impedance' | 'frequency', prop: string) => [numProp(n.props[prop]), ...ps.map((p) => p[k])].filter((x): x is number => x !== undefined);
+    const maxOf = (k: 'current' | 'voltage' | 'frequency', prop: string) => {
       const vals = valsOf(k, prop);
       return vals.length ? Math.max(...vals) : undefined;
     };
@@ -161,7 +207,18 @@ export function netSignals(doc: Doc): NetSignal[] {
     const voltage = maxOf('voltage', 'signalVoltage');
     const zs = valsOf('impedance', 'signalImpedance');
     const impedance = zs.length ? Math.min(...zs) : undefined;
-    const extra = { ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), ...(impedance ? { impedance } : {}) };
+    const frequency = maxOf('frequency', 'signalFrequency');
+    const iface = [n.props.signalInterface, ...ps.map((p) => p.iface)].find(isSignalInterface);
+    const group = typeof n.props.lengthGroup === 'string' && n.props.lengthGroup ? n.props.lengthGroup : undefined;
+    const extra = {
+      ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}),
+      ...(current ? { current } : {}),
+      ...(voltage ? { voltage } : {}),
+      ...(impedance ? { impedance } : {}),
+      ...(frequency ? { frequency } : {}),
+      ...(iface ? { interface: iface, diffImpedance: SIGNAL_INTERFACES[iface]!.diffImpedance } : {}),
+      ...(group ? { lengthGroup: group } : {}),
+    };
     const own = n.props.signal;
     const src = n.props.signalSource;
     if (isSignalClass(own) && (src === undefined || src === 'net')) {
@@ -198,7 +255,7 @@ export function netSignals(doc: Doc): NetSignal[] {
     }
     // A current or voltage given on a pin raises the class (a set pin class counts as given, so the
     // raise is a `pin` source too).
-    const given = current !== undefined || voltage !== undefined || impedance !== undefined;
+    const given = current !== undefined || voltage !== undefined || impedance !== undefined || frequency !== undefined || iface !== undefined || handPair.has(n.name);
     const raise = (cls: SignalClass, why: string) => {
       if (signalRank(cls) > signalRank(best.signal)) best = { signal: cls, source: given ? 'pin' : best.source, why };
     };
@@ -206,6 +263,9 @@ export function netSignals(doc: Doc): NetSignal[] {
     if (voltage !== undefined && voltage >= HIGH_VOLTAGE_V) raise('high-voltage', `${voltage} V`);
     // A target impedance means a controlled-impedance line: at least high-speed.
     if (impedance !== undefined) raise('high-speed', `${impedance} Ω`);
+    if (frequency !== undefined && frequency >= HIGH_SPEED_MHZ) raise('high-speed', `${frequency} MHz`);
+    if (iface) raise('diff-pair', SIGNAL_INTERFACES[iface]!.label);
+    else if (handPair.has(n.name)) raise('diff-pair', `pair with ${partner.get(n.name)}`);
     out.push({ net: n.name, ...best, ...extra });
   }
   return out.sort((a, b) => a.net.localeCompare(b.net, undefined, { numeric: true }));

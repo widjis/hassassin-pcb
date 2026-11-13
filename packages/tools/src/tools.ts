@@ -71,7 +71,9 @@ import {
   netSignals,
   planSignalClasses,
   isSignalClass,
+  isSignalInterface,
   SIGNAL_CLASSES,
+  SIGNAL_INTERFACES,
   planMeander,
   stackupOf,
   widthForImpedance,
@@ -424,7 +426,7 @@ const TARGET: Schema = { type: 'string', description: 'A part ("R1"), a pin/pad 
 export const TOOLS: ToolDef[] = [
   {
     name: 'project_status',
-    description: 'Overview of the project: counts, layers, sheets, check results and the stage gates (requirements → schematic → components → layout → review → fabrication). Start here.',
+    description: 'Overview of the project: counts, layers, sheets, check results, the signal class of each net that is not general (and how many are not applied yet), and the stage gates (requirements → schematic → components → layout → review → fabrication). Start here.',
     mutates: false,
     input: { type: 'object', properties: {} },
     run: (p) => {
@@ -450,6 +452,22 @@ export const TOOLS: ToolDef[] = [
           unroutedConnections: c.ratsnest.lines.length,
         },
         gates: computeGates({ doc: p.doc, erc: c.erc, drc: c.drc, ratsnest: c.ratsnest }),
+        signalClasses: (() => {
+          // P16: the class of each net that is not general, and how many are not written onto the nets yet.
+          const sigs = netSignals(p.doc);
+          if (!sigs.length) return 'no nets';
+          const counts: Record<string, number> = {};
+          for (const x of sigs) counts[x.signal] = (counts[x.signal] ?? 0) + 1;
+          const byName = new Map(nodes.filter((n) => n.type === 'net').map((n) => [n.name, n]));
+          const notApplied = sigs.filter((x) => x.source !== 'net' && (byName.get(x.net)?.props.signal ?? 'general') !== x.signal).length;
+          const nets = sigs.filter((x) => x.signal !== 'general' || x.source === 'net');
+          return {
+            counts,
+            nets: Object.fromEntries(nets.slice(0, 80).map((x) => [x.net, `${x.signal} (${x.source})`])),
+            ...(nets.length > 80 ? { more: nets.length - 80 } : {}),
+            ...(notApplied ? { notApplied, hint: 'Review with classify_nets, then apply=true so the per-class rules take effect.' } : {}),
+          };
+        })(),
         spec: p.doc.meta.spec ?? {},
       };
     },
@@ -1554,9 +1572,9 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'set_pin_signal',
-    description: `Set what a pin needs from the layout (P16): signal = ${SIGNAL_CLASSES.join(' | ')}, or "" to remove it; current (A) and voltage (V) the pin carries, and impedance (Ω, single-ended target: classify_nets sets the width from the stackup's outer layer; differential pairs are P10) (0 removes; from 1 A / 50 V the net is at least high-current / high-voltage, and classify_nets sizes width and clearance from them). target = a part ("U1", every pin), a pin ("U1.12"), or a net with net=true (the net's class, set by hand, overrides its pins). Sets the board pad and the schematic pin. Then run classify_nets with apply=true.`,
+    description: `Set what a pin needs from the layout (P16): signal = ${SIGNAL_CLASSES.join(' | ')}, or "" to remove it; current (A) and voltage (V) the pin carries, impedance (Ω, single-ended target: classify_nets sets the width from the stackup's outer layer), frequency (MHz; from 50 MHz the net is at least high-speed) and interface (${Object.keys(SIGNAL_INTERFACES).join(', ')}: makes it a diff-pair with the preset's differential impedance, for P10). For a net (net=true) also pair (the other half of a differential pair, when the names do not show it) and length_group (length-match group) (0 or "" removes; from 1 A / 50 V the net is at least high-current / high-voltage, and classify_nets sizes width and clearance from them). target = a part ("U1", every pin), a pin ("U1.12"), or a net with net=true (the net's class, set by hand, overrides its pins). Sets the board pad and the schematic pin. Then run classify_nets with apply=true.`,
     mutates: true,
-    input: { type: 'object', properties: { target: { type: 'string' }, signal: { type: 'string', enum: [...SIGNAL_CLASSES, ''] }, current: { type: 'number', description: 'Amps' }, voltage: { type: 'number', description: 'Volts' }, impedance: { type: 'number', description: 'Ohms, single-ended' }, net: { type: 'boolean', description: 'target is a net name' } }, required: ['target'] },
+    input: { type: 'object', properties: { target: { type: 'string' }, signal: { type: 'string', enum: [...SIGNAL_CLASSES, ''] }, current: { type: 'number', description: 'Amps' }, voltage: { type: 'number', description: 'Volts' }, impedance: { type: 'number', description: 'Ohms, single-ended' }, frequency: { type: 'number', description: 'MHz' }, interface: { type: 'string', enum: [...Object.keys(SIGNAL_INTERFACES), ''] }, pair: { type: 'string', description: 'Net: the partner net of a differential pair' }, length_group: { type: 'string', description: 'Net: length-match group' }, net: { type: 'boolean', description: 'target is a net name' } }, required: ['target'] },
     run: (p, a) => {
       const target = str(a.target, 'target');
       const hasSig = a.signal !== undefined;
@@ -1565,19 +1583,35 @@ export const TOOLS: ToolDef[] = [
       const current = optNum(a.current, 'current');
       const voltage = optNum(a.voltage, 'voltage');
       const imp = optNum(a.impedance, 'impedance');
-      if (!hasSig && current === undefined && voltage === undefined && imp === undefined) throw new ToolError('Give `signal`, `current`, `voltage` or `impedance`.');
+      const freq = optNum(a.frequency, 'frequency');
+      const iface = a.interface === undefined ? undefined : String(a.interface);
+      if (iface && !isSignalInterface(iface)) throw new ToolError(`Unknown interface "${iface}"; use one of ${Object.keys(SIGNAL_INTERFACES).join(', ')}`);
+      const pair = a.pair === undefined ? undefined : String(a.pair);
+      const group = a.length_group === undefined ? undefined : String(a.length_group);
+      if ((pair !== undefined || group !== undefined) && a.net !== true) throw new ToolError('`pair` and `length_group` belong to a net: give net=true.');
+      if (!hasSig && [current, voltage, imp, freq, iface, pair, group].every((v) => v === undefined)) throw new ToolError('Give `signal` or a parameter (current, voltage, impedance, frequency, interface, pair, length_group).');
       const ops: Op[] = [];
       const hit: string[] = [];
       const params = (uid: string) => {
         if (current !== undefined) ops.push({ op: 'setProp', uid, key: 'signalCurrent', value: current > 0 ? current : null });
         if (voltage !== undefined) ops.push({ op: 'setProp', uid, key: 'signalVoltage', value: voltage > 0 ? voltage : null });
         if (imp !== undefined) ops.push({ op: 'setProp', uid, key: 'signalImpedance', value: imp > 0 ? imp : null });
+        if (freq !== undefined) ops.push({ op: 'setProp', uid, key: 'signalFrequency', value: freq > 0 ? freq : null });
+        if (iface !== undefined) ops.push({ op: 'setProp', uid, key: 'signalInterface', value: iface || null });
       };
       if (a.net === true) {
         const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === target);
         if (!n) throw new ToolError(`No net ${target}`);
         if (hasSig) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null }, { op: 'setProp', uid: n.uid, key: 'signalSource', value: sig ? 'net' : null });
         params(n.uid);
+        if (pair !== undefined) {
+          const other = pair ? [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === pair) : undefined;
+          if (pair && !other) throw new ToolError(`No net ${pair}`);
+          ops.push({ op: 'setProp', uid: n.uid, key: 'pairWith', value: pair || null });
+          if (other) ops.push({ op: 'setProp', uid: other.uid, key: 'pairWith', value: n.name });
+          else for (const x of p.doc.nodes.values()) if (x.type === 'net' && x.props.pairWith === n.name) ops.push({ op: 'setProp', uid: x.uid, key: 'pairWith', value: null });
+        }
+        if (group !== undefined) ops.push({ op: 'setProp', uid: n.uid, key: 'lengthGroup', value: group || null });
         hit.push(n.name);
       } else {
         const dot = target.lastIndexOf('.');
@@ -1595,7 +1629,7 @@ export const TOOLS: ToolDef[] = [
         if (!hit.length) throw new ToolError(`No pin or pad matches "${target}"`);
       }
       apply(p, `Set signal ${target}`, ops);
-      return { updated: hit, ...(hasSig ? { signal: sig || null } : {}), ...(current !== undefined ? { current } : {}), ...(voltage !== undefined ? { voltage } : {}), ...(imp !== undefined ? { impedance: imp } : {}), next: 'Run classify_nets with apply=true to update the nets.' };
+      return { updated: hit, ...(hasSig ? { signal: sig || null } : {}), ...(current !== undefined ? { current } : {}), ...(voltage !== undefined ? { voltage } : {}), ...(imp !== undefined ? { impedance: imp } : {}), ...(freq !== undefined ? { frequency: freq } : {}), ...(iface !== undefined ? { interface: iface || null } : {}), ...(pair !== undefined ? { pair: pair || null } : {}), ...(group !== undefined ? { length_group: group || null } : {}), next: 'Run classify_nets with apply=true to update the nets.' };
     },
   },
   {

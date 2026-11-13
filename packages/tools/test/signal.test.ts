@@ -177,4 +177,36 @@ describe('signal classes (P16)', () => {
     expect(gap(p, 'B4', 'B5')).toBeGreaterThanOrEqual(2 - 1e-3);
     expect(gap(p, 'B4', 'B3')).toBeGreaterThanOrEqual(2 - 1e-3);
   });
+
+  it('frequency, interface preset, pair partner and length group', async () => {
+    const p = await board();
+    const sig = (net: string) => netSignals(p.doc).find((x) => x.net === net)!;
+    await runTool(p, 'set_pin_signal', { target: 'J1.9', frequency: 100 });
+    expect(sig('DATA')).toMatchObject({ signal: 'high-speed', frequency: 100, source: 'pin' });
+    await runTool(p, 'set_pin_signal', { target: 'DATA', net: true, interface: 'usb2' });
+    expect(sig('DATA')).toMatchObject({ signal: 'diff-pair', interface: 'usb2', diffImpedance: 90 });
+    // A partner set by hand, either way round, and removed again.
+    await runTool(p, 'set_pin_signal', { target: 'N_A', net: true, pair: 'MCLK' });
+    expect(sig('N_A')).toMatchObject({ signal: 'diff-pair', pair: 'MCLK' });
+    expect(sig('MCLK')).toMatchObject({ signal: 'diff-pair', pair: 'N_A' });
+    await runTool(p, 'set_pin_signal', { target: 'N_A', net: true, pair: '' });
+    expect(sig('N_A').pair).toBeUndefined();
+    expect(sig('MCLK')).toMatchObject({ signal: 'clock' });
+    await runTool(p, 'set_pin_signal', { target: 'USB_P', net: true, length_group: 'usb' });
+    expect(sig('USB_P').lengthGroup).toBe('usb');
+    await expect(runTool(p, 'set_pin_signal', { target: 'U1.1', pair: 'X' })).rejects.toThrow(/net=true/);
+    await expect(runTool(p, 'set_pin_signal', { target: 'U1.1', interface: 'foo' })).rejects.toThrow(/Unknown interface/);
+  });
+
+  it('project_status lists the classes and how many are not applied', async () => {
+    const p = await board();
+    type St = { signalClasses: { counts: Record<string, number>; nets: Record<string, string>; notApplied?: number } };
+    const before = ((await runTool(p, 'project_status', {})) as St).signalClasses;
+    expect(before.counts.rf).toBe(1);
+    expect(before.nets.ANT1).toBe('rf (guess)');
+    expect(before.nets.DATA).toBeUndefined();
+    expect(before.notApplied).toBeGreaterThan(0);
+    await runTool(p, 'classify_nets', { apply: true });
+    expect(((await runTool(p, 'project_status', {})) as St).signalClasses.notApplied).toBeUndefined();
+  });
 });

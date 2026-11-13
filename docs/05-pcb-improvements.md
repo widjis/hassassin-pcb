@@ -383,10 +383,21 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     and a sensitive one and 2 mm asked, both neighbours stay at least 2 mm away (1.55 mm without the
     rule), with no DRC errors. On the RGB lamp, with classes applied, the buck's switch node now keeps
     1 mm from FB / COMP / FREQ: 59/59, 35 vias, 881.9 mm (882.4 mm without).
-  - Still open in P16: the other parameters (frequency, pair partner, length group, interface presets);
-    the class in `project_status` (outside the
-    PM2 list: to be asked); the owner's review of the benchmark boards'
-    classes.
+  - *Progress (2026-11-13), sixth part:* the remaining parameters. `set_pin_signal` takes `frequency`
+    (MHz; from 50 MHz the net is at least `high-speed`) and `interface` (presets `usb2`, `usb3`,
+    `ethernet`, `lvds`, `hdmi`, `mipi`, `pcie`, `can`, `rs485` with the differential impedance design
+    guides commonly give: 90, 90, 100, 100, 100, 100, 85, 120, 120 Ω; the part's datasheet decides). An
+    interface makes the net a `diff-pair` and carries its `diffImpedance` for P10's pair width and gap.
+    For a net (`net=true`) also `pair` (net property `pairWith`, set on both nets; it beats the name
+    pairing, and "" removes it from both) and `length_group` (the existing `lengthGroup`). `netSignals`
+    returns frequency, interface, diffImpedance and lengthGroup; the Board panel row shows them with
+    the partner. One more test. Skew limits per interface are left to P10, which owns pair tuning.
+  - *Progress (2026-11-13), seventh part:* `project_status` (outside the PM2 list; changed with the
+    owner's permission, in chat: "Ya, ubah") lists `signalClasses`: the count per class, each net that
+    is not general with its class and source, and how many classes are not written onto the nets yet,
+    with a hint to review and apply them. One more test.
+  - Still open in P16: the owner's review of the benchmark boards' classes (in the Board panel's
+    "Signal classes" section).
 - [ ] **P8f. Layer directions, fanout and cost tuning.**
   - *Owner's reference (2026-11-12): perpendicular (orthogonal) routing* — on a two-layer board the top
     layer runs horizontal and the bottom layer vertical, joined by vias where a net changes direction; on
