@@ -443,6 +443,18 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     - a second connection at a fanned pad starts at the stub's end even when its target lies behind it, so
       it turns back in two short pieces (a sharp-looking U-turn, GND at U1.16);
     the corner-style tests skip this fixture until then.
+    Tried for the left bus and dropped (2026-11-13), none kept in the code:
+    - an exit lane, a short straight run in front of each stub's end kept for its own net: three nets open
+      instead of two (IO4, IO5, P3);
+    - a cost for crossing the straight ratsnest line of another net's pending connection (2 mm of trace per
+      crossing; 1 and 4 tried too): the mcu result unchanged (IO4, IO6 open), and on the RGB lamp copy 47 vias
+      and 976 mm instead of 35 and 882;
+    - a history cost that grows with the present cost (PathFinder style) instead of by 1 per round: the
+      searches spread over the whole board and ran out of memory.
+    The log of the rip-up rounds shows why: from round 4 on IO5 and IO6 only rip each other (the present
+    cost grows 1.6× per round and the history by 1, so the history never decides). A real fix wants the bus
+    planned as a whole (the order of its nets at the header, which side of each pad a trace passes), or a
+    negotiation that re-routes all nets each round with a bounded present cost.
     Still open in P8f: the per-class costs (with P16).
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
