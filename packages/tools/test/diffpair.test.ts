@@ -107,6 +107,29 @@ describe('differential pairs (P10, first part)', () => {
     for (const d of lens) expect(d.skew).toBeLessThan(0.2);
   });
 
+  it('coupled and uncoupled length of a routed pair, against diffUncoupledMax', { timeout: 60_000 }, async () => {
+    const p = await fixturePairs();
+    await measureAutoroute(p);
+    const r = (await runTool(p, 'net_lengths', {})) as { pairs: { p: string; coupled?: number; uncoupled?: number; uncoupledMax?: number }[] };
+    for (const d of r.pairs) {
+      // Only the breakouts at the two headers run apart; the default diff-pair ruleset allows 6 mm.
+      expect(d.coupled).toBeGreaterThan(20);
+      expect(d.uncoupled).toBeLessThan(d.uncoupledMax!);
+      expect(d.uncoupledMax).toBe(6);
+    }
+    expect(r.pairs.length).toBe(2);
+    // Taking one trace of a half out leaves that much more of the pair apart.
+    const before = r.pairs.find((d) => d.p === 'USB_P')!;
+    const t = [...p.doc.nodes.values()].filter((n) => n.type === 'trace' && p.doc.nodes.get(n.parent!)?.name === 'USB_N').sort((a, b) => {
+      const len = (n: typeof a) => { const x = p.engine.get(n.uid, 'start')!.value as Vec2, y = p.engine.get(n.uid, 'end')!.value as Vec2; return Math.hypot(y.x - x.x, y.y - x.y); };
+      return len(b) - len(a);
+    })[0]!;
+    p.history.apply('cut', [{ op: 'remove', uid: t.uid }]);
+    const after = ((await runTool(p, 'net_lengths', {})) as typeof r).pairs.find((d) => d.p === 'USB_P')!;
+    expect(after.coupled!).toBeLessThan(before.coupled! - 1);
+    expect(after.uncoupled!).toBeGreaterThan(before.uncoupled! + 1);
+  });
+
   it('other nets keep the pair clearance (3 W) from a pair; its partner keeps only the gap', { timeout: 60_000 }, async () => {
     const p = await fixturePairs();
     const dpc = rule(p, 'USB_P', 'diffPairClearance') as number;

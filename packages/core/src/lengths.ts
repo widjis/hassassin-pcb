@@ -90,6 +90,12 @@ export interface DiffPair {
   skew: number;
   /** Skew in time (ps), when the lengths carry delays. */
   skewPs?: number;
+  /** Length over which the halves run side by side at the pair gap (P10; with `pairCoupling`). */
+  coupled?: number;
+  /** Longer of the two halves' lengths that do not run beside the partner at the gap. */
+  uncoupled?: number;
+  /** The pair's `diffUncoupledMax` rule, when set. */
+  uncoupledMax?: number;
 }
 
 /** Pairs found by name: X_P/X_N, X+/X-, XP/XN (case-insensitive, also DP/DM). */
@@ -217,4 +223,89 @@ export function planMeander(doc: Doc, engine: StyleEngine, net: string, extra: n
     ops.push({ op: 'add', parent: node.uid, index: index + i, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { tuned: true }, rules: [{ name: 'start', value: clean[i]! }, { name: 'end', value: clean[i + 1]! }, { name: 'layer', value: layer }, ...keep], parent: node.uid, children: [] }] } });
   }
   return { ops, added: Math.round(2 * amp * bumps * 1000) / 1000 };
+}
+
+type Piece = { layer: string; a: Vec2; b: Vec2; w: number };
+const piecesOf = (doc: Doc, engine: StyleEngine, net: string): Piece[] => {
+  const n = [...doc.nodes.values()].find((x) => x.type === 'net' && x.name === net);
+  const out: Piece[] = [];
+  for (const c of n?.children ?? []) {
+    const k = doc.nodes.get(c);
+    if (k?.type !== 'trace') continue;
+    const a = vec(engine.get(k.uid, 'start')?.value);
+    const b = vec(engine.get(k.uid, 'end')?.value);
+    if (!a || !b) continue;
+    const layer = String(engine.get(k.uid, 'layer')?.value ?? '');
+    const w = Number(engine.get(k.uid, 'traceWidth')?.value ?? 0.25);
+    const m = vec(engine.get(k.uid, 'mid')?.value);
+    const pts = m ? arcPoints(a, m, b) : [a, b];
+    for (let i = 1; i < pts.length; i++) out.push({ layer, a: pts[i - 1]!, b: pts[i]!, w });
+  }
+  return out;
+};
+
+/**
+ * How much of a pair runs coupled (P10): per half, the length of its pieces that run parallel to a piece
+ * of the partner on the same layer at the pair gap (`diffGap`, edge to edge, within 10 % or 0.02 mm), the
+ * overlap of the two measured along the piece. `uncoupled` is the longer remainder of the two halves;
+ * mostly the breakouts at the pads. Undefined without a `diffGap` on either net.
+ */
+export function pairCoupling(doc: Doc, engine: StyleEngine, pNet: string, nNet: string): { coupled: number; uncoupled: number; uncoupledMax?: number } | undefined {
+  const nets = [...doc.nodes.values()].filter((x) => x.type === 'net' && (x.name === pNet || x.name === nNet));
+  const rule = (name: string) => {
+    let v = 0;
+    for (const n of nets) {
+      const r = engine.get(n.uid, name)?.value;
+      if (typeof r === 'number' && r > 0) v = Math.max(v, r);
+    }
+    return v;
+  };
+  const gap = rule('diffGap');
+  if (!gap) return undefined;
+  const P = piecesOf(doc, engine, pNet);
+  const N = piecesOf(doc, engine, nNet);
+  const tol = Math.max(0.02, gap * 0.1);
+  const side = (A: Piece[], B: Piece[]) => {
+    let total = 0;
+    let coupled = 0;
+    for (const x of A) {
+      const dx = x.b.x - x.a.x, dy = x.b.y - x.a.y;
+      const L = Math.hypot(dx, dy);
+      total += L;
+      if (L < 1e-9) continue;
+      const ux = dx / L, uy = dy / L;
+      const spans: [number, number][] = [];
+      for (const y of B) {
+        if (y.layer !== x.layer) continue;
+        const ex = y.b.x - y.a.x, ey = y.b.y - y.a.y;
+        const M = Math.hypot(ex, ey);
+        if (M < 1e-9 || Math.abs(ux * ey - uy * ex) / M > 0.01) continue;
+        // Distance between the two parallel lines, edge to edge.
+        const d = Math.abs((y.a.x - x.a.x) * uy - (y.a.y - x.a.y) * ux) - x.w / 2 - y.w / 2;
+        if (Math.abs(d - gap) > tol) continue;
+        const t0 = (y.a.x - x.a.x) * ux + (y.a.y - x.a.y) * uy;
+        const t1 = (y.b.x - x.a.x) * ux + (y.b.y - x.a.y) * uy;
+        const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(L, Math.max(t0, t1));
+        if (hi > lo) spans.push([lo, hi]);
+      }
+      spans.sort((s, t) => s[0] - t[0]);
+      let end = -Infinity;
+      for (const [lo, hi] of spans) {
+        if (hi <= end) continue;
+        coupled += hi - Math.max(lo, end);
+        end = hi;
+      }
+    }
+    return { total, coupled };
+  };
+  const sp = side(P, N);
+  const sn = side(N, P);
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const max = rule('diffUncoupledMax');
+  return { coupled: r3(Math.min(sp.coupled, sn.coupled)), uncoupled: r3(Math.max(sp.total - sp.coupled, sn.total - sn.coupled)), ...(max ? { uncoupledMax: max } : {}) };
+}
+
+/** The pairs with their coupled and uncoupled lengths (`pairCoupling`) where the nets have a pair gap. */
+export function withCoupling(doc: Doc, engine: StyleEngine, pairs: DiffPair[]): DiffPair[] {
+  return pairs.map((d) => ({ ...d, ...(pairCoupling(doc, engine, d.p, d.n) ?? {}) }));
 }

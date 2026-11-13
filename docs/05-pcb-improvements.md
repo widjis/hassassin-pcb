@@ -775,8 +775,20 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     Test (`diffpair.test.ts`): on the `pairs` fixture the rule is 2 × w and larger than the gap; after
     routing, every other net's trace (pair or not) is at least that far from each pair half between the
     headers. The via case still routes both pairs together. Other fixtures and the RGB lamp unchanged.
+  - *Progress (2026-11-14), fourth part:* uncoupled length.
+    - `pairCoupling(doc, engine, p, n)` in `lengths.ts`: per half, the length of its pieces that run
+      parallel to a piece of the partner on the same layer at the pair gap (`diffGap` edge to edge, within
+      10 % or 0.02 mm), measured as the overlap along the piece; `coupled` is the smaller of the two halves,
+      `uncoupled` the longer remainder. Arcs count as their polyline. `withCoupling` adds both to the pairs.
+    - Rule `diffUncoupledMax` (length); the built-in diff-pair ruleset sets 6 mm (two breakouts of a pair at
+      a 2.54 mm pitch take about 3.2 mm). `net_lengths` gives `coupled`, `uncoupled` and `uncoupledMax` per
+      pair; the Board panel shows the uncoupled length, in red when over the rule. The router does not
+      enforce it yet: its pair search already keeps the breakouts short and mirrored.
+    Test (`diffpair.test.ts`): on the routed `pairs` fixture both pairs run 28.8 – 28.9 mm coupled and
+    3.2 – 3.3 mm uncoupled (under 6 mm); taking out the longest trace of USB_N makes the coupled length
+    shorter and the uncoupled length longer.
   - Still open in P10: arc corners for a pair (with `cornerStyle: arc` a pair keeps 45° corners, so the
-    arc style test leaves the fixture out); `diffUncoupledMax`; tuning (`diffSkewMax`, serpentines on any
+    arc style test leaves the fixture out); the router keeping `diffUncoupledMax`; tuning (`diffSkewMax`, serpentines on any
     segment with 45° / arc corners and 3 × width spacing); a pair whose halves swap sides between its ends
     (routed one by one today); ground return vias.
 - [ ] **P11. Autoplacer that uses the schematic.**

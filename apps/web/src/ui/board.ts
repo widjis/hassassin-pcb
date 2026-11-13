@@ -6,6 +6,7 @@ import {
   defaultStackup,
   diffImpedance,
   diffPairs,
+  withCoupling,
   impedance,
   lengthGroups,
   lineGeometry,
@@ -221,7 +222,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
 
     // ---- lengths
     const lens = netLengths(doc, engine, st).filter((l) => l.segments);
-    const pairs = diffPairs(lens);
+    const pairs = withCoupling(doc, engine, diffPairs(lens));
     const groups = lengthGroups(lens);
     root.append(h('div', { class: 'section-title', style: 'margin-top:12px' }, h('span', {}, `Lengths · ${pairs.length} pair(s)`)));
     const tune = (net: string, target: number) => {
@@ -246,6 +247,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
           h('strong', {}, p.name),
           h('span', { class: 'dim' }, `${p.lengthP.toFixed(2)} / ${p.lengthN.toFixed(2)} mm`),
           h('span', { class: p.skew > 0.15 ? 'err-text' : 'dim', title: 'Skew in length, and in time from each layer\'s propagation delay' }, `skew ${p.skew.toFixed(2)} mm${p.skewPs !== undefined ? ` · ${p.skewPs.toFixed(1)} ps` : ''}`),
+          p.uncoupled !== undefined ? h('span', { class: p.uncoupledMax !== undefined && p.uncoupled > p.uncoupledMax ? 'err-text' : 'dim', title: `Side by side at the pair gap: ${p.coupled!.toFixed(2)} mm. Uncoupled: the longer half's length apart from its partner${p.uncoupledMax !== undefined ? ` (rule diffUncoupledMax ${p.uncoupledMax} mm)` : ''}` }, `uncoupled ${p.uncoupled.toFixed(2)} mm`) : null,
           p.skew > 0.05 ? h('button', { onclick: () => tune(short, Math.max(p.lengthP, p.lengthN)), title: `Add a serpentine to ${short} to match ${long}` }, 'Match') : null,
         ),
       );
