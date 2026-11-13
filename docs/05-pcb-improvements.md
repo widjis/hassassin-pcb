@@ -647,6 +647,30 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - The autorouter uses it before ripping up: a failing connection first tries to shove its neighbours.
   - Tests on fixture boards: connectivity identical before and after, 0 DRC errors.
   - *Moved to PM1 (with P4):* shoving while routing or dragging a trace by hand.
+  - *Progress (2026-11-13), first part:* core module `shove.ts`, `planShove(doc, engine, copper,
+    { net, traces, vias })`: returns the operations that move other nets' traces out of the way of the new
+    copper (not the new copper itself), the moved uids and nets, or an error.
+    - The pusher is wrapped in an octagon with sides at 0°, 45° and 90° (`boundOctagon`: the box cut by
+      the x + y and x − y bounds), grown by the clearance and the pushed trace's half width.
+    - A trace of another net that comes too close is followed along its chain (same net and layer,
+      joined end to end) while the joints lie inside the octagon; that stretch is replaced by the walk
+      round the octagon on the shorter side. A joint at a pad or via, an end or a branch is never moved.
+    - The way round may not touch the new copper or other pieces of the net that pushes (no pushing
+      back): those pieces join the octagon and the way is found again (up to 8 times).
+    - The new pieces push in their turn (step limit 60).
+    - Refused: a locked trace (`locked` on the trace or its net), an arc, a via of another net in the way
+      (vias are not moved yet), a pad / via / branch inside the octagon, too many steps, and any result
+      that, put on the board for a moment with the new copper, makes DRC report an error it did not
+      report before or changes the islands of any other net. The board is left as it was.
+    Tests (`shove.test.ts`, bus fixture after autorouting): a new trace beside or on top of B4 pushes it
+    aside with no DRC error and every other net's connectivity unchanged, undo puts it back; a 2.5 mm
+    trace pushes B4 and B4 pushes B5; planning leaves the board unchanged; a locked trace and copper
+    laid on a pad are refused. Found on the way: the first octagon (sides along the pusher) could not hold
+    a group of pieces, and B5 then pushed B4 back into the new copper; the board-axes octagon round the
+    group fixed both.
+  - Still open in P9: the autorouter's use of it (a failing connection first tries to shove its
+    neighbours: the router's run-routes would need the same walk round in its own model); moving vias;
+    smoother corners on the way round (it keeps 45° geometry but may leave short jogs).
 - [ ] **P10. Differential pairs and length tuning (automatic).**
   - Pairs are found by name (as today) or set by the `diff-pair` class with a partner (P16).
   - **Width and gap from the impedance.** The pair's target differential impedance (rule `diffImpedance`,
