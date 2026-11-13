@@ -11,8 +11,11 @@
  * (`net[signal=rf]` …) and the router pick it up; a net's `signal` without `signalSource` (or with
  * `signalSource=net`) is the owner's and is never overwritten.
  */
-import type { Doc, DocNode } from './model.ts';
+import type { Doc, DocNode, RuleDecl } from './model.ts';
+import type { Op } from './commands.ts';
 import { diffPairs } from './lengths.ts';
+import { parseRuleValue } from './ruleDefs.ts';
+import { matches } from './selector.ts';
 
 export const SIGNAL_CLASSES = ['general', 'analog', 'sensitive', 'clock', 'switching', 'high-speed', 'diff-pair', 'rf', 'power', 'high-current', 'high-voltage', 'ground'] as const;
 export type SignalClass = (typeof SIGNAL_CLASSES)[number];
@@ -32,6 +35,35 @@ export interface NetSignal {
   why: string;
   /** The other half of a differential pair. */
   pair?: string;
+  /** Largest current (A) given on the net or its pins (`signalCurrent`). */
+  current?: number;
+  /** Largest voltage (V) given on the net or its pins (`signalVoltage`). */
+  voltage?: number;
+}
+
+/** Above these a net is at least `high-current` / `high-voltage` (our own thresholds). */
+export const HIGH_CURRENT_A = 1;
+export const HIGH_VOLTAGE_V = 50;
+
+/**
+ * Outer-layer trace width (mm) for a current, from the IPC-2221 chart fit I = 0.048 · ΔT^0.44 · A^0.725
+ * (A in mil²), for a temperature rise of `rise` °C over copper `thicknessMm` thick. Rounded up to 0.05 mm.
+ */
+export function widthForCurrent(amps: number, thicknessMm = 0.035, rise = 10): number {
+  if (!(amps > 0)) return 0;
+  const areaMil2 = (amps / (0.048 * rise ** 0.44)) ** (1 / 0.725);
+  const mm = (areaMil2 / (thicknessMm / 0.0254)) * 0.0254;
+  return +(Math.ceil(mm / 0.05 - 1e-9) * 0.05).toFixed(2);
+}
+
+/** Conductor spacing (mm) for a voltage, outer layer without coating (IPC-2221 table, column B2). */
+export function clearanceForVoltage(volts: number): number {
+  if (!(volts > 0)) return 0;
+  if (volts <= 30) return 0.1;
+  if (volts <= 150) return 0.6;
+  if (volts <= 300) return 1.25;
+  if (volts <= 500) return 2.5;
+  return Math.ceil((2.5 + (volts - 500) * 0.005) * 100) / 100;
 }
 
 const base = (name: string) => name.split('/').pop() ?? name;
@@ -61,8 +93,18 @@ interface PinRef {
   net: string;
   /** `signal` set on the pad or the schematic pin. */
   set?: SignalClass;
+  current?: number;
+  voltage?: number;
   part: DocNode;
 }
+
+const numProp = (...vs: unknown[]): number | undefined => {
+  for (const v of vs) {
+    const x = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+    if (Number.isFinite(x) && x > 0) return x;
+  }
+  return undefined;
+};
 
 /** Board pads with their designator, pin number, the schematic pin name (if any) and net. */
 function pinsOf(doc: Doc): PinRef[] {
@@ -80,7 +122,9 @@ function pinsOf(doc: Doc): PinRef[] {
     const pin = String(n.props.number ?? n.name);
     const sp = schPins.get(`${el.name}.${pin}`);
     const set = isSignalClass(n.props.signal) ? n.props.signal : isSignalClass(sp?.props.signal) ? (sp!.props.signal as SignalClass) : undefined;
-    out.push({ ref: el.name, pin, pinName: String(sp?.props.pinName ?? n.props.pinName ?? ''), net: n.props.net, ...(set ? { set } : {}), part: el });
+    const current = numProp(n.props.signalCurrent, sp?.props.signalCurrent);
+    const voltage = numProp(n.props.signalVoltage, sp?.props.signalVoltage);
+    out.push({ ref: el.name, pin, pinName: String(sp?.props.pinName ?? n.props.pinName ?? ''), net: n.props.net, ...(set ? { set } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), part: el });
   }
   return out;
 }
@@ -102,13 +146,20 @@ export function netSignals(doc: Doc): NetSignal[] {
   const netByName = new Map(nets.map((n) => [n.name, n]));
   const out: NetSignal[] = [];
   for (const n of nets) {
+    const ps = byNet.get(n.name) ?? [];
+    const maxOf = (k: 'current' | 'voltage', prop: string) => {
+      const vals = [numProp(n.props[prop]), ...ps.map((p) => p[k])].filter((x): x is number => x !== undefined);
+      return vals.length ? Math.max(...vals) : undefined;
+    };
+    const current = maxOf('current', 'signalCurrent');
+    const voltage = maxOf('voltage', 'signalVoltage');
+    const extra = { ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}) };
     const own = n.props.signal;
     const src = n.props.signalSource;
     if (isSignalClass(own) && (src === undefined || src === 'net')) {
-      out.push({ net: n.name, signal: own, source: 'net', why: 'set on the net', ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}) });
+      out.push({ net: n.name, signal: own, source: 'net', why: 'set on the net', ...extra });
       continue;
     }
-    const ps = byNet.get(n.name) ?? [];
     let best: { signal: SignalClass; source: SignalSource; why: string } = { signal: 'general', source: 'default', why: 'no hint' };
     const take = (signal: SignalClass, source: SignalSource, why: string) => {
       // A pin set by hand beats any guess; otherwise the stricter class wins.
@@ -137,7 +188,80 @@ export function netSignals(doc: Doc): NetSignal[] {
         }
       }
     }
-    out.push({ net: n.name, ...best, ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}) });
+    // A current or voltage given on a pin raises the class (a set pin class counts as given, so the
+    // raise is a `pin` source too).
+    const given = current !== undefined || voltage !== undefined;
+    const raise = (cls: SignalClass, why: string) => {
+      if (signalRank(cls) > signalRank(best.signal)) best = { signal: cls, source: given ? 'pin' : best.source, why };
+    };
+    if (current !== undefined && current >= HIGH_CURRENT_A) raise('high-current', `${current} A`);
+    if (voltage !== undefined && voltage >= HIGH_VOLTAGE_V) raise('high-voltage', `${voltage} V`);
+    out.push({ net: n.name, ...best, ...extra });
   }
   return out.sort((a, b) => a.net.localeCompare(b.net, undefined, { numeric: true }));
+}
+
+/** Rules `classify_nets` may compute per net from the parameters; listed in the net's `signalRules`. */
+const COMPUTED_RULES = ['traceWidth', 'keepOut'] as const;
+
+export interface SignalPlan {
+  ops: Op[];
+  /** Per net: the computed rules written, and hand-set rules that were kept although smaller. */
+  rules: { net: string; traceWidth?: number; keepOut?: number; kept?: string[] }[];
+}
+
+/**
+ * Ops that write the classes onto the nets (`signal`, `signalSource`) and the rules computed from the
+ * parameters: `traceWidth` from the current (IPC-2221, outer copper of `copperMm`) and `keepOut` from the
+ * voltage, as the net's own rules. Rules written this way are listed in the net's `signalRules`, so a
+ * later run may change or remove them; a rule of the same name set by hand is kept (and reported).
+ */
+export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: string[] } = {}): SignalPlan {
+  const byName = new Map([...doc.nodes.values()].filter((n) => n.type === 'net').map((n) => [n.name, n]));
+  const ops: Op[] = [];
+  const rules: SignalPlan['rules'] = [];
+  for (const s of netSignals(doc)) {
+    if (opts.nets && !opts.nets.includes(s.net)) continue;
+    const n = byName.get(s.net)!;
+    if (s.source !== 'net') {
+      const want = s.signal === 'general' ? null : s.signal;
+      const wantSrc = want ? s.source : null;
+      if ((n.props.signal ?? null) !== want) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: want });
+      if ((n.props.signalSource ?? null) !== wantSrc) ops.push({ op: 'setProp', uid: n.uid, key: 'signalSource', value: wantSrc });
+    }
+    const mine = new Set(String(n.props.signalRules ?? '').split(/\s+/).filter(Boolean));
+    const value: Partial<Record<(typeof COMPUTED_RULES)[number], number>> = {};
+    const w = s.current ? widthForCurrent(s.current, opts.copperMm) : 0;
+    if (w) value.traceWidth = w;
+    const c = s.voltage ? clearanceForVoltage(s.voltage) : 0;
+    if (c) value.keepOut = c;
+    const nextMine = new Set<string>();
+    const kept: string[] = [];
+    // A project ruleset (not a built-in default) that sets the rule on this net is the owner's too.
+    const byRuleset = (name: string) => doc.rulesets.some((rs) => rs.origin !== 'default' && rs.enabled !== false && rs.rules.some((r) => r.name === name) && matches(doc, n, rs.selector));
+    for (const name of COMPUTED_RULES) {
+      const have = n.rules.find((r) => r.name === name);
+      const v = value[name];
+      if (!have && byRuleset(name)) {
+        if (v !== undefined) kept.push(name);
+        continue;
+      }
+      if (have && !mine.has(name)) {
+        if (v !== undefined) kept.push(name);
+        continue;
+      }
+      if (v === undefined) {
+        if (have) ops.push({ op: 'setRule', uid: n.uid, name, decl: null });
+        continue;
+      }
+      const decl: RuleDecl = { name, value: parseRuleValue(name, `${+v.toFixed(3)}mm`) };
+      if (!have || JSON.stringify(have.value) !== JSON.stringify(decl.value)) ops.push({ op: 'setRule', uid: n.uid, name, decl });
+      nextMine.add(name);
+    }
+    const list = [...nextMine].join(' ') || null;
+    if ((n.props.signalRules ?? null) !== list) ops.push({ op: 'setProp', uid: n.uid, key: 'signalRules', value: list });
+    if (value.traceWidth || value.keepOut || kept.length)
+      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(kept.length ? { kept } : {}) });
+  }
+  return { ops, rules };
 }

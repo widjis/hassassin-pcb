@@ -69,6 +69,7 @@ import {
   lineGeometry,
   netLengths,
   netSignals,
+  planSignalClasses,
   isSignalClass,
   SIGNAL_CLASSES,
   planMeander,
@@ -1531,46 +1532,49 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'classify_nets',
-    description: `Signal class of every net (P16): ${SIGNAL_CLASSES.join(', ')}. A net takes the strictest class of its pins: a pin's \`signal\` property (set_pin_signal) or else a guess from pin, net and part names (CLK, XTAL, FB, SW/LX, RF/ANT, USB/ETH, X_P/X_N pairs, crystals, a converter's inductor). A class set by hand on the net wins. Lists each net with its class, source (net / pin / guess / default) and reason, for review. apply=true writes the classes onto the nets (property signal), so the default rulesets net[signal=…] set width, clearance, via cost, corner style and plane-gap cost for the autorouter; classes set by hand are kept.`,
+    description: `Signal class of every net (P16): ${SIGNAL_CLASSES.join(', ')}. A net takes the strictest class of its pins: a pin's \`signal\` property (set_pin_signal) or else a guess from pin, net and part names (CLK, XTAL, FB, SW/LX, RF/ANT, USB/ETH, X_P/X_N pairs, crystals, a converter's inductor). A class set by hand on the net wins. Lists each net with its class, source (net / pin / guess / default) and reason, for review. apply=true writes the classes onto the nets (property signal), so the default rulesets net[signal=…] set width, clearance, via cost, corner style and plane-gap cost for the autorouter; classes set by hand are kept. Where a current or voltage is given (set_pin_signal), it also writes the net's traceWidth from the current (IPC-2221, outer copper, 10 °C rise) and keepOut from the voltage (IPC-2221 spacing, uncoated outer layer); a traceWidth / keepOut set by hand on the net is kept and listed under "kept".`,
     mutates: true,
     input: { type: 'object', properties: { apply: { type: 'boolean', description: 'Write the classes onto the nets (default false: only list them)' }, filter: { type: 'string' } } },
     run: (p, a) => {
       const all = netSignals(p.doc);
       const f = typeof a.filter === 'string' ? a.filter.toLowerCase() : '';
       const list = all.filter((s) => !f || s.net.toLowerCase().includes(f));
+      let rules: unknown[] = [];
       if (a.apply === true) {
-        const byName = new Map([...p.doc.nodes.values()].filter((n) => n.type === 'net').map((n) => [n.name, n]));
-        const ops: Op[] = [];
-        for (const s of list) {
-          if (s.source === 'net') continue;
-          const n = byName.get(s.net)!;
-          const want = s.signal === 'general' ? null : s.signal;
-          const wantSrc = want ? s.source : null;
-          if ((n.props.signal ?? null) !== want) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: want });
-          if ((n.props.signalSource ?? null) !== wantSrc) ops.push({ op: 'setProp', uid: n.uid, key: 'signalSource', value: wantSrc });
-        }
-        if (ops.length) apply(p, 'Classify nets', ops);
+        const top = stackupOf(p.doc, p.copper).layers.find((l) => l.kind === 'copper');
+        const plan = planSignalClasses(p.doc, { ...(top ? { copperMm: top.thickness } : {}), ...(f ? { nets: list.map((x) => x.net) } : {}) });
+        if (plan.ops.length) apply(p, 'Classify nets', plan.ops);
+        rules = plan.rules;
       }
       const counts: Record<string, number> = {};
       for (const s of list) counts[s.signal] = (counts[s.signal] ?? 0) + 1;
-      return { applied: a.apply === true, counts, nets: list };
+      return { applied: a.apply === true, counts, nets: list, ...(rules.length ? { rules } : {}) };
     },
   },
   {
     name: 'set_pin_signal',
-    description: `Set what a pin needs from the layout (P16): signal = ${SIGNAL_CLASSES.join(' | ')}, or "" to remove it. target = a part ("U1", every pin), a pin ("U1.12"), or a net with net=true (the net's class, set by hand, overrides its pins). Sets the board pad and the schematic pin. Then run classify_nets with apply=true.`,
+    description: `Set what a pin needs from the layout (P16): signal = ${SIGNAL_CLASSES.join(' | ')}, or "" to remove it; current (A) and voltage (V) the pin carries (0 removes; from 1 A / 50 V the net is at least high-current / high-voltage, and classify_nets sizes width and clearance from them). target = a part ("U1", every pin), a pin ("U1.12"), or a net with net=true (the net's class, set by hand, overrides its pins). Sets the board pad and the schematic pin. Then run classify_nets with apply=true.`,
     mutates: true,
-    input: { type: 'object', properties: { target: { type: 'string' }, signal: { type: 'string', enum: [...SIGNAL_CLASSES, ''] }, net: { type: 'boolean', description: 'target is a net name' } }, required: ['target', 'signal'] },
+    input: { type: 'object', properties: { target: { type: 'string' }, signal: { type: 'string', enum: [...SIGNAL_CLASSES, ''] }, current: { type: 'number', description: 'Amps' }, voltage: { type: 'number', description: 'Volts' }, net: { type: 'boolean', description: 'target is a net name' } }, required: ['target'] },
     run: (p, a) => {
       const target = str(a.target, 'target');
+      const hasSig = a.signal !== undefined;
       const sig = String(a.signal ?? '');
       if (sig && !isSignalClass(sig)) throw new ToolError(`Unknown signal class "${sig}"; use one of ${SIGNAL_CLASSES.join(', ')}`);
+      const current = optNum(a.current, 'current');
+      const voltage = optNum(a.voltage, 'voltage');
+      if (!hasSig && current === undefined && voltage === undefined) throw new ToolError('Give `signal`, `current` or `voltage`.');
       const ops: Op[] = [];
       const hit: string[] = [];
+      const params = (uid: string) => {
+        if (current !== undefined) ops.push({ op: 'setProp', uid, key: 'signalCurrent', value: current > 0 ? current : null });
+        if (voltage !== undefined) ops.push({ op: 'setProp', uid, key: 'signalVoltage', value: voltage > 0 ? voltage : null });
+      };
       if (a.net === true) {
         const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === target);
         if (!n) throw new ToolError(`No net ${target}`);
-        ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null }, { op: 'setProp', uid: n.uid, key: 'signalSource', value: sig ? 'net' : null });
+        if (hasSig) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null }, { op: 'setProp', uid: n.uid, key: 'signalSource', value: sig ? 'net' : null });
+        params(n.uid);
         hit.push(n.name);
       } else {
         const dot = target.lastIndexOf('.');
@@ -1581,13 +1585,14 @@ export const TOOLS: ToolDef[] = [
           if (!parent || parent.name !== ref || (parent.type !== 'element' && parent.type !== 'symbol')) continue;
           const num = String(n.props.number ?? n.name);
           if (pin !== undefined && num !== pin) continue;
-          ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null });
+          if (hasSig) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null });
+          params(n.uid);
           hit.push(`${ref}.${num}${n.type === 'pin' ? ' (schematic)' : ''}`);
         }
-        if (!ops.length) throw new ToolError(`No pin or pad matches "${target}"`);
+        if (!hit.length) throw new ToolError(`No pin or pad matches "${target}"`);
       }
       apply(p, `Set signal ${target}`, ops);
-      return { updated: hit, signal: sig || null, next: 'Run classify_nets with apply=true to update the nets.' };
+      return { updated: hit, ...(hasSig ? { signal: sig || null } : {}), ...(current !== undefined ? { current } : {}), ...(voltage !== undefined ? { voltage } : {}), next: 'Run classify_nets with apply=true to update the nets.' };
     },
   },
   {

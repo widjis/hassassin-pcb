@@ -343,9 +343,19 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     bus: a small change on a few nets moves many others. The classes that keep a via cost (clock,
     high-speed, diff-pair, rf, switching) do not occur on the RGB lamp; their effect on a real board is
     still to be measured, after the negotiation is reworked.
-  - Still open in P16: parameters (frequency, impedance, current, voltage, pair partner, length group,
-    interface presets) and the rules computed from them (width from the current, clearance from the
-    voltage, width from the impedance); extra spacing between `switching` and `analog` / `sensitive` nets
+  - *Progress (2026-11-13), second part:* current and voltage. `set_pin_signal` takes `current` (A) and
+    `voltage` (V) for a part, a pin or a net (`signalCurrent` / `signalVoltage`; 0 removes). A net takes
+    the largest of its pins and its own; from 1 A it is at least `high-current`, from 50 V at least
+    `high-voltage` (our own thresholds). `classify_nets apply=true` (now `planSignalClasses` in core)
+    also writes the net's own `traceWidth` from the current (IPC-2221 chart fit for outer layers, 10 °C
+    rise, the outer copper thickness from the stackup, rounded up to 0.05 mm: 1 A → 0.35 mm, 3 A →
+    1.4 mm on 1 oz) and `keepOut` from the voltage (IPC-2221 spacing, uncoated outer layer: ≤ 30 V
+    0.1 mm, ≤ 150 V 0.6 mm, ≤ 300 V 1.25 mm, ≤ 500 V 2.5 mm, then 0.005 mm/V). Rules written this way
+    are listed in the net's `signalRules`, so a later run changes or removes them; a `traceWidth` /
+    `keepOut` set by hand, on the net or by a project ruleset that matches it, is kept and reported
+    under `kept`. Three more tests; the RGB lamp is unchanged (no currents or voltages given yet).
+  - Still open in P16: the other parameters (frequency, impedance, pair partner, length group,
+    interface presets) and width from the impedance; extra spacing between `switching` and `analog` / `sensitive` nets
     (a per-pair clearance the rules cannot express yet); the class in the Board panel and in
     `project_status` (outside the PM2 list: to be asked); the owner's review of the benchmark boards'
     classes.

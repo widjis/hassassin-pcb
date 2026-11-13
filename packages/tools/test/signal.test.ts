@@ -3,7 +3,7 @@
  * onto nets, and the default rulesets that give each class its width, clearance, via cost and corner style.
  */
 import { describe, expect, it } from 'vitest';
-import { netSignals } from '@hassassin/core';
+import { clearanceForVoltage, netSignals, widthForCurrent } from '@hassassin/core';
 import { fixtureBus, measureAutoroute, newProject, runTool, type Project } from '@hassassin/tools';
 
 async function board(): Promise<Project> {
@@ -93,5 +93,41 @@ describe('signal classes (P16)', () => {
     expect(f.arcs).toBeGreaterThan(0);
     expect(f.drcByKind).toEqual({});
     expect(f.failed).toBe(0);
+  });
+
+  it('width from the current and clearance from the voltage (IPC-2221)', () => {
+    expect(widthForCurrent(1)).toBe(0.35);
+    expect(widthForCurrent(3)).toBe(1.4);
+    expect(widthForCurrent(3, 0.07)).toBe(0.7);
+    expect(clearanceForVoltage(12)).toBe(0.1);
+    expect(clearanceForVoltage(230)).toBe(1.25);
+    expect(clearanceForVoltage(600)).toBe(3);
+  });
+
+  it('a current or voltage on a pin raises the class and sets the net width / clearance', async () => {
+    const p = await board();
+    await runTool(p, 'set_pin_signal', { target: 'J1.9', current: 3 });
+    await runTool(p, 'set_pin_signal', { target: 'J1.7', voltage: 230 });
+    const r = (await runTool(p, 'classify_nets', { apply: true })) as { rules: { net: string }[] };
+    const s = Object.fromEntries(netSignals(p.doc).map((x) => [x.net, x]));
+    expect(s.DATA).toMatchObject({ signal: 'high-current', source: 'pin', current: 3 });
+    expect(s.VCC).toMatchObject({ signal: 'high-voltage', voltage: 230 });
+    expect(rule(p, 'DATA', 'traceWidth')).toBe(1.4);
+    expect(JSON.stringify(rule(p, 'VCC', 'keepOut'))).toContain('1.25');
+    expect(r.rules.map((x) => x.net).sort()).toEqual(['DATA', 'VCC']);
+    // Removing the current removes the computed width; the class falls back to the guess.
+    await runTool(p, 'set_pin_signal', { target: 'J1.9', current: 0 });
+    await runTool(p, 'classify_nets', { apply: true });
+    expect(rule(p, 'DATA', 'traceWidth')).toBe(0.25);
+    expect(netSignals(p.doc).find((x) => x.net === 'DATA')!.signal).toBe('general');
+  });
+
+  it('a width set by hand on the net is kept and reported', async () => {
+    const p = await board();
+    await runTool(p, 'set_rule', { target: 'net#"DATA"', rule: 'traceWidth', value: '2mm' });
+    await runTool(p, 'set_pin_signal', { target: 'J1.9', current: 3 });
+    const r = (await runTool(p, 'classify_nets', { apply: true })) as { rules: { net: string; kept?: string[] }[] };
+    expect(rule(p, 'DATA', 'traceWidth')).toBe(2);
+    expect(r.rules.find((x) => x.net === 'DATA')!.kept).toEqual(['traceWidth']);
   });
 });
