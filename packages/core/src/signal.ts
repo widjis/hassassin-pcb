@@ -16,6 +16,7 @@ import type { Op } from './commands.ts';
 import { diffPairs } from './lengths.ts';
 import { parseRuleValue } from './ruleDefs.ts';
 import { matches } from './selector.ts';
+import { lineGeometry, widthForImpedance, type Stackup } from './stackup.ts';
 
 export const SIGNAL_CLASSES = ['general', 'analog', 'sensitive', 'clock', 'switching', 'high-speed', 'diff-pair', 'rf', 'power', 'high-current', 'high-voltage', 'ground'] as const;
 export type SignalClass = (typeof SIGNAL_CLASSES)[number];
@@ -39,6 +40,8 @@ export interface NetSignal {
   current?: number;
   /** Largest voltage (V) given on the net or its pins (`signalVoltage`). */
   voltage?: number;
+  /** Single-ended target impedance (Ω) given on the net or its pins (`signalImpedance`; the smallest). */
+  impedance?: number;
 }
 
 /** Above these a net is at least `high-current` / `high-voltage` (our own thresholds). */
@@ -95,6 +98,7 @@ interface PinRef {
   set?: SignalClass;
   current?: number;
   voltage?: number;
+  impedance?: number;
   part: DocNode;
 }
 
@@ -124,7 +128,8 @@ function pinsOf(doc: Doc): PinRef[] {
     const set = isSignalClass(n.props.signal) ? n.props.signal : isSignalClass(sp?.props.signal) ? (sp!.props.signal as SignalClass) : undefined;
     const current = numProp(n.props.signalCurrent, sp?.props.signalCurrent);
     const voltage = numProp(n.props.signalVoltage, sp?.props.signalVoltage);
-    out.push({ ref: el.name, pin, pinName: String(sp?.props.pinName ?? n.props.pinName ?? ''), net: n.props.net, ...(set ? { set } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), part: el });
+    const impedance = numProp(n.props.signalImpedance, sp?.props.signalImpedance);
+    out.push({ ref: el.name, pin, pinName: String(sp?.props.pinName ?? n.props.pinName ?? ''), net: n.props.net, ...(set ? { set } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), ...(impedance ? { impedance } : {}), part: el });
   }
   return out;
 }
@@ -147,13 +152,16 @@ export function netSignals(doc: Doc): NetSignal[] {
   const out: NetSignal[] = [];
   for (const n of nets) {
     const ps = byNet.get(n.name) ?? [];
+    const valsOf = (k: 'current' | 'voltage' | 'impedance', prop: string) => [numProp(n.props[prop]), ...ps.map((p) => p[k])].filter((x): x is number => x !== undefined);
     const maxOf = (k: 'current' | 'voltage', prop: string) => {
-      const vals = [numProp(n.props[prop]), ...ps.map((p) => p[k])].filter((x): x is number => x !== undefined);
+      const vals = valsOf(k, prop);
       return vals.length ? Math.max(...vals) : undefined;
     };
     const current = maxOf('current', 'signalCurrent');
     const voltage = maxOf('voltage', 'signalVoltage');
-    const extra = { ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}) };
+    const zs = valsOf('impedance', 'signalImpedance');
+    const impedance = zs.length ? Math.min(...zs) : undefined;
+    const extra = { ...(partner.has(n.name) ? { pair: partner.get(n.name)! } : {}), ...(current ? { current } : {}), ...(voltage ? { voltage } : {}), ...(impedance ? { impedance } : {}) };
     const own = n.props.signal;
     const src = n.props.signalSource;
     if (isSignalClass(own) && (src === undefined || src === 'net')) {
@@ -190,12 +198,14 @@ export function netSignals(doc: Doc): NetSignal[] {
     }
     // A current or voltage given on a pin raises the class (a set pin class counts as given, so the
     // raise is a `pin` source too).
-    const given = current !== undefined || voltage !== undefined;
+    const given = current !== undefined || voltage !== undefined || impedance !== undefined;
     const raise = (cls: SignalClass, why: string) => {
       if (signalRank(cls) > signalRank(best.signal)) best = { signal: cls, source: given ? 'pin' : best.source, why };
     };
     if (current !== undefined && current >= HIGH_CURRENT_A) raise('high-current', `${current} A`);
     if (voltage !== undefined && voltage >= HIGH_VOLTAGE_V) raise('high-voltage', `${voltage} V`);
+    // A target impedance means a controlled-impedance line: at least high-speed.
+    if (impedance !== undefined) raise('high-speed', `${impedance} Ω`);
     out.push({ net: n.name, ...best, ...extra });
   }
   return out.sort((a, b) => a.net.localeCompare(b.net, undefined, { numeric: true }));
@@ -207,7 +217,7 @@ const COMPUTED_RULES = ['traceWidth', 'keepOut'] as const;
 export interface SignalPlan {
   ops: Op[];
   /** Per net: the computed rules written, and hand-set rules that were kept although smaller. */
-  rules: { net: string; traceWidth?: number; keepOut?: number; kept?: string[] }[];
+  rules: { net: string; traceWidth?: number; keepOut?: number; kept?: string[]; note?: string }[];
 }
 
 /**
@@ -216,7 +226,8 @@ export interface SignalPlan {
  * voltage, as the net's own rules. Rules written this way are listed in the net's `signalRules`, so a
  * later run may change or remove them; a rule of the same name set by hand is kept (and reported).
  */
-export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: string[] } = {}): SignalPlan {
+export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: string[]; stackup?: Stackup; layer?: string } = {}): SignalPlan {
+  const geom = opts.stackup && opts.layer ? lineGeometry(opts.stackup, opts.layer) : null;
   const byName = new Map([...doc.nodes.values()].filter((n) => n.type === 'net').map((n) => [n.name, n]));
   const ops: Op[] = [];
   const rules: SignalPlan['rules'] = [];
@@ -231,8 +242,21 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
     }
     const mine = new Set(String(n.props.signalRules ?? '').split(/\s+/).filter(Boolean));
     const value: Partial<Record<(typeof COMPUTED_RULES)[number], number>> = {};
+    const notes: string[] = [];
     const w = s.current ? widthForCurrent(s.current, opts.copperMm) : 0;
     if (w) value.traceWidth = w;
+    if (s.impedance) {
+      // The impedance fixes the width; a current that needs more is reported, not silently widened.
+      const zw = geom ? widthForImpedance(geom, s.impedance) : null;
+      if (!geom) notes.push(`no stackup line geometry for ${opts.layer ?? 'the outer layer'}: width for ${s.impedance} Ω not set`);
+      else if (zw === null) notes.push(`${s.impedance} Ω cannot be reached on ${opts.layer} with this stackup`);
+      else {
+        const zr = Math.round(zw * 1000) / 1000;
+        if (w > zr) notes.push(`${s.current} A needs ${w} mm, wider than the ${zr} mm for ${s.impedance} Ω; the impedance width is used`);
+        value.traceWidth = zr;
+        if (zr > 1.5) notes.push(`${s.impedance} Ω needs ${zr} mm on ${opts.layer}: a thinner dielectric to the plane (more layers) would make it narrower`);
+      }
+    }
     const c = s.voltage ? clearanceForVoltage(s.voltage) : 0;
     if (c) value.keepOut = c;
     const nextMine = new Set<string>();
@@ -260,8 +284,8 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
     }
     const list = [...nextMine].join(' ') || null;
     if ((n.props.signalRules ?? null) !== list) ops.push({ op: 'setProp', uid: n.uid, key: 'signalRules', value: list });
-    if (value.traceWidth || value.keepOut || kept.length)
-      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(kept.length ? { kept } : {}) });
+    if (value.traceWidth || value.keepOut || kept.length || notes.length)
+      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
   }
   return { ops, rules };
 }

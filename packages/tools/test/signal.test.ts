@@ -3,7 +3,7 @@
  * onto nets, and the default rulesets that give each class its width, clearance, via cost and corner style.
  */
 import { describe, expect, it } from 'vitest';
-import { clearanceForVoltage, netSignals, widthForCurrent } from '@hassassin/core';
+import { clearanceForVoltage, impedance, lineGeometry, netSignals, stackupOf, widthForCurrent } from '@hassassin/core';
 import { fixtureBus, measureAutoroute, newProject, runTool, type Project } from '@hassassin/tools';
 
 async function board(): Promise<Project> {
@@ -129,5 +129,24 @@ describe('signal classes (P16)', () => {
     const r = (await runTool(p, 'classify_nets', { apply: true })) as { rules: { net: string; kept?: string[] }[] };
     expect(rule(p, 'DATA', 'traceWidth')).toBe(2);
     expect(r.rules.find((x) => x.net === 'DATA')!.kept).toEqual(['traceWidth']);
+  });
+
+  it('a target impedance sets the width from the stackup and makes the net high-speed', async () => {
+    const p = await board();
+    await runTool(p, 'set_pin_signal', { target: 'J1.9', impedance: 50 });
+    const thick = (await runTool(p, 'classify_nets', { apply: true })) as { rules: { net: string; note?: string }[] };
+    expect(netSignals(p.doc).find((x) => x.net === 'DATA')).toMatchObject({ signal: 'high-speed', impedance: 50 });
+    const g = lineGeometry(stackupOf(p.doc, p.copper), 'F.Cu')!;
+    const w = rule(p, 'DATA', 'traceWidth') as number;
+    expect(Math.abs(impedance(g, w) - 50)).toBeLessThan(0.5);
+    // On a 1.6 mm two-layer board 50 Ω is a very wide trace, and the tool says so.
+    expect(w).toBeGreaterThan(1.5);
+    expect(thick.rules.find((x) => x.net === 'DATA')!.note).toMatch(/thinner dielectric/);
+    // A 0.4 mm board brings it down to a routable width.
+    await runTool(p, 'set_stackup', { thickness: 0.4 });
+    await runTool(p, 'classify_nets', { apply: true });
+    const w2 = rule(p, 'DATA', 'traceWidth') as number;
+    expect(w2).toBeLessThan(w);
+    expect(Math.abs(impedance(lineGeometry(stackupOf(p.doc, p.copper), 'F.Cu')!, w2) - 50)).toBeLessThan(0.5);
   });
 });

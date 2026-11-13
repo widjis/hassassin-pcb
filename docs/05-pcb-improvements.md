@@ -354,8 +354,16 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     are listed in the net's `signalRules`, so a later run changes or removes them; a `traceWidth` /
     `keepOut` set by hand, on the net or by a project ruleset that matches it, is kept and reported
     under `kept`. Three more tests; the RGB lamp is unchanged (no currents or voltages given yet).
-  - Still open in P16: the other parameters (frequency, impedance, pair partner, length group,
-    interface presets) and width from the impedance; extra spacing between `switching` and `analog` / `sensitive` nets
+  - *Progress (2026-11-13), third part:* impedance. `set_pin_signal` takes `impedance` (Ω, single-ended,
+    `signalImpedance`); a net takes the smallest given and is at least `high-speed`. `classify_nets`
+    sets the net's `traceWidth` for it on the stackup's outer layer with the existing calculator
+    (`lineGeometry`, `widthForImpedance`); the impedance width wins over a current width, and the result
+    says so (`note`) when the current would need more, when the target cannot be reached, or when the
+    width is over 1.5 mm (50 Ω needs 2.66 mm on a 1.6 mm two-layer board, 1.21 mm on 0.8 mm, 0.50 mm
+    on 0.4 mm). One width per net, from the outer layer: an inner layer of a four-layer board would need
+    its own width (a per-layer width rule does not exist yet). Differential impedance stays with P10.
+  - Still open in P16: the other parameters (frequency, pair partner, length group, interface presets);
+    extra spacing between `switching` and `analog` / `sensitive` nets
     (a per-pair clearance the rules cannot express yet); the class in the Board panel and in
     `project_status` (outside the PM2 list: to be asked); the owner's review of the benchmark boards'
     classes.
