@@ -283,12 +283,12 @@ export function netSignals(doc: Doc): NetSignal[] {
 }
 
 /** Rules `classify_nets` may compute per net from the parameters; listed in the net's `signalRules`. */
-const COMPUTED_RULES = ['traceWidth', 'keepOut', 'diffGap'] as const;
+const COMPUTED_RULES = ['traceWidth', 'keepOut', 'diffGap', 'diffPairClearance'] as const;
 
 export interface SignalPlan {
   ops: Op[];
   /** Per net: the computed rules written, and hand-set rules that were kept although smaller. */
-  rules: { net: string; traceWidth?: number; keepOut?: number; diffGap?: number; kept?: string[]; note?: string }[];
+  rules: { net: string; traceWidth?: number; keepOut?: number; diffGap?: number; diffPairClearance?: number; kept?: string[]; note?: string }[];
 }
 
 /**
@@ -340,6 +340,8 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
       else {
         value.traceWidth = pg.width;
         value.diffGap = pg.gap;
+        // Other nets at least 3 × the width away, centre to centre (2 × w edge to edge), for crosstalk.
+        value.diffPairClearance = Math.ceil(2 * pg.width * 100 - 1e-6) / 100;
         if (pg.width > 1) notes.push(`${zDiff} Ω differential needs ${pg.width} mm traces ${pg.gap} mm apart on ${opts.layer}: a thinner dielectric to the plane (more layers) would make them narrower`);
       }
     }
@@ -371,7 +373,7 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
     const list = [...nextMine].join(' ') || null;
     if ((n.props.signalRules ?? null) !== list) ops.push({ op: 'setProp', uid: n.uid, key: 'signalRules', value: list });
     if (value.traceWidth || value.keepOut || value.diffGap || kept.length || notes.length)
-      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(nextMine.has('diffGap') ? { diffGap: value.diffGap! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
+      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(nextMine.has('diffGap') ? { diffGap: value.diffGap! } : {}), ...(nextMine.has('diffPairClearance') ? { diffPairClearance: value.diffPairClearance! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
   }
   return { ops, rules };
 }

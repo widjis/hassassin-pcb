@@ -107,6 +107,28 @@ describe('differential pairs (P10, first part)', () => {
     for (const d of lens) expect(d.skew).toBeLessThan(0.2);
   });
 
+  it('other nets keep the pair clearance (3 W) from a pair; its partner keeps only the gap', { timeout: 60_000 }, async () => {
+    const p = await fixturePairs();
+    const dpc = rule(p, 'USB_P', 'diffPairClearance') as number;
+    // classify_nets: 2 × the width edge to edge (3 W centre to centre).
+    expect(dpc).toBeCloseTo(2 * (rule(p, 'USB_P', 'traceWidth') as number), 1);
+    expect(dpc).toBeGreaterThan(rule(p, 'USB_P', 'diffGap') as number);
+    const f = await measureAutoroute(p);
+    expect([f.failed, f.drcErrors]).toEqual([0, 0]);
+    const nets = ['USB_P', 'USB_N', 'S1', 'LV_P', 'LV_N', 'S2'];
+    const partner: Record<string, string> = { USB_P: 'USB_N', USB_N: 'USB_P', LV_P: 'LV_N', LV_N: 'LV_P' };
+    // Pads are exempt, so only away from the headers (x 108 – 132).
+    const inside = (t: { a: Vec2; b: Vec2 }) => Math.min(t.a.x, t.b.x) > 108 && Math.max(t.a.x, t.b.x) < 132;
+    for (const a of ['USB_P', 'USB_N', 'LV_P', 'LV_N'])
+      for (const b of nets) {
+        if (b === a || b === partner[a]) continue;
+        const need = Math.max(dpc, rule(p, b, 'diffPairClearance') as number ?? 0);
+        for (const x of traces(p, a).filter(inside))
+          for (const y of traces(p, b).filter(inside))
+            if (x.layer === y.layer) expect(segSegDist(x.a, x.b, y.a, y.b) - x.w / 2 - y.w / 2).toBeGreaterThan(need - 0.01);
+      }
+  });
+
   it('a pair that must change layer gets two vias side by side', { timeout: 60_000 }, async () => {
     const p = await fixturePairs();
     // Copper of S1 across the board: on B.Cu at x = 115, on F.Cu at x = 125, so the pairs change layer between.

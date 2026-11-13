@@ -77,6 +77,7 @@ const defs: RuleDef[] = [
   { name: 'classClearance', label: 'Clearance to signal classes', kind: 'keepout', inheritable: true, help: 'Autorouter: clearance from nets of the named signal classes, e.g. "analog(1mm) sensitive(1mm)" on switching nets (write high-speed as highspeed). Counts both ways; the larger value wins.' },
   { name: 'diffImpedance', label: 'Differential impedance', kind: 'number', inheritable: true, help: 'Target differential impedance (ohm) of a pair this net belongs to (P10). classify_nets sizes the pair\'s width and gap from it on the outer layer; an interface preset (set_pin_signal interface) gives one too.' },
   { name: 'diffGap', label: 'Pair gap', kind: 'length', inheritable: true, help: 'Edge-to-edge gap between the two traces of a differential pair (P10).' },
+  { name: 'diffPairClearance', label: 'Pair clearance', kind: 'length', inheritable: true, help: 'Autorouter: edge-to-edge clearance from a differential pair\'s traces and vias to other nets\' traces and vias, for crosstalk (P10). classify_nets sets 2 × the trace width (3 W centre to centre). Not applied to pads. The larger of the two nets\' values wins.' },
 ];
 
 export const RULE_DEFS: ReadonlyMap<string, RuleDef> = new Map(defs.map((d) => [d.name, d]));

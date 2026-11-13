@@ -761,10 +761,24 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     (0.2 and 0.4 ps), > 20 mm of each pair side by side at its gap. With S1 copper across the board on
     B.Cu at x = 115 and F.Cu at x = 125, both pairs change layer between them with two vias side by side
     (0.8 mm apart), still no sharp corner. Other fixtures and the RGB lamp unchanged.
+  - *Progress (2026-11-14), third part:* spacing to other nets.
+    - Rule `diffPairClearance` (length): edge-to-edge clearance from a pair's traces and vias to other
+      nets' traces and vias, never to its partner; the larger of the two nets' values wins. `classify_nets`
+      writes 2 × the pair's width (3 W centre to centre), with the same bookkeeping as its other rules.
+    - The router counts it like `classClearance` (between traces and vias of this run, and in the check of
+      each piece against copper already on the board; pads are exempt). The pair search now also keeps it
+      from copper already on the board, as the check of its pieces asks (the distance field does not tell
+      pads from traces, so near other nets' pads the pair search is a little stricter than the check).
+    - Found on the way: the straight run that a pair needs before turning was counted across a via pair,
+      so a pair could turn right after its vias and the inner half folded back behind its via; the run now
+      counts on the current layer only.
+    Test (`diffpair.test.ts`): on the `pairs` fixture the rule is 2 × w and larger than the gap; after
+    routing, every other net's trace (pair or not) is at least that far from each pair half between the
+    headers. The via case still routes both pairs together. Other fixtures and the RGB lamp unchanged.
   - Still open in P10: arc corners for a pair (with `cornerStyle: arc` a pair keeps 45° corners, so the
     arc style test leaves the fixture out); `diffUncoupledMax`; tuning (`diffSkewMax`, serpentines on any
-    segment with 45° / arc corners and 3 × width spacing); `diffPairClearance`; a pair whose halves swap
-    sides between its ends (routed one by one today); ground return vias.
+    segment with 45° / arc corners and 3 × width spacing); a pair whose halves swap sides between its ends
+    (routed one by one today); ground return vias.
 - [ ] **P11. Autoplacer that uses the schematic.**
   - The greedy placement of today stays as the start; an improvement pass follows (simulated annealing or
     pairwise swaps, written from textbook descriptions) that minimises total ratsnest length (half-perimeter

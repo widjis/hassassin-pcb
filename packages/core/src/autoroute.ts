@@ -194,17 +194,30 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const k = engine.get(n.uid, 'classClearance')?.value as KeepOut | undefined;
     if (k && Object.keys(k.byType ?? {}).length) ccOf.set(id, { byType: Object.fromEntries(Object.entries(k.byType).map(([t, v]) => [normCls(t), v])) });
   }
+  // A differential pair's clearance to other nets (P10, rule `diffPairClearance`, 3 W by default from
+  // classify_nets): like classClearance, between traces and vias of this run, never to its partner.
+  const dpcOf = new Map<number, number>();
+  const partnerOf = new Map<number, number>();
+  for (const n of netNode.values()) {
+    const v = engine.get(n.uid, 'diffPairClearance')?.value;
+    if (typeof v === 'number' && v > 0) dpcOf.set(netId(n.name), v);
+    const w = n.props.pairWith;
+    if (typeof w === 'string' && netNode.has(w)) partnerOf.set(netId(n.name), netId(w)), partnerOf.set(netId(w), netId(n.name));
+  }
+  for (const x of pairSignals) if (x.pair && netNode.has(x.pair) && !partnerOf.has(netId(x.net))) partnerOf.set(netId(x.net), netId(x.pair));
   const pairMemo = new Map<number, number>();
   let maxPairCl = 0;
   for (const k of ccOf.values()) for (const v of Object.values(k.byType)) maxPairCl = Math.max(maxPairCl, v);
+  for (const v of dpcOf.values()) maxPairCl = Math.max(maxPairCl, v);
   const pairCl = (a: number, b: number): number => {
-    if (!ccOf.size || a === b || a < 0 || b < 0) return 0;
+    if ((!ccOf.size && !dpcOf.size) || a === b || a < 0 || b < 0) return 0;
     const key = a * 1048576 + b;
     let v = pairMemo.get(key);
     if (v === undefined) {
       const ca = clsOf.get(a);
       const cb = clsOf.get(b);
       v = Math.max((cb && ccOf.get(a)?.byType[cb]) || 0, (ca && ccOf.get(b)?.byType[ca]) || 0);
+      if (partnerOf.get(a) !== b) v = Math.max(v, dpcOf.get(a) ?? 0, dpcOf.get(b) ?? 0);
       pairMemo.set(key, v);
     }
     return v;
@@ -1802,7 +1815,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const idP = netId(pNet);
     const idN = netId(nNet);
     const w = Math.max(netRule(pNet, 'traceWidth', 0.25), netRule(nNet, 'traceWidth', 0.25));
-    const cn = Math.max(netClear(pNet), netClear(nNet), pairCl(idP, idN) ? 0 : 0);
+    const cn = Math.max(netClear(pNet), netClear(nNet));
     const viaD = Math.max(netRule(pNet, 'viaDiameter', 0.6), netRule(nNet, 'viaDiameter', 0.6));
     const edgeCl = Math.max(netRule(pNet, 'boardEdgeClearance', 0.3), netRule(nNet, 'boardEdgeClearance', 0.3));
     const off = (w + gap) / 2; // trace centre from the path centre
@@ -1810,18 +1823,21 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const viaOff = Math.max(off, (viaD + Math.max(gap, cn)) / 2); // via centre from the path centre
     const viaHalf = viaOff + viaD / 2;
     const own = (k: number) => k === 0 || k === idP || k === idN;
+    // Clearance to copper of net k already on the board: with the pair clearance, as the check of each
+    // piece afterwards asks (the field does not tell pads from traces, so near pads it is stricter).
+    const ownerCl = (k: number) => Math.max(cn, pairCl(idP, k), pairCl(idN, k));
     // Room for the pair's body (half width h) at cell c of layer li.
     const room = (li: number, c: number, h: number) => {
       if (!own(core[li]![c]!)) return false;
       if (edgeDist[c]! < h + edgeCl - 1e-6) return false;
       const f = field[li]!;
       let m = Math.min(f.zd[c]! - cn, f.ze[c]!);
-      if (!own(f.o1[c]!)) m = Math.min(m, f.d1[c]! - cn, f.e1[c]!);
-      if (!own(f.o2[c]!)) m = Math.min(m, f.d2[c]! - cn, f.e2[c]!);
+      if (!own(f.o1[c]!)) m = Math.min(m, f.d1[c]! - ownerCl(f.o1[c]!), f.e1[c]!);
+      if (!own(f.o2[c]!)) m = Math.min(m, f.d2[c]! - ownerCl(f.o2[c]!), f.e2[c]!);
       if (m < h + g * 0.71 - 1e-6) return false;
       const i = c % W;
       const q = { x: cx(i), y: cy((c - i) / W) };
-      for (const cp of capsNear(li, q)) if (cp.id !== idP && cp.id !== idN && distToSegment(q, cp.a, cp.b) - cp.r < h + Math.max(cn, cp.cl) - 1e-6) return false;
+      for (const cp of capsNear(li, q)) if (cp.id !== idP && cp.id !== idN && distToSegment(q, cp.a, cp.b) - cp.r < h + Math.max(cn, cp.cl, pairCl(idP, cp.id), pairCl(idN, cp.id)) - 1e-6) return false;
       return true;
     };
     const ma = { x: (pa.x + na.x) / 2, y: (pa.y + na.y) / 2 };
@@ -1906,10 +1922,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       // runs straight (square to its pads), so the breakouts stay short and mirror each other.
       const qx = cx(i), qy = cy(j);
       const nearEnd = Math.hypot(qx - ma.x, qy - ma.y) < endR || Math.hypot(qx - mb.x, qy - mb.y) < endR;
-      // A turn only after a straight run of a few cells, so the two traces' corners (offset to either
-      // side) do not fold over each other.
+      // A turn only after a straight run of a few cells on this layer, so the two traces' corners (offset to
+      // either side) do not fold over each other or back behind a via pair just placed.
       let run = 0;
-      for (let q = k; q >= 0 && q % 8 === d && run < minRun; q = from.get(q)!) run++;
+      for (let q = k; q >= 0 && q % 8 === d && Math.floor(q / 8 / N) === li && run < minRun; q = from.get(q)!) run++;
       const turns = !nearEnd && run >= minRun;
       for (const nd of turns ? [d, (d + 1) % 8, (d + 7) % 8] : [d]) {
         const [di, dj] = D8[nd]!;
