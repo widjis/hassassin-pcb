@@ -1,6 +1,6 @@
 /**
- * Board panel: automatic placement and routing, the stackup with an impedance calculator,
- * and routed lengths (differential pairs, length-match groups) with length tuning.
+ * Board panel: automatic placement and routing, signal classes of the nets (P16), the stackup with an
+ * impedance calculator, and routed lengths (differential pairs, length-match groups) with length tuning.
  */
 import {
   defaultStackup,
@@ -10,7 +10,10 @@ import {
   lengthGroups,
   lineGeometry,
   netLengths,
+  netSignals,
   planAutoplace,
+  planSignalClasses,
+  SIGNAL_CLASSES,
   planAutoroute,
   planMeander,
   runDrc,
@@ -64,8 +67,63 @@ export function mountBoard(app: App, root: HTMLElement): void {
       status,
     );
 
-    // ---- stackup
+    // ---- signal classes (P16)
     const st = stackupOf(doc, app.copper);
+    const sigs = netSignals(doc);
+    const netNode = new Map([...doc.nodes.values()].filter((n) => n.type === 'net').map((n) => [n.name, n]));
+    const counts = new Map<string, number>();
+    for (const x of sigs) counts.set(x.signal, (counts.get(x.signal) ?? 0) + 1);
+    const pending = sigs.filter((x) => x.source !== 'net' && (netNode.get(x.net)?.props.signal ?? 'general') !== x.signal).length;
+    const sigStatus = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em' });
+    const applyClasses = () => {
+      const top = st.layers.find((l) => l.kind === 'copper');
+      const plan = planSignalClasses(doc, { stackup: st, ...(top ? { copperMm: top.thickness, layer: top.name } : {}) });
+      if (!plan.ops.length) return void (sigStatus.textContent = 'The nets already carry these classes.');
+      app.apply('Classify nets', plan.ops);
+      const notes = plan.rules.filter((r) => r.note || r.kept).map((r) => `${r.net}: ${r.note ?? `kept your ${r.kept!.join(', ')}`}`);
+      app.say(`Classes applied${notes.length ? `. ${notes.join(' · ')}` : '.'}`);
+    };
+    const setNet = (net: string, cls: string) => {
+      const n = netNode.get(net);
+      if (!n) return;
+      app.apply(`Signal class ${net}`, [
+        { op: 'setProp', uid: n.uid, key: 'signal', value: cls || null },
+        { op: 'setProp', uid: n.uid, key: 'signalSource', value: cls ? 'net' : null },
+      ]);
+    };
+    root.append(
+      h('div', { class: 'section-title', style: 'margin-top:12px' }, h('span', {}, `Signal classes · ${[...counts].filter(([c]) => c !== 'general').map(([c, k]) => `${k} ${c}`).join(', ') || 'all general'}`)),
+      h(
+        'div',
+        { style: 'display:flex;gap:6px;align-items:center;flex-wrap:wrap' },
+        h('button', { title: 'Write the classes below onto the nets, so the per-class rules (width, clearance, via cost, corner style) apply. Classes you set here are kept.', onclick: applyClasses }, pending ? `Apply ${pending} class change(s)` : 'Apply classes'),
+        h('span', { class: 'dim', style: 'font-size:11.5px' }, `${counts.get('general') ?? 0} general net(s) not listed`),
+      ),
+      sigStatus,
+    );
+    const sigList = h('div', { class: 'len-list', style: 'flex-shrink:0' });
+    for (const x of sigs) {
+      if (x.signal === 'general' && x.source !== 'net') continue;
+      const sel = h('select', { title: 'Set the class by hand (overrides the pins); "auto" goes back to the pins and guesses' });
+      sel.append(h('option', { value: '' }, 'auto'));
+      for (const c of SIGNAL_CLASSES) sel.append(h('option', { value: c, ...(x.source === 'net' && c === x.signal ? { selected: true } : {}) }, c));
+      if (x.source !== 'net') (sel as HTMLSelectElement).value = '';
+      sel.addEventListener('change', () => setNet(x.net, (sel as HTMLSelectElement).value));
+      const applied = (netNode.get(x.net)?.props.signal ?? 'general') === x.signal;
+      const params = [x.current ? `${x.current} A` : '', x.voltage ? `${x.voltage} V` : '', x.impedance ? `${x.impedance} Ω` : ''].filter(Boolean).join(' ');
+      sigList.append(
+        h(
+          'div',
+          { class: 'len-row', title: `${x.source === 'net' ? 'Set by hand on the net' : `${x.source === 'guess' ? 'Guessed' : 'From a pin'}: ${x.why}`}${applied ? '' : ' (not applied yet)'}` },
+          h('span', { class: 'ellipsis', style: 'flex:1' }, x.net),
+          h('span', { class: applied ? '' : 'dim', style: x.source === 'guess' ? 'font-style:italic' : '' }, `${x.signal}${params ? ` · ${params}` : ''}`),
+          sel,
+        ),
+      );
+    }
+    root.append(sigList);
+
+    // ---- stackup
     const custom = !!doc.meta.stackup;
     const thick = h('select', {});
     for (const t of ['0.8', '1.0', '1.2', '1.6', '2.0']) thick.append(h('option', { value: t, ...(Math.abs(Number(t) - st.thickness) < 0.05 ? { selected: true } : {}) }, `${t} mm`));
@@ -150,7 +208,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
       );
     }
     for (const g of groups) root.append(h('div', { class: 'len-row' }, h('strong', {}, g.group), h('span', { class: 'dim' }, `${g.nets.length} nets`), h('span', { class: g.spread > 0.5 ? 'err-text' : 'dim' }, `spread ${g.spread.toFixed(2)} mm`)));
-    const list = h('div', { class: 'len-list' });
+    const list = h('div', { class: 'len-list', style: 'flex-shrink:0' });
     for (const l of lens.sort((a, b) => b.length - a.length).slice(0, 60)) list.append(h('div', { class: 'len-row' }, h('span', { class: 'ellipsis' }, l.net), h('span', { class: 'dim' }, `${l.length.toFixed(2)} mm${l.vias ? ` · ${l.vias} via` : ''}`)));
     root.append(list);
   };

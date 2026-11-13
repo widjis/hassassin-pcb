@@ -362,10 +362,19 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     width is over 1.5 mm (50 Ω needs 2.66 mm on a 1.6 mm two-layer board, 1.21 mm on 0.8 mm, 0.50 mm
     on 0.4 mm). One width per net, from the outer layer: an inner layer of a four-layer board would need
     its own width (a per-layer width rule does not exist yet). Differential impedance stays with P10.
+  - *Progress (2026-11-13), fourth part:* the Board panel has a "Signal classes" section: the count per
+    class, every net that is not general with its class (italic when guessed, dim while not applied, the
+    reason and any current / voltage / impedance in the row), a select to set the class by hand ("auto"
+    returns it to the pins and guesses), and a button that applies the classes (with the same computed
+    widths and clearances as `classify_nets`; notes and kept rules go to the status line). Checked in
+    the browser on the RGB lamp: 10 classes listed, applied in one undoable step, a hand-set class
+    shown as such. Fixed on the way: the panel's lists (`len-list`, also the routed lengths) shrank to
+    zero height inside the panel's flex column, so the lengths list had never shown; they no longer
+    shrink (inline style in `board.ts`, `styles.css` left alone).
   - Still open in P16: the other parameters (frequency, pair partner, length group, interface presets);
     extra spacing between `switching` and `analog` / `sensitive` nets
-    (a per-pair clearance the rules cannot express yet); the class in the Board panel and in
-    `project_status` (outside the PM2 list: to be asked); the owner's review of the benchmark boards'
+    (a per-pair clearance the rules cannot express yet); the class in `project_status` (outside the
+    PM2 list: to be asked); the owner's review of the benchmark boards'
     classes.
 - [ ] **P8f. Layer directions, fanout and cost tuning.**
   - *Owner's reference (2026-11-12): perpendicular (orthogonal) routing* — on a two-layer board the top
