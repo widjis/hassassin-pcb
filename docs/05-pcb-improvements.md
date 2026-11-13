@@ -566,8 +566,36 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     where the bus passes the header's front row, and that every connection is routed. The RGB lamp and
     the other fixtures are unchanged (no bus there leaves a part with two rows). With `arc` or `90` corners
     mcu still leaves one or two connections open, so those two style tests leave it out.
-    Still open in P8f: lanes for a bus that turns (the front row is taken along the straight line between
-    the two parts' pins) and for parts with pins on several sides.
+    With arc corners the odd nets turn down right after passing above their even neighbour and fence it
+    in (IO4, IO6 open); with 90 corners the same happens to IO4. Tried for that and dropped (2026-11-13):
+    running the lanes on past the front row by one pitch, alone or with lanes for the front-row nets too
+    (the default style then lost IO4 as well); routing the bus nets one after the other in bus order, or
+    the front-row nets first and the rear ones after (two nets open in every style). In each case the
+    rip-up rounds swap the same nets until the end, as before the lanes: what is left wants the reworked
+    negotiation (all nets re-routed each round with a bounded present cost).
+  - *Tried and dropped (2026-11-13): negotiation by sharing (PathFinder style).* A second mode, kept out
+    of the code: a connection that cannot get through in free room is laid over the routes in its way at
+    a price, those stay, and after each round every overlapping route (later: every route) is routed
+    again with a history cost on the contested cells; what still overlaps at the end is ripped and tried
+    once more in free room. On the mcu fixture it never converged: 7 to 11 routes kept overlapping in all
+    30 rounds, and the result was 24 – 29 of 32 connections in every corner style (the rip-up mode gives
+    32 / 32 with 45° corners), at 24 – 28 s instead of 2 s. Variants tried: re-routing only the overlapping
+    routes or all routes; a present-cost cap of 16, 100, 1000 and 2000 grid steps; history on the shared
+    cells only, on a disc around them, or on the shared cells plus the overlapped route's cells near them;
+    a history step of 1, 5 and 20 per round. Found on the way, for a later attempt:
+    - in soft mode the pieces laid around the search (pad entries, smoothing, tidy) are not checked
+      against other routes, so a route can overlap another with no contested cell at all; harmless while
+      the overlapped route is ripped at once, but with sharing such overlaps never go away;
+    - every connection is first tried in free room, so whichever comes first in the order never feels the
+      present cost and only moves when the history on its cells outweighs a detour; on this board the
+      detours are vias (8 mm of trace for two), which a history of 1 – 20 per round does not reach within
+      30 rounds;
+    - the right-hand reversed header (P2, P3) needs vias, and an overlap of a few cells stays cheaper than
+      two vias until the present cost is far above the cap that keeps the search from spreading.
+    A negotiation that works here likely needs costs on resources rather than on cells (a pad gap, a
+    channel between two pins has a capacity), or routing without the free-room first try.
+    Still open in P8f: arc / 90 corners on the mcu bus (above); lanes for a bus that turns (the front row is
+    taken along the straight line between the two parts' pins) and for parts with pins on several sides.
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.
