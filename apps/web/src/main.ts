@@ -693,7 +693,7 @@ syncToolbar();
 
 // ---- canvas interaction ----
 const canvas = app.glCanvas;
-type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' };
+type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' | 'segment' };
 let drag: Drag | null = null;
 const local = (e: PointerEvent | WheelEvent | MouseEvent) => {
   const r = canvas.getBoundingClientRect();
@@ -708,7 +708,12 @@ canvas.addEventListener('pointerdown', (e) => {
   let kind: Drag['kind'] = 'pan';
   if (app.mode === 'select' && !middle) {
     const uid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
-    if (uid && app.movable(uid)) {
+    // One straight trace (P4): drag that segment sideways, its neighbours following.
+    const alone = uid && !e.shiftKey && (!app.selection.size || (app.selection.size === 1 && app.selection.has(uid)));
+    if (uid && alone && app.node(uid)?.type === 'trace' && app.route.beginDrag(uid, app.toWorld(sx, sy))) {
+      if (!app.selection.has(uid)) app.select([uid]);
+      kind = 'segment';
+    } else if (uid && app.movable(uid)) {
       if (!app.selection.has(uid)) app.select([uid], e.shiftKey);
       kind = 'move';
       app.beginMove(app.toWorld(sx, sy));
@@ -732,7 +737,8 @@ canvas.addEventListener('pointermove', (e) => {
         app.panBy(dx, dy);
         drag.x = e.clientX;
         drag.y = e.clientY;
-      } else app.dragMove(world, !e.altKey);
+      } else if (drag.kind === 'segment') app.route.dragTo(world);
+      else app.dragMove(world, !e.altKey);
     }
   }
   if (app.mode === 'route') {
@@ -745,6 +751,7 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => {
   const { sx, sy } = local(e);
   if (drag?.kind === 'move') app.endMove();
+  if (drag?.kind === 'segment') app.route.endDrag();
   if (drag && !drag.moved && e.button === 0 && app.commentMode) {
     drag = null;
     return placeComment('layout', app.toWorld(sx, sy));
@@ -911,7 +918,18 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'v':
     case 'V':
-      if (app.mode === 'route') app.route.placeVia();
+      if (app.mode === 'route') {
+        if (e.shiftKey) app.route.stepVia();
+        else app.route.placeVia();
+      }
+      break;
+    case 'w':
+    case 'W':
+      if (app.mode === 'route') app.route.stepWidth(e.shiftKey ? -1 : 1);
+      break;
+    case 'm':
+    case 'M':
+      app.route.cycleMode();
       break;
     case '/':
       if (app.mode === 'route') app.route.togglePosture();

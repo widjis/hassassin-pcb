@@ -87,7 +87,7 @@ document before work on a measured item starts.
     references; the paste follows the mouse and is one undo step.
   - *Layout replication:* the placement and routing of one block (for example one channel) can be
     applied to another block made of the same schematic parts.
-- [ ] **P4. Interactive router that respects clearance.**
+- [x] **P4. Interactive router that respects clearance.**
   - While routing, the preview never passes through other nets' copper or their clearance: it walks
     around obstacles (or stops at the last legal point, shown in red), using the net's width and
     clearance rules.
@@ -102,6 +102,37 @@ document before work on a measured item starts.
     and vias from time to time and the editor draws them as a faint overlay above the board, so the
     routing can be watched; the board itself changes only when the checked result is applied, and
     Cancel removes the overlay.
+  - *Done (2026-11-14):*
+    - Core module `interactive.ts`: `routeWorld` (the other nets' pads, traces and vias grown by the
+      clearance both sides demand and half the new width, plus the board edge; pours left out, they are
+      filled again), `segmentHit` / `viaFree`, and `walkaround`: the plain 45° path when it is legal, else
+      a grid search (cells kept a half-diagonal further out, so every step is legal) pulled tight into few
+      45° segments; it stops at the free point nearest the cursor and after a time budget (40 ms under
+      the mouse; worst case measured on the solar board 43 ms, before the budget 4.4 s).
+    - Route tool modes, `M` to cycle: walkaround (default), shove (other traces pushed aside with the P9
+      engine when a segment is placed, previewed after a short rest; falls back to walkaround when they
+      cannot move), free. The part the preview cannot reach is drawn red with a cross. A route ending on
+      another net's copper is refused in every mode; a via is refused where it does not fit.
+    - Width and via size while routing: `W` / `Shift+W` and `Shift+V` step through presets starting at
+      the net's rule; a trace or via with another size carries it as its own rule.
+    - Segment drag (`planDragSegment`): dragging one straight trace in select mode moves it sideways; a
+      joined neighbour keeps its direction and stretches, an end on a pad, via or branch gets a 45° piece;
+      the drag stops at other copper (largest legal offset, rounded towards the trace) or shoves in shove
+      mode.
+    - Pairs by hand: a net in a pair with a `diffGap` starts its partner from the partner's nearest pad;
+      a centre line is walked around with the pair's full width and offset to both sides
+      (`offsetPath`), each trace joins its pad at the first legal point; lengths and skew shown while
+      routing.
+    - Live autorouter preview: `onSnapshot` in `planAutoroute` (every 400 ms and at the end), sent by the
+      worker and drawn per layer at 45 % opacity; removed on Cancel and when the result is applied.
+    - Agents: `route` takes `mode` (`none` default, `walkaround`, `shove`) and returns the points;
+      new tool `drag_trace` (trace, offset, mode).
+    - Tests: `interactive.test.ts` (walkaround legal and DRC-clean, stop at the last legal point, via
+      refused on copper, drag joined at 45° with connections kept and stopping at copper, agent tools,
+      pair offset) and `livepreview.test.ts`. In the browser on a copy of the solar board: rerouting
+      U3-PA5 by hand 0 new DRC errors after refilling pours, hover 9–12 ms; drags and shove clicks left
+      no new errors and no lost connection; both pairs of the `pairs` fixture routed by hand with 0 DRC
+      errors, about 30 mm coupled. Solar benchmark unchanged (76 / 76, 39 vias, 0 DRC errors).
 - [ ] **P5. Bottom side, locking and grid.**
   - A selected part can be flipped to the other side (key and inspector): pads, silkscreen, courtyard and
     fabrication layers are mirrored to the bottom; the 3D view, Gerbers and pick-and-place follow.

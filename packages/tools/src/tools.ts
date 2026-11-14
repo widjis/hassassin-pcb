@@ -4,6 +4,11 @@
  * project is live, shared with collaborators).
  */
 import {
+  planShove,
+  routeWorld,
+  walkaround,
+  segmentHit,
+  planDragSegment,
   pinPadCheck,
   planBackAnnotation,
   describeBackChange,
@@ -1479,7 +1484,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'route',
-    description: 'Lay copper between two pads of the same net (e.g. from "R1.2" to "D1.2") as a 45° path, with optional via waypoints. Width comes from the net rules unless given. Does not avoid obstacles: run_drc afterwards.',
+    description: 'Lay copper between two pads of the same net (e.g. from "R1.2" to "D1.2") as a 45° path, with optional waypoints. Width comes from the net rules unless given. mode: "none" (default; the plain path, run_drc afterwards), "walkaround" (the path goes around other nets\' copper and their clearance; fails, saying where it stopped, when there is no way on this layer) or "shove" (other nets\' traces in the way are pushed aside; fails when they cannot move).',
     mutates: true,
     input: {
       type: 'object',
@@ -1489,6 +1494,7 @@ export const TOOLS: ToolDef[] = [
         layer: { type: 'string', description: 'Copper layer (default F.Cu)' },
         width: { type: 'string', description: 'Optional width, e.g. "0.4mm"' },
         waypoints: { type: 'array', items: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } }, description: 'Optional intermediate points (mm)' },
+        mode: { type: 'string', enum: ['none', 'walkaround', 'shove'], description: 'How other copper is treated (default none)' },
       },
       required: ['from', 'to'],
     },
@@ -1504,8 +1510,6 @@ export const TOOLS: ToolDef[] = [
       const ga = padGeom(p.doc, p.engine, pa, p.copper)!;
       const gb = padGeom(p.doc, p.engine, pb, p.copper)!;
       const pts: Vec2[] = [ga.center, ...((Array.isArray(a.waypoints) ? a.waypoints : []) as Vec2[]).map((w) => ({ x: num(w.x, 'x'), y: num(w.y, 'y') })), gb.center];
-      const path: Vec2[] = [pts[0]!];
-      for (let i = 0; i + 1 < pts.length; i++) path.push(...route45(pts[i]!, pts[i + 1]!, true).slice(1));
       const extra: RuleDecl[] = [];
       if (typeof a.width === 'string') {
         try {
@@ -1514,14 +1518,62 @@ export const TOOLS: ToolDef[] = [
           throw new ToolError((e as Error).message);
         }
       }
+      const mode = a.mode === undefined ? 'none' : str(a.mode, 'mode');
+      if (!['none', 'walkaround', 'shove'].includes(mode)) throw new ToolError('mode must be none, walkaround or shove');
+      const width = (extra[0]?.value as number | undefined) ?? undefined;
+      const path: Vec2[] = [pts[0]!];
+      if (mode === 'walkaround') {
+        const w = routeWorld(p.doc, p.engine, p.copper, String(net), width !== undefined ? { width } : {});
+        for (let i = 0; i + 1 < pts.length; i++) {
+          const r = walkaround(w, layer, path[path.length - 1]!, pts[i + 1]!, { budgetMs: 3000 });
+          path.push(...r.path.slice(1));
+          if (!r.reached) {
+            const end = path[path.length - 1]!;
+            const why = segmentHit(w, layer, end, pts[i + 1]!);
+            throw new ToolError(`No way around on ${layer}: the path stops at (${end.x.toFixed(3)}, ${end.y.toFixed(3)})${why?.net ? `, blocked by ${why.net}` : why?.uid === 'edge' ? ', at the board edge' : ''}. Try another layer, a waypoint, mode "shove", or a via.`);
+          }
+        }
+      } else for (let i = 0; i + 1 < pts.length; i++) path.push(...route45(pts[i]!, pts[i + 1]!, true).slice(1));
       const ops: Op[] = [];
       for (let i = 0; i + 1 < path.length; i++) {
         if (dist(path[i]!, path[i + 1]!) < 1e-6) continue;
         ops.push({ op: 'add', parent: netNode.uid, index: netNode.children.length + i, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: {}, rules: [{ name: 'start', value: path[i]! }, { name: 'end', value: path[i + 1]! }, { name: 'layer', value: layer }, ...extra], parent: netNode.uid, children: [] }] } });
       }
+      const segments = ops.length;
+      let shoved: string[] = [];
+      if (mode === 'shove') {
+        const traces = path.slice(1).map((b, i) => ({ layer, a: path[i]!, b, width: width ?? (Number(p.engine.get(netNode.uid, 'traceWidth')?.value ?? 0.25)) }));
+        const r = planShove(p.doc, p.engine, p.copper, { net: String(net), traces });
+        if (r.error) throw new ToolError(`Cannot shove: ${r.error}. Try mode "walkaround", waypoints or another layer.`);
+        ops.push(...r.ops);
+        shoved = r.nets;
+      }
       apply(p, 'Route', ops);
       const st = computeRatsnest(p.doc, p.engine, p.copper).nets.find((n) => n.net === net);
-      return { net, segments: ops.length, layer, netFullyConnected: st ? st.islands <= 1 : true };
+      return { net, segments, layer, mode, ...(mode === 'shove' ? { shoved } : {}), points: path.map((q) => ({ x: +q.x.toFixed(4), y: +q.y.toFixed(4) })), netFullyConnected: st ? st.islands <= 1 : true };
+    },
+  },
+  {
+    name: 'drag_trace',
+    description: 'Move one straight trace segment sideways by offset mm (positive: to the left of its start → end): the segments joined to its ends stretch and keep their angles, an end on a pad or via gets a 45° piece. mode "walkaround" (default) stops the drag at other copper (the offset applied is returned), "shove" pushes other traces aside, "none" moves it as asked.',
+    mutates: true,
+    input: { type: 'object', properties: { trace: { type: 'string', description: 'Trace uid or selector' }, offset: { type: 'number' }, mode: { type: 'string', enum: ['none', 'walkaround', 'shove'] } }, required: ['trace', 'offset'] },
+    run: (p, a) => {
+      const t = one(p, str(a.trace, 'trace'), 'trace');
+      const net = p.doc.nodes.get(t.parent!)?.name ?? '';
+      const mode = a.mode === undefined ? 'walkaround' : str(a.mode, 'mode');
+      if (!['none', 'walkaround', 'shove'].includes(mode)) throw new ToolError('mode must be none, walkaround or shove');
+      const world = mode === 'walkaround' ? routeWorld(p.doc, p.engine, p.copper, net, { width: Number(p.engine.get(t.uid, 'traceWidth')?.value ?? 0.25) }) : undefined;
+      const plan = planDragSegment(p.doc, p.engine, p.copper, t.uid, num(a.offset, 'offset'), world ? { world } : {});
+      if (plan.error) throw new ToolError(`Cannot drag: ${plan.error}`);
+      const ops = [...plan.ops];
+      if (mode === 'shove') {
+        const r = planShove(p.doc, p.engine, p.copper, { net, traces: plan.pieces.map((q) => ({ layer: q.layer, a: q.a, b: q.b, width: q.w })) });
+        if (r.error) throw new ToolError(`Cannot shove: ${r.error}`);
+        ops.push(...r.ops);
+      }
+      apply(p, 'Drag trace', ops);
+      return { net, offset: plan.offset, segments: plan.pieces.length };
     },
   },
   {

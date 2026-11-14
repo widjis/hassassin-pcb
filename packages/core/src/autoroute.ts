@@ -56,6 +56,12 @@ export interface AutorouteOptions {
    * hold a route and how many there are.
    */
   onProgress?: (p: { round: number; routed: number; total: number }) => void;
+  /**
+   * Called now and then while routing (P4, live preview), at most every `snapshotMs` (default 400): the
+   * routes held at that moment. They may still be ripped up; nothing on the board changes until the end.
+   */
+  onSnapshot?: (s: RouteSnapshot) => void;
+  snapshotMs?: number;
   /** Try to shove the routes in the way of a connection that is still open after rip-up (P9; default true). */
   shove?: boolean;
   /** Route differential pairs (nets with a `diffGap`) together as coupled traces (P10; default true). */
@@ -134,6 +140,12 @@ class Heap {
     }
     return top;
   }
+}
+
+/** The routes the autorouter holds at one moment (P4, live preview). */
+export interface RouteSnapshot {
+  traces: { layer: string; a: Vec2; b: Vec2; w: number; mid?: Vec2 }[];
+  vias: { at: Vec2; d: number }[];
 }
 
 export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], opts: AutorouteOptions = {}): { ops: Op[]; report: AutorouteReport } {
@@ -2237,11 +2249,26 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
     told = now;
     opts.onProgress({ round, routed: routeOf.size + joined.size, total: order.length });
   };
+  let shot = 0;
+  const snapshot = (force = false) => {
+    if (!opts.onSnapshot) return;
+    const now = performance.now();
+    if (!force && now - shot < (opts.snapshotMs ?? 400)) return;
+    shot = now;
+    const s: RouteSnapshot = { traces: [], vias: [] };
+    for (const r of routes.values()) {
+      for (const g of r.segs) s.traces.push({ layer: layers[g.li]!, a: g.a, b: g.b, w: g.w, ...(g.mid ? { mid: g.mid } : {}) });
+      const d = netRule(r.net, 'viaDiameter', 0.6);
+      for (const v of r.vias) s.vias.push({ at: v, d });
+    }
+    opts.onSnapshot(s);
+  };
   for (let round = 0; round < maxRounds && pending.length && !timedOut; round++) {
     const again = new Set<number>();
     tell(round, true);
     for (const ci of pending) {
       tell(round);
+      snapshot();
       if (routeOf.has(ci) || joined.has(ci)) continue;
       if (performance.now() - t0 > limit) {
         timedOut = true;
@@ -2286,6 +2313,7 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
     pres *= 1.6;
   }
   for (const ci of pending) if (!routeOf.has(ci) && !joined.has(ci)) failReason.set(ci, timedOut ? 'time limit' : 'congestion: could not be fitted in after rip-up and retry');
+  snapshot(true);
 
 
   // ---- Emit, in the order the connections were planned.

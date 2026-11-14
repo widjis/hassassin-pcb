@@ -40,6 +40,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
   const stopJob = () => {
     job?.worker.terminate();
     job = null;
+    app.setLivePreview(null);
   };
   const startRoute = () => {
     const doc = app.doc;
@@ -50,6 +51,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
     setMsg('Routing…');
     worker.onmessage = (e: MessageEvent<RouteMessage>) => {
       const m = e.data;
+      if (m.type === 'snapshot') return void (job && app.setLivePreview(m.snap));
       if (m.type === 'progress') {
         const s = ((performance.now() - t0) / 1000).toFixed(0);
         setMsg(m.stage === 'check' ? `Checking the result with DRC… ${s} s` : `Routing: ${m.routed}/${m.total} connections, round ${(m.round ?? 0) + 1} · ${s} s`);

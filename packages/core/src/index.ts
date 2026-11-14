@@ -46,3 +46,4 @@ export * from './pinPad.ts';
 export * from './signal.ts';
 export * from './routeCheck.ts';
 export * from './shove.ts';
+export * from './interactive.ts';

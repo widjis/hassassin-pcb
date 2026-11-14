@@ -14,6 +14,7 @@ import { type WaivedViolation,
   runErc,
   systemDefaults,
   applyOps,
+  arcPoints,
   type ErcViolation,
   type Netlist,
   History,
@@ -34,6 +35,7 @@ import { type WaivedViolation,
   type Op,
   type Ratsnest,
   type Ruleset,
+  type RouteSnapshot,
   type Vec2,
 } from '@hassassin/core';
 import { importKicadPcb, importKicadSchematic, type LayerInfo } from '@hassassin/kicad-import';
@@ -43,6 +45,7 @@ import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './r
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
 import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
 import { RouteTool } from './tools/route.ts';
+import { circle, polyline } from './render/geometry.ts';
 import { library } from './library.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
@@ -103,6 +106,10 @@ export class App {
 
   private listeners = new Map<Event, Set<() => void>>();
   private frame = 0;
+  /** Counts document changes (caches keyed on the board, e.g. the route tool's obstacles, use it). */
+  docVersion = 0;
+  /** Copper layers with a live autorouter preview drawn (P4); empty when none. */
+  private livePreview: string[] = [];
   private move: MoveState | null = null;
   readonly renderer: GLRenderer;
 
@@ -271,6 +278,7 @@ export class App {
     this.mode = 'select';
     this.space = [...doc.nodes.values()].some((n) => n.type === 'layout') ? 'layout' : 'schematic';
     this.route.cancel();
+    this.docVersion++;
     this.engine = new StyleEngine(doc);
     this.history = new History(doc);
     this.history.onChange((res, kind) => kind !== 'remote' && this.applyChange(res, false));
@@ -328,6 +336,7 @@ export class App {
   /** React to a document change (local edit, or `remote` from collaborators). */
   applyChange(res: ApplyResult, remote: boolean): void {
     if (!this.doc || !this.engine || !this.scene) return;
+    this.docVersion++;
     if (remote && this.move) this.endMove();
     this.engine.recompute();
     if (res.global) this.scene.rebuildAll();
@@ -584,7 +593,7 @@ export class App {
     if (this.mode === mode) return;
     if (mode !== 'route') this.route.cancel();
     this.mode = mode;
-    this.say(mode === 'route' ? 'Route: click a pad, via or trace to start. V = via, / = corner style, Esc = stop.' : '');
+    this.say(mode === 'route' ? `Route (${this.route.mode}): click a pad, via or trace to start. M = mode, W = width, V = via, / = corner style, Esc = stop.` : '');
     this.emit('mode');
     this.requestRender();
   }
@@ -774,6 +783,26 @@ export class App {
     this.requestRender();
   }
 
+  /**
+   * Live preview of the autorouter (P4): the routes it holds right now, drawn faint above the board.
+   * Nothing on the board changes; `null` removes the overlay.
+   */
+  setLivePreview(snap: RouteSnapshot | null): void {
+    for (const l of this.livePreview) this.renderer.setLayer(`__live:${l}`, new Float32Array());
+    this.livePreview = [];
+    if (snap) {
+      const per = new Map<string, number[]>();
+      const tris = (l: string) => per.get(l) ?? per.set(l, []).get(l)!;
+      for (const t of snap.traces) polyline(tris(t.layer), t.mid ? arcPoints(t.a, t.mid, t.b) : [t.a, t.b], t.w, false);
+      for (const v of snap.vias) for (const l of this.copper) circle(tris(l), v.at, v.d / 2);
+      for (const [l, arr] of per) {
+        this.renderer.setLayer(`__live:${l}`, new Float32Array(arr));
+        this.livePreview.push(l);
+      }
+    }
+    this.requestRender();
+  }
+
   // ---------- drawing ----------
   requestRender(): void {
     if (this.frame) return;
@@ -791,8 +820,14 @@ export class App {
       { key: '__net', color: [1, 1, 1, 0.22] },
       { key: '__query', color: QUERY_HIGHLIGHT },
       { key: '__sel', color: HIGHLIGHT },
-      { key: '__preview', color: this.route.previewColor() },
+      { key: '__shove', color: [1, 0.75, 0.3, 0.55] },
+      { key: '__preview', color: this.route.dragColor ?? this.route.previewColor() },
     );
+    for (const l of this.livePreview) {
+      if (!this.visible.has(l)) continue;
+      const c = layerColor(l);
+      order.splice(order.length - 5, 0, { key: `__live:${l}`, color: [c[0], c[1], c[2], 0.45] });
+    }
     this.renderer.draw(this.view, order, [0.031, 0.035, 0.047, 1]);
     this.drawOverlay();
   }

@@ -369,8 +369,8 @@ export function mountInspector(app: App, root: HTMLElement, helpRoot: HTMLElemen
         : h(
             'div',
             { class: 'dim', style: 'font-size:12px;line-height:1.6' },
-            h('b', {}, 'Select'), ' click · Cmd/Ctrl+click for a pad · drag to move · R rotate · Del delete', h('br', {}),
-            h('b', {}, 'Route'), ' X · click a pad to start · V via · / corner · Esc stop · L switch layer', h('br', {}),
+            h('b', {}, 'Select'), ' click · Cmd/Ctrl+click for a pad · drag to move (a single trace: drag the segment sideways) · R rotate · Del delete', h('br', {}),
+            h('b', {}, 'Route'), ' X · click a pad to start · M mode (walkaround / shove / free) · W / Shift+W width · V via · Shift+V via size · / corner · Esc stop · L switch layer', h('br', {}),
             h('b', {}, 'View'), ' drag empty space to pan · scroll to zoom · F flip · Home fit', h('br', {}),
             h('b', {}, 'Edit'), ' Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
           ),
