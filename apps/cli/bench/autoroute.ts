@@ -19,7 +19,8 @@
  * `--opt order=short` (numbers are read as numbers, `{…}` as JSON), to compare weights (P8f).
  * `--drc`: list the DRC errors left after routing.
  * `--classify`: apply the signal classes of the nets first (P16, `classify_nets` with apply=true), so the
- * per-class default rules (via cost, corner style, width, clearance) take part.
+ * per-class default rules (via cost, corner style, width, clearance) take part; classes set in the owner's
+ * review (`classes.json`) are set on their nets first.
  * `--save <dir>`: also write `<board>.original.hpcb` (as read, rules applied) and `<board>.routed.hpcb`
  * (after the run) into that folder, to look at in the editor.
  */
@@ -28,7 +29,7 @@ import { basename, join } from 'node:path';
 import { computeRatsnest, runDrc } from '@hassassin/core';
 import { FIXTURE_ARGS, measureAutoroute, ripUpUnpoured, ROUTE_FIXTURES, runTool, saveProject, type Project, type RouteFigures } from '@hassassin/tools';
 import { loadGeometry } from '../src/io.ts';
-import { applyKicadRules, readBoard } from './boards.ts';
+import { applyKicadRules, applyReviewedClasses, readBoard } from './boards.ts';
 
 function line(name: string, f: RouteFigures, extra = ''): string {
   return (
@@ -69,7 +70,11 @@ if (args.includes('--fixtures')) {
 for (const path of args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--save' && args[i - 1] !== '--opt')) {
   const { name, project, replayed } = await readBoard(path);
   if (kicadRules && path.toLowerCase().endsWith('.kicad_pcb')) console.log(`${name}: ${await applyKicadRules(project, path)}`);
-  if (args.includes('--classify')) console.log(`${name}: classes ${JSON.stringify(((await runTool(project, 'classify_nets', { apply: true })) as { counts: unknown }).counts)}`);
+  if (args.includes('--classify')) {
+    console.log(`${name}: classes ${JSON.stringify(((await runTool(project, 'classify_nets', { apply: true })) as { counts: unknown }).counts)}`);
+    const reviewed = await applyReviewedClasses(name, project);
+    if (reviewed) console.log(`${name}: reviewed classes ${reviewed.length ? reviewed.join(', ') : '(guesses accepted)'}`);
+  }
   if (before) {
     const drc = runDrc(project.doc, project.engine, project.copper).violations;
     const kinds: Record<string, number> = {};

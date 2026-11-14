@@ -1,0 +1,14 @@
+{
+  "_about": "Signal classes of the benchmark boards as reviewed by the owner (P16, 2026-11-14). Keys match part of a board's name; each entry sets a net's class by hand, on top of the guesses, when the bench runs with --classify. An empty entry means the guesses were accepted as they are.",
+  "c24cea4229c94047": {},
+  "solar": {
+    "/Power converter/PV_IN": "power",
+    "/Power converter/PMID": "power",
+    "/Power converter/REGN": "power",
+    "/Power converter/BAT_CHG": "power",
+    "/SYS": "power",
+    "/BAT": "power",
+    "/Power converter/TS": "sensitive",
+    "Net-(U1-BATP)": "sensitive"
+  }
+}

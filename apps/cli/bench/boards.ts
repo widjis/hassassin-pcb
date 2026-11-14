@@ -64,3 +64,25 @@ export async function applyKicadRules(p: Project, pcbPath: string): Promise<stri
   return `net classes ${JSON.stringify([...used])}, edge ${rules.min_copper_edge_clearance ?? '-'} mm`;
 }
 
+
+/**
+ * The owner's review of a board's signal classes (`classes.json` next to this file, P16): nets whose class
+ * was set by hand in the review get it on the net, then the classes are applied (rules written).
+ * Returns the nets set, or null when the board has no review.
+ */
+export async function applyReviewedClasses(name: string, p: Project): Promise<string[] | null> {
+  const file = join(dirname(new URL(import.meta.url).pathname), 'classes.json');
+  if (!existsSync(file)) return null;
+  const all = JSON.parse(await readFile(file, 'utf8')) as Record<string, Record<string, string> | string>;
+  const key = Object.keys(all).find((k) => !k.startsWith('_') && name.includes(k));
+  if (!key) return null;
+  const nets = new Set([...p.doc.nodes.values()].filter((n) => n.type === 'net').map((n) => n.name));
+  const set: string[] = [];
+  for (const [net, signal] of Object.entries(all[key] as Record<string, string>)) {
+    if (!nets.has(net)) continue;
+    await runTool(p, 'set_pin_signal', { target: net, net: true, signal });
+    set.push(`${net}=${signal}`);
+  }
+  await runTool(p, 'classify_nets', { apply: true });
+  return set;
+}

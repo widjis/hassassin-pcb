@@ -308,7 +308,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     style. Bends per connection vs P8d: qfn-escape 3.75 → 2.5, qfn-fine 3 → 2.38, reversed-bus 6 → 4.5,
     off-grid 2.5 → 1.75, tee 2.33 → 1.67, channel 3 → 3 (equal). The benchmark boards are still to be
     measured.
-- [ ] **P16. Signal classes from pins (pin metadata that drives the layout rules).**
+- [x] **P16. Signal classes from pins (pin metadata that drives the layout rules).** — `P16_COMMIT`
   - *Owner's request (2026-11-12):* a part should carry, per pin, what that pin needs (for example high
     frequency, so the high-frequency routing rules apply; a signal, so the signal rules apply), and the
     layout should follow it.
@@ -437,8 +437,14 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     (`signal-editors.test.ts`): a symbol's pin classes reaching the board and coming back into the
     editor, a refused unknown class, a generated pad's class beating the net name's guess. Browser check:
     the Signal column with its 13 choices, and a footprint saved with pad 1 rf and pad 2 ground.
-  - Still open in P16: the owner's review of the benchmark boards' classes (in the Board panel's
-    "Signal classes" section).
+  - *Owner's review (2026-11-14, in chat: "Yes, apply them"):* the RGB sleep lamp's guesses accepted as
+    they are (3 power, ground, the buck's SW node switching, its FB sensitive, ADC analog, 28 general).
+    The solar MPPT board's guesses (VBUS, VLOGIC power; GND; SW1 / SW2 switching) completed by hand:
+    PV_IN, PMID, REGN, BAT_CHG, SYS and BAT power, TS (the NTC input) and BATP (battery sense) sensitive.
+    The review is kept in `apps/cli/bench/classes.json` (the boards themselves are not changed) and the
+    bench applies it with `--classify`. Measured on copies, classes applied: solar MPPT (`--kicad-rules`)
+    76 / 76 routed, 39 vias, 484 mm, 0 DRC errors (guesses only: 40 vias, 493 mm); RGB sleep lamp (its
+    project as it is now, 112 logged changes replayed) 72 / 72 routed, 39 vias, 938 mm, 0 DRC errors.
 - [x] **P8f. Layer directions, fanout and cost tuning.**
   - *Owner's reference (2026-11-12): perpendicular (orthogonal) routing* — on a two-layer board the top
     layer runs horizontal and the bottom layer vertical, joined by vias where a net changes direction; on
