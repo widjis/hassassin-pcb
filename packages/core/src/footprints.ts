@@ -23,6 +23,8 @@ export interface FpPad {
   drill?: number | Vec2;
   cornerRatio?: number;
   points?: Vec2[];
+  /** Signal class of the pad (PCB agreement P16), e.g. rf or ground. */
+  signal?: string;
 }
 
 export type FpGraphic =
@@ -384,7 +386,7 @@ export function footprintChildren(fp: FootprintSpec, elUid: string, o: Pick<Plac
     if (p.drill !== undefined) rules.push({ name: 'holeSize', value: p.drill });
     if (p.points?.length) rules.push({ name: 'points', value: p.points });
     const net = p.number ? o.netOf?.(p.number) ?? null : null;
-    node('pad', p.number, rules, { number: p.number, ...(net ? { net } : {}) });
+    node('pad', p.number, rules, { number: p.number, ...(net ? { net } : {}), ...(p.signal ? { signal: p.signal } : {}) });
   }
   for (const g of fp.graphics) {
     const common: RuleDecl[] = [{ name: 'layer', value: g.layer }];

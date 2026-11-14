@@ -219,7 +219,7 @@ export function unitPinNodes(u: PartUnit, parent: string): DocNode[] {
     uid: newUid('pin'),
     type: 'pin',
     name: p.number,
-    props: { number: p.number, pinName: p.name, pinType: p.type, ...(p.hidden ? { hidden: true } : {}) },
+    props: { number: p.number, pinName: p.name, pinType: p.type, ...(p.hidden ? { hidden: true } : {}), ...(p.signal ? { signal: p.signal } : {}) },
     rules: [
       { name: 'position', value: p.at },
       { name: 'rotation', value: p.angle },

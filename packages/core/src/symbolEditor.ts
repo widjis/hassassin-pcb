@@ -39,6 +39,8 @@ export interface PinRow {
   /** 1, 2 …; empty: unit 1 (or the power unit with `powerUnit`). */
   unit?: number;
   hidden?: boolean;
+  /** Signal class for the layout (P16); empty: guessed from names. */
+  signal?: string;
 }
 
 export interface SymbolOptions {
@@ -219,7 +221,7 @@ function buildUnit(rows: PinRow[], sides: PinSide[], order: PinOrder, packageLay
   const halfH = (Math.max(2, Math.ceil(((vRows + 1) * P) / 2 / P)) + (hCols ? 1 : 0)) * P;
   const pins: PinSpec[] = [];
   const column = (n: number, step = P) => Array.from({ length: n }, (_, i) => (i - Math.floor((n - 1) / 2)) * step);
-  const pin = (r: PinRow, at: { x: number; y: number }, angle: number): PinSpec => ({ number: r.number, name: r.name || '~', type: r.type, at, angle, length: P, ...(r.hidden ? { hidden: true } : {}) });
+  const pin = (r: PinRow, at: { x: number; y: number }, angle: number): PinSpec => ({ number: r.number, name: r.name || '~', type: r.type, at, angle, length: P, ...(r.hidden ? { hidden: true } : {}), ...(r.signal ? { signal: r.signal } : {}) });
   // Left and right columns start at the same height, so the sides line up from the top.
   const top = -Math.floor((vRows - 1) / 2) * P;
   bySide.left.forEach((r, i) => pins.push(pin(r, { x: -halfW - P, y: top + i * P }, 0)));
@@ -297,7 +299,7 @@ export function partPinRows(def: PartDef): SymbolEditorData {
       seen.add(p.number);
       // Side from the pin direction: angle 0 points right into the body, so the pin is on the left.
       const side: PinSide = p.angle === 0 ? 'left' : p.angle === 180 ? 'right' : p.angle === 270 ? 'top' : 'bottom';
-      rows.push({ number: p.number, name: p.name, type: (PIN_TYPES as readonly string[]).includes(p.type) ? (p.type as PinType) : 'unspecified', side, ...(def.units.length > 1 ? { unit: i + 1 } : {}), ...(p.hidden ? { hidden: true } : {}) });
+      rows.push({ number: p.number, name: p.name, type: (PIN_TYPES as readonly string[]).includes(p.type) ? (p.type as PinType) : 'unspecified', side, ...(def.units.length > 1 ? { unit: i + 1 } : {}), ...(p.hidden ? { hidden: true } : {}), ...(p.signal ? { signal: p.signal } : {}) });
     }
   });
   return { rows, options: { layout: 'table' } };

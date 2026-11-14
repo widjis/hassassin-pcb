@@ -82,6 +82,8 @@ interface Common {
   holes?: MountingHole[];
   /** Courtyard margin around everything (default 0.25 mm). */
   courtyard?: number;
+  /** Signal class per pad number (P16), e.g. { "1": "rf", "EP": "ground" }. */
+  padSignals?: Record<string, string>;
 }
 
 export type FootprintParams = Common &
@@ -293,6 +295,7 @@ export function generateFootprint(p: FootprintParams): FootprintSpec {
     const ys = pads.map((q) => Math.abs(q.at.y) - q.size.y / 2);
     return { w: r3(Math.max(1, ...xs) * 2), h: r3(Math.max(1, ...ys) * 2) };
   })();
+  for (const q of pads) if (p.padSignals?.[q.number]) q.signal = p.padSignals[q.number];
   const fp = finishFootprint(p.name.trim(), desc, pads, body, { ...(pin1 ? { pin1 } : {}), tags: ['generated', p.family], ...(p.courtyard !== undefined ? { courtyard: p.courtyard } : {}) });
   fp.source = 'project';
   return { ...fp, generator: p } as FootprintSpec;

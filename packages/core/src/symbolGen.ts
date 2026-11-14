@@ -23,6 +23,8 @@ export interface PinSpec {
   angle: number;
   length: number;
   hidden?: boolean;
+  /** What the pin needs on the board (signal class, PCB agreement P16), e.g. rf or switching. */
+  signal?: string;
 }
 
 export interface SymbolSpec {

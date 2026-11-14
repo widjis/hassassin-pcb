@@ -94,6 +94,7 @@ const COMMON: Field[] = [
   { key: 'ep.h', label: 'Exposed pad height' },
   { key: 'ep.vias', label: 'Thermal vias', kind: 'text', hint: 'drill rows cols pitch, e.g. 0.3 3 3 1.0' },
   { key: 'holes', label: 'Mounting holes', kind: 'area', hint: 'x y drill [ring] per line' },
+  { key: 'padSignals', label: 'Pad signals', kind: 'text', hint: 'what pads need on the board, e.g. 1=rf 5=switching' },
 ];
 
 const num = (s: string | undefined) => (s === undefined || s.trim() === '' ? undefined : Number(s));
@@ -122,6 +123,8 @@ function paramsFrom(name: string, family: Family, v: Record<string, string>): Fo
         const [x, y, d, ring] = l.split(/[\s,;]+/).map(Number);
         return { x: x!, y: y!, drill: d!, ...(ring ? { pad: ring } : {}) };
       }));
+    else if (f.key === 'padSignals')
+      set('padSignals', Object.fromEntries(raw.split(/[\s,;]+/).filter((t) => t.includes('=')).map((t) => t.split('=', 2) as [string, string])));
     else if (f.key === 'ep.vias') {
       const [d, r, c, pitch] = raw.split(/[\s,;]+/).map(Number);
       set('ep.vias', { drill: d, rows: r, cols: c, pitch });
@@ -205,6 +208,7 @@ export function openFootprintGenerator(app: App, opts: FootprintDialogOptions = 
     if (vias) v['ep.vias'] = `${vias.drill} ${vias.rows} ${vias.cols} ${vias.pitch}`;
     if (prev.holes) v.holes = prev.holes.map((q) => `${q.x} ${q.y} ${q.drill}${q.pad ? ` ${q.pad}` : ''}`).join('\n');
     if (prev.family === 'grid' && prev.skip) v.skip = prev.skip.join(', ');
+    if (prev.padSignals) v.padSignals = Object.entries(prev.padSignals).map(([n, s]) => `${n}=${s}`).join(' ');
     if (prev.family === 'pads') v.padList = prev.pads.map((q) => `${q.number} ${q.x} ${q.y} ${q.w} ${q.h}${q.drill !== undefined ? ` ${q.drill}` : ''}`).join('\n');
   }
 

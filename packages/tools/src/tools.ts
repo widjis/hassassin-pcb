@@ -2108,14 +2108,14 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'create_symbol',
-    description: 'Create (or update) a symbol for a part that has no library symbol, from its pin table, e.g. pasted from the datasheet. pins: text with one pin per line ("number name type", tab / comma separated, a header line is fine), or pin_list: a list of {number, name, type, side, unit}. Types: input, output, bidirectional, passive, power_in, power_out, open_collector, no_connect … (datasheet words I, O, I/O, P, G, OD also work; missing types are guessed from the names). layout: auto (default: supplies top, grounds bottom, inputs left, outputs right), package (pin order around the package) or table (the side of each pin). power_unit=true puts the power pins in a unit of their own; a unit column (A, B …) splits gates. The part is stored in the project; place it with place_part using the returned id. Calling again with the same name updates the part and every placed copy.',
+    description: 'Create (or update) a symbol for a part that has no library symbol, from its pin table, e.g. pasted from the datasheet. pins: text with one pin per line ("number name type", tab / comma separated, a header line is fine), or pin_list: a list of {number, name, type, side, unit, signal} (signal: the class of the pin for the layout rules, e.g. rf, switching, high-speed; see set_pin_signal). Types: input, output, bidirectional, passive, power_in, power_out, open_collector, no_connect … (datasheet words I, O, I/O, P, G, OD also work; missing types are guessed from the names). layout: auto (default: supplies top, grounds bottom, inputs left, outputs right), package (pin order around the package) or table (the side of each pin). power_unit=true puts the power pins in a unit of their own; a unit column (A, B …) splits gates. The part is stored in the project; place it with place_part using the returned id. Calling again with the same name updates the part and every placed copy.',
     mutates: true,
     input: {
       type: 'object',
       properties: {
         name: { type: 'string' },
         pins: { type: 'string', description: 'Pin table text, one pin per line' },
-        pin_list: { type: 'array', items: { type: 'object' }, description: 'Instead of pins: a list of {number, name, type, side, unit}' },
+        pin_list: { type: 'array', items: { type: 'object' }, description: 'Instead of pins: a list of {number, name, type, side, unit, signal}' },
         layout: { type: 'string', enum: ['auto', 'package', 'table'] },
         order: { type: 'string', enum: ['table', 'number', 'name'], description: 'Order of pins along a side (default: as in the table)' },
         power_unit: { type: 'boolean' },
@@ -2140,7 +2140,9 @@ export const TOOLS: ToolDef[] = [
           const side = o.side === undefined ? undefined : String(o.side);
           if (side !== undefined && !(PIN_SIDES as readonly string[]).includes(side)) throw new ToolError(`pins[${i}].side must be left, right, top or bottom`);
           const unit = o.unit === undefined ? undefined : /^(power|pwr)$/i.test(String(o.unit)) ? 0 : parseUnit(String(o.unit), 99);
-          return { number, name, type: pinTypeFrom(String(o.type ?? ''), name), ...(side ? { side: side as PinSide } : {}), ...(unit !== undefined ? { unit } : {}) };
+          const signal = o.signal === undefined || o.signal === '' ? undefined : String(o.signal);
+          if (signal !== undefined && !(SIGNAL_CLASSES as readonly string[]).includes(signal)) throw new ToolError(`pins[${i}].signal must be one of ${SIGNAL_CLASSES.join(', ')}`);
+          return { number, name, type: pinTypeFrom(String(o.type ?? ''), name), ...(side ? { side: side as PinSide } : {}), ...(unit !== undefined ? { unit } : {}), ...(signal ? { signal } : {}) };
         });
       else throw new ToolError('pins must be a pin table (text) or a list of pins');
       const name = str(a.name, 'name');
@@ -2287,7 +2289,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'create_footprint',
-    description: `Make a footprint from datasheet dimensions when search_footprints has none. family: two-row (SOIC / TSSOP / DIP / headers), four-side (QFP / QFN), grid (BGA / LGA), castellated (module with edge pads, ESP-12F style) or pads (a free list). Give the recommended land pattern (pad: {length, width} with rowSpacing / spanX = pad centre to pad centre across the package), or leads: {span, length, width, type: gullwing | nolead | jlead} from the package drawing and the pads are derived (margins toe / heel / side: gullwing 0.35/0.35/0.05, nolead 0.30/0/0, jlead 0.10/0.60/0.05 mm). drill (+ padDiameter) makes through-hole pins. ep: exposed pad {w, h, vias?}; holes: mounting holes [{x, y, drill, pad?}]; body: {w, h}. Pin 1 is top-left, numbering counter-clockwise (two-row: numbering around or zigzag for headers). The footprint is stored in the project; ref assigns it to a part.`,
+    description: `Make a footprint from datasheet dimensions when search_footprints has none. family: two-row (SOIC / TSSOP / DIP / headers), four-side (QFP / QFN), grid (BGA / LGA), castellated (module with edge pads, ESP-12F style) or pads (a free list). Give the recommended land pattern (pad: {length, width} with rowSpacing / spanX = pad centre to pad centre across the package), or leads: {span, length, width, type: gullwing | nolead | jlead} from the package drawing and the pads are derived (margins toe / heel / side: gullwing 0.35/0.35/0.05, nolead 0.30/0/0, jlead 0.10/0.60/0.05 mm). drill (+ padDiameter) makes through-hole pins. ep: exposed pad {w, h, vias?}; holes: mounting holes [{x, y, drill, pad?}]; body: {w, h}; padSignals: signal class per pad number for the layout rules, e.g. {"1": "rf"}. Pin 1 is top-left, numbering counter-clockwise (two-row: numbering around or zigzag for headers). The footprint is stored in the project; ref assigns it to a part.`,
     mutates: true,
     input: {
       type: 'object',

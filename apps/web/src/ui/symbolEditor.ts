@@ -4,6 +4,7 @@
  * preview, then save into the project (placed copies are redrawn) and optionally place it.
  */
 import {
+  SIGNAL_CLASSES,
   PIN_SIDES,
   PIN_TYPES,
   buildSymbolUnits,
@@ -156,21 +157,23 @@ export function openSymbolEditor(app: App, opts: SymbolEditorOptions = {}): void
       const sd = h('select', { 'aria-label': 'Side' }, h('option', { value: '' }, 'auto'), ...PIN_SIDES.map((t) => h('option', { value: t }, t))) as HTMLSelectElement;
       sd.value = r.side ?? '';
       const un = h('input', { value: r.unit === undefined ? '' : r.unit === 0 ? 'power' : unitLetter(r.unit), placeholder: 'A', size: '4', 'aria-label': 'Unit' }) as HTMLInputElement;
+      const sg = h('select', { 'aria-label': 'Signal class', title: 'What this pin needs on the board (layout rules); auto: guessed from pin and net names' }, h('option', { value: '' }, 'auto'), ...SIGNAL_CLASSES.map((t) => h('option', { value: t }, t))) as HTMLSelectElement;
+      sg.value = r.signal ?? '';
       const update = () => {
         const u = un.value.trim();
         let unit: number | undefined;
         if (/^(power|pwr)$/i.test(u)) unit = 0;
         else if (/^\d+$/.test(u)) unit = Number(u) || undefined;
         else if (/^[A-Za-z]{1,2}$/.test(u)) unit = [...u.toUpperCase()].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
-        rows[i] = { number: num.value.trim(), name: nm.value.trim(), type: ty.value as PinType, ...(sd.value ? { side: sd.value as PinSide } : {}), ...(unit !== undefined ? { unit } : {}) };
+        rows[i] = { number: num.value.trim(), name: nm.value.trim(), type: ty.value as PinType, ...(sd.value ? { side: sd.value as PinSide } : {}), ...(unit !== undefined ? { unit } : {}), ...(sg.value ? { signal: sg.value } : {}) };
         // A side chosen by hand only counts with "Sides from the table".
         if (sd.value && layoutSel.value !== 'table') ((layoutSel.value = 'table'), (options.layout = 'table'));
         renderPreview();
       };
       for (const el of [num, nm, un]) el.addEventListener('change', update);
-      for (const el of [ty, sd]) el.addEventListener('change', update);
+      for (const el of [ty, sd, sg]) el.addEventListener('change', update);
       const del = h('button', { type: 'button', title: 'Remove this pin', onclick: () => (rows.splice(i, 1), renderGrid(), renderPreview()) }, '×');
-      grid.append(h('tr', {}, h('td', {}, num), h('td', {}, nm), h('td', {}, ty), h('td', {}, sd), h('td', {}, un), h('td', {}, del)));
+      grid.append(h('tr', {}, h('td', {}, num), h('td', {}, nm), h('td', {}, ty), h('td', {}, sd), h('td', {}, un), h('td', {}, sg), h('td', {}, del)));
     });
   };
 
@@ -235,7 +238,7 @@ export function openSymbolEditor(app: App, opts: SymbolEditorOptions = {}): void
         h('div', { class: 'row-left' }, readBtn, readNote),
         h('div', { class: 'sym-opts' }, h('label', {}, 'Sides ', layoutSel), h('label', {}, 'Order ', orderSel), h('label', {}, powerUnit, ' Power pins in a unit of their own')),
         h('div', { class: 'sym-grid' },
-          h('table', {}, h('thead', {}, h('tr', {}, ...['No.', 'Name', 'Type', 'Side', 'Unit', ''].map((t) => h('th', {}, t)))), grid),
+          h('table', {}, h('thead', {}, h('tr', {}, ...['No.', 'Name', 'Type', 'Side', 'Unit', 'Signal', ''].map((t) => h('th', {}, t)))), grid),
           h('button', { type: 'button', onclick: () => { rows.push({ number: String(rows.length + 1), name: '', type: 'passive' }); renderGrid(); renderPreview(); } }, '+ Add pin'),
         ),
       ),

@@ -427,6 +427,16 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     owner's permission, in chat: "Ya, ubah") lists `signalClasses`: the count per class, each net that
     is not general with its class and source, and how many classes are not written onto the nets yet,
     with a hint to review and apply them. One more test.
+  - *Progress (2026-11-14), eighth part:* editing in the symbol editor and the footprint generator, now
+    that the schematic agreement's S17 / S18 are merged. The symbol editor's pin table has a **Signal**
+    column (auto or one of the twelve classes); the class is stored on the part's pins and on every
+    placed pin, and Edit symbol shows it again; `create_symbol` takes `signal` per pin in `pin_list`.
+    The footprint generator has **Pad signals** (`1=rf 2=ground`), stored on the generated pads and kept
+    in its parameters for editing; `create_footprint` takes `padSignals`. A class set this way counts as
+    set on the pin (source `pin`) and beats a guess from the names. Tests
+    (`signal-editors.test.ts`): a symbol's pin classes reaching the board and coming back into the
+    editor, a refused unknown class, a generated pad's class beating the net name's guess. Browser check:
+    the Signal column with its 13 choices, and a footprint saved with pad 1 rf and pad 2 ground.
   - Still open in P16: the owner's review of the benchmark boards' classes (in the Board panel's
     "Signal classes" section).
 - [x] **P8f. Layer directions, fanout and cost tuning.**
