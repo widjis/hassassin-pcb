@@ -20,6 +20,11 @@ import { type WaivedViolation,
   mapFills,
   movablePoints,
   rotateSelectionOps,
+  rotationAbout,
+  rubberbandOps,
+  rubberbandPlan,
+  selectionCentre,
+  type RubberbandPlan,
   type BoxKind,
   arcPoints,
   type ErcViolation,
@@ -74,6 +79,11 @@ interface MoveState {
   key: string;
   last: Vec2;
   items: { uid: string; rules: Record<string, Vec2 | Vec2[]>; fills?: unknown }[];
+  /** Traces that follow the moved parts and vias (P2). */
+  rubber: RubberbandPlan;
+  /** Uids whose copper is checked for shorts while dragging. */
+  watch: Set<string>;
+  checked: number;
 }
 
 export class App {
@@ -538,7 +548,15 @@ export class App {
       if (Object.keys(rules).length) items.push({ uid, rules, ...(n.type === 'fill' && n.data?.fills ? { fills: structuredClone(n.data.fills) } : {}) });
     }
     if (!items.length) return;
-    this.move = { start: world, last: { x: 0, y: 0 }, key: newUid('mv'), items };
+    // Rubber-banding (P2): traces on the pads of moved parts / on moved vias follow; traces in the
+    // selection move with it.
+    const moved = items.filter((it) => ['element', 'via'].includes(this.node(it.uid)!.type)).map((it) => it.uid);
+    const skip = new Set(items.filter((it) => this.node(it.uid)!.type === 'trace').map((it) => it.uid));
+    const rubber = rubberbandPlan(this.doc, this.engine!, this.copper, moved, skip);
+    const watch = new Set([...items.map((it) => it.uid), ...rubber.items.map((r) => r.uid)]);
+    for (const it of items) for (const c of this.node(it.uid)!.children) watch.add(c);
+    this.move = { start: world, last: { x: 0, y: 0 }, key: newUid('mv'), items, rubber, watch, checked: 0 };
+    this.moveClash = false;
   }
 
   get moving(): boolean {
@@ -558,14 +576,36 @@ export class App {
       for (const [k, v] of Object.entries(it.rules)) ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: Array.isArray(v) ? v.map(by) : by(v) } });
       if (it.fills) ops.push({ op: 'setData', uid: it.uid, key: 'fills', value: mapFills(it.fills, by) });
     }
+    ops.push(...rubberbandOps(m.rubber, by));
     this.apply('Move', ops, m.key);
+    // A move that would make a short or break clearance shows red while dragging (P2), checked now and then.
+    const now = performance.now();
+    if (now - m.checked > 150 && this.doc && this.engine) {
+      m.checked = now;
+      this.moveClash = runDrc(this.doc, this.engine, this.copper, { skipFills: true }).violations.some((v) => (v.kind === 'short' || v.kind === 'clearance') && v.uids.some((u) => m.watch.has(u)));
+    }
     this.say(`Δ ${d.x.toFixed(3)}, ${d.y.toFixed(3)} mm`);
   }
 
   endMove(): void {
-    if (this.move) this.history?.seal();
+    const m = this.move;
+    if (m && this.doc && (m.last.x || m.last.y)) {
+      // The traces that followed are laid again at 45° from their fixed ends, in the same undo step.
+      const d = m.last;
+      const fix = rubberbandOps(m.rubber, (v: Vec2) => ({ x: v.x + d.x, y: v.y + d.y }), { fix45: true, doc: this.doc });
+      if (fix.length) this.apply('Move', fix, m.key);
+      // Pours are filled again around the moved copper, in the same undo step.
+      if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: m.key, quiet: true });
+      if (this.moveClash) this.say('This move makes a short or breaks clearance (see Review).');
+    }
+    if (m) this.history?.seal();
     this.move = null;
+    this.moveClash = false;
+    this.requestRender();
   }
+
+  /** The part being dragged touches other copper (P2). */
+  moveClash = false;
 
   /**
    * R / Shift+R: one part turns in place; a selection of several items (parts, traces, vias, pours,
@@ -575,13 +615,29 @@ export class App {
     if (!this.engine || !this.doc) return;
     const sel = [...this.selection];
     const ops: Op[] = [];
+    let f: ((p: Vec2) => Vec2) | null = null;
     if (sel.length === 1 && this.node(sel[0]!)?.type === 'element') {
       const uid = sel[0]!;
       const cur = Number(this.engine.get(uid, 'rotation')?.value ?? 0);
       ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: (((cur + deg) % 360) + 360) % 360 } });
-    } else ops.push(...rotateSelectionOps(this.doc, this.engine, this.copper, sel, deg));
+      const at = this.engine.get(uid, 'position')?.value as Vec2 | undefined;
+      if (at) f = rotationAbout(at, deg);
+    } else {
+      ops.push(...rotateSelectionOps(this.doc, this.engine, this.copper, sel, deg));
+      const c = selectionCentre(this.doc, this.engine, this.copper, sel);
+      if (c) f = rotationAbout(c, deg);
+    }
     if (!ops.length) return this.say('Select a component (or a group of items) to rotate it.');
-    this.apply('Rotate', ops);
+    // Traces on the turned parts' pads follow (P2), laid again at 45°.
+    if (f) {
+      const moved = sel.filter((u) => ['element', 'via'].includes(this.node(u)?.type ?? ''));
+      const skip = new Set(sel.filter((u) => this.node(u)?.type === 'trace'));
+      ops.push(...rubberbandOps(rubberbandPlan(this.doc, this.engine, this.copper, moved, skip), f, { fix45: true, doc: this.doc }));
+    }
+    const key = newUid('rot');
+    if (!this.apply('Rotate', ops, key)) return;
+    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    this.history?.seal();
   }
 
   /** The selection box being drawn, in screen pixels (P1). */
@@ -862,7 +918,8 @@ export class App {
     order.push(
       { key: '__net', color: [1, 1, 1, 0.22] },
       { key: '__query', color: QUERY_HIGHLIGHT },
-      { key: '__sel', color: HIGHLIGHT },
+      // A move that clashes with other copper shows the selection red (P2).
+      { key: '__sel', color: this.move && this.moveClash ? [1, 0.3, 0.3, 0.75] : HIGHLIGHT },
       { key: '__shove', color: [1, 0.75, 0.3, 0.55] },
       { key: '__preview', color: this.route.dragColor ?? this.route.previewColor() },
     );

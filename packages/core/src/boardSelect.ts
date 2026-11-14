@@ -206,16 +206,22 @@ export function isBoardMovable(doc: Doc, n: DocNode): boolean {
  * box, as one list of operations: parts turn and move round the centre; traces, vias, pours and graphics
  * have their points turned (a pour's filled copper too). Locked items stay.
  */
+/** Centre of the bounding box of a selection's board items (what a group turns about). */
+export function selectionCentre(doc: Doc, engine: StyleEngine, copper: string[], uids: string[]): Vec2 | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const u of uids) {
+    const n = doc.nodes.get(u);
+    const s = n && isBoardMovable(doc, n) && !n.props.locked ? shapeOf(doc, engine, copper, n) : undefined;
+    for (const p of s?.paths ?? []) for (const q of p.pts) (minX = Math.min(minX, q.x)), (minY = Math.min(minY, q.y)), (maxX = Math.max(maxX, q.x)), (maxY = Math.max(maxY, q.y));
+  }
+  return Number.isFinite(minX) ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 } : null;
+}
+
 export function rotateSelectionOps(doc: Doc, engine: StyleEngine, copper: string[], uids: string[], deg: number): Op[] {
   const items = uids.map((u) => doc.nodes.get(u)).filter((n): n is DocNode => !!n && isBoardMovable(doc, n) && !n.props.locked);
   if (!items.length) return [];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of items) {
-    const s = shapeOf(doc, engine, copper, n);
-    for (const p of s?.paths ?? []) for (const q of p.pts) (minX = Math.min(minX, q.x)), (minY = Math.min(minY, q.y)), (maxX = Math.max(maxX, q.x)), (maxY = Math.max(maxY, q.y));
-  }
-  if (!Number.isFinite(minX)) return [];
-  const c = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  const c = selectionCentre(doc, engine, copper, uids);
+  if (!c) return [];
   const turn = (p: Vec2): Vec2 => {
     const q = place({ x: p.x - c.x, y: p.y - c.y }, c, deg);
     return { x: Math.round(q.x * 1e4) / 1e4, y: Math.round(q.y * 1e4) / 1e4 };

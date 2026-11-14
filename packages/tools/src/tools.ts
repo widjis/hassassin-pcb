@@ -4,6 +4,9 @@
  * project is live, shared with collaborators).
  */
 import {
+  partTransform,
+  rubberbandOps,
+  rubberbandPlan,
   footprintNodes,
   KEEPOUT_DEFAULT,
   planShove,
@@ -1528,16 +1531,26 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'move_part',
-    description: 'Place a board part: position in mm (board coordinates, Y down) and optional rotation in degrees (counter-clockwise).',
+    description: 'Place a board part: position in mm (board coordinates, Y down) and optional rotation in degrees (counter-clockwise). Traces that end on its pads follow it, laid again at 45° from their other end (keep_traces: false leaves them where they are).',
     mutates: true,
-    input: { type: 'object', properties: { ref: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, rotation: { type: 'number' } }, required: ['ref', 'x', 'y'] },
+    input: { type: 'object', properties: { ref: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, rotation: { type: 'number' }, keep_traces: { type: 'boolean', description: 'Default true: traces follow the part' } }, required: ['ref', 'x', 'y'] },
     run: (p, a) => {
       const el = one(p, str(a.ref, 'ref'), 'element');
-      const ops: Op[] = [{ op: 'setRule', uid: el.uid, name: 'position', decl: { name: 'position', value: { x: num(a.x, 'x'), y: num(a.y, 'y') } } }];
+      const p0 = vec(p.engine.get(el.uid, 'position')?.value) ?? { x: 0, y: 0 };
+      const r0 = Number(p.engine.get(el.uid, 'rotation')?.value ?? 0);
+      const p1 = { x: num(a.x, 'x'), y: num(a.y, 'y') };
+      const ops: Op[] = [{ op: 'setRule', uid: el.uid, name: 'position', decl: { name: 'position', value: p1 } }];
       const rot = optNum(a.rotation, 'rotation');
-      if (rot !== undefined) ops.push({ op: 'setRule', uid: el.uid, name: 'rotation', decl: { name: 'rotation', value: ((rot % 360) + 360) % 360 } });
+      const r1 = rot !== undefined ? ((rot % 360) + 360) % 360 : r0;
+      if (rot !== undefined) ops.push({ op: 'setRule', uid: el.uid, name: 'rotation', decl: { name: 'rotation', value: r1 } });
+      let followed = 0;
+      if (a.keep_traces !== false) {
+        const plan = rubberbandPlan(p.doc, p.engine, p.copper, [el.uid]);
+        followed = plan.items.length;
+        ops.push(...rubberbandOps(plan, partTransform(p0, r0, p1, r1), { fix45: true, doc: p.doc }));
+      }
       apply(p, 'Move part', ops);
-      return summarize(p, el);
+      return { ...summarize(p, el), tracesFollowed: followed };
     },
   },
   {

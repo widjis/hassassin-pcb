@@ -91,13 +91,26 @@ document before work on a measured item starts.
       back). In the browser on a copy of the solar board: both box directions, a group of a connector and
       its traces moved by (2, 1) mm and back in one undo, R and Delete one step each, middle drag, Space +
       drag, trackpad scroll pan, wheel and pinch zoom.
-- [ ] **P2. Rubber-banding: traces follow moved parts.**
+- [x] **P2. Rubber-banding: traces follow moved parts.**
   - Moving or rotating a part (or a group) keeps every trace that ends on one of its pads attached: the
     end moves with the pad and the last segments are adjusted, keeping 45° angles where possible.
   - Vias and traces inside the selection move with it unchanged.
   - Connectivity before and after is identical (automated test); a move that would create a short is
     shown in red while dragging and DRC reports it if dropped.
   - Available to agents through `move_part` (traces follow by default, `keep_traces: false` to leave them).
+  - *Done (2026-11-15):* core module `rubberband.ts`: `rubberbandPlan` (the traces with an end on a pad of
+    a moved part or on a moved via; traces in the selection are left to the move) and `rubberbandOps` for
+    any transform, always from the geometry before the move: a trace with both ends on moved copper
+    moves with it; one with one end moved keeps its other end and is laid again as 45° pieces (the
+    posture closest to its old direction), or only stretched while a drag is in progress. Editor: a drag
+    stretches them live and lays them at 45° on release; R (one part, or a group about its centre) lays
+    them at once; pours are refilled in the same undo step; while dragging, the selection turns red when
+    the move makes a short or breaks clearance (checked every 150 ms, without pours). `move_part` follows
+    by default (`keep_traces: false` to leave the traces) and reports how many followed. Tests:
+    `rubberband.test.ts` (move and half turn with connectivity identical and every piece at 45°;
+    keep_traces false; a part turned in one undo step). In the browser on a copy of the solar board: NTC
+    connector dragged by (2, 1.5) mm, connections unchanged, no new off-angle piece, one undo; a move
+    onto other copper shows red and DRC reports the short.
 - [ ] **P3. Copy, paste and duplicate on the board.**
   - Cmd/Ctrl+C / V / D on parts, traces, vias, graphics and pours; traces and vias are copied only when
     both their ends are inside the copy (or with an option, all of them).
