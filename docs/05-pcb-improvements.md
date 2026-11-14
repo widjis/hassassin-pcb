@@ -654,7 +654,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     in a ring); dog-bones that help the layer directions (a dog-boned route that wants to run along the
     bottom layer's direction); a run on a real board with a QFN / QFP or BGA (the solar MPPT board waits
     for the owner's leave).
-- [ ] **P8g. Verification, reporting and responsiveness.**
+- [x] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.
   - The `autoroute` tool, the CLI and the Board panel report the same figures (connections, routed,
@@ -718,8 +718,9 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     priority, P6); and per connection the solar board takes more vias and length than v0.0.3's 45 because
     v0.0.3 only routed the short, easy ones; against the hand routing of the same nets it is shorter (521
     against 568 mm) with 13 more vias.
-  - Still open in P8g: the owner's word on the two readings above (the pour errors belong to P6; the per
-    connection figure compared with the hand routing rather than with v0.0.3's partial result).
+  - *Accepted (2026-11-14):* the owner accepted both readings above in chat ("Yes, tick them"): the RGB
+    lamp's 4 pour-against-pour errors are P6 work, and the solar per-connection figures are compared with
+    the hand routing of the same nets, not with v0.0.3's partial result. P8g is done.
 - [x] **P9. Shove engine (core).**
   - A core function that, given a new trace or via, moves traces and vias of other nets in its way aside
     (walk-around first, then push), keeping their clearance and connections, and refuses when they cannot
@@ -931,7 +932,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     (45° chosen; with `cornerStyle: arc` a pair keeps 45° corners); ground return vias next to a pair's
     vias; small bumps on both halves at once; a pair whose halves swap sides between its ends (routed
     one by one today); DRC reporting pairs outside their rules is PM3 (P12).
-- [ ] **P11. Autoplacer that uses the schematic.**
+- [x] **P11. Autoplacer that uses the schematic.**
   - The greedy placement of today stays as the start; an improvement pass follows (simulated annealing or
     pairwise swaps, written from textbook descriptions) that minimises total ratsnest length (half-perimeter
     per net) with penalties for courtyard overlap and leaving the board.
@@ -993,10 +994,11 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     placed, **76 / 76 routed, 0 DRC errors**, 43 vias, 415 mm, routed in 1.7 s (placing 11.5 s). Seeds 2
     and 3: −29.6 % and −31.7 %, 76 / 76 routed, 33 and 26 vias, 0 DRC errors. 5 decoupling capacitors were
     tied to their IC, 2 sheet blocks kept together.
-  - Still open in P11: the owner's word on the RGB lamp, which meets the 20 % with the default seed (−30 %)
-    but not with every seed (−24 %, −15 %), and whose 4 DRC errors are the pour-against-pour ones of P8g;
-    "facing out" is not covered by a test (the fixtures' connectors have their pads round their origin);
-    keep-out areas wait for P6.
+  - *Accepted (2026-11-14):* the owner accepted in chat ("Yes, tick them"): the RGB lamp meets the 20 %
+    with the default seed (−30 %; other seeds −24 % and −15 %), and its 4 DRC errors are the
+    pour-against-pour ones of P8g, which belong to P6. P11 is done. Left for later, not blocking:
+    "facing out" has no test of its own (the fixtures' connectors have their pads round their origin), and
+    keep-out areas are respected once P6 exists.
 
 **PM2 done when:** every item above is checked.
 
