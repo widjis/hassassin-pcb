@@ -59,8 +59,9 @@ export interface NetSignal {
  * (typical values from design guides; the part's datasheet decides). They make a net a `diff-pair`; the
  * pair width, gap and skew from them are P10.
  */
-export const SIGNAL_INTERFACES: Record<string, { label: string; diffImpedance: number }> = {
-  usb2: { label: 'USB 2.0', diffImpedance: 90 },
+export const SIGNAL_INTERFACES: Record<string, { label: string; diffImpedance: number; skewMax?: number }> = {
+  // USB 2.0: intra-pair mismatch ≤ 50 mil (1.27 mm), as vendor layout notes give it.
+  usb2: { label: 'USB 2.0', diffImpedance: 90, skewMax: 1.27 },
   usb3: { label: 'USB 3.x', diffImpedance: 90 },
   ethernet: { label: 'Ethernet (10/100/1000BASE-T, MDI)', diffImpedance: 100 },
   lvds: { label: 'LVDS', diffImpedance: 100 },
@@ -283,12 +284,12 @@ export function netSignals(doc: Doc): NetSignal[] {
 }
 
 /** Rules `classify_nets` may compute per net from the parameters; listed in the net's `signalRules`. */
-const COMPUTED_RULES = ['traceWidth', 'keepOut', 'diffGap', 'diffPairClearance'] as const;
+const COMPUTED_RULES = ['traceWidth', 'keepOut', 'diffGap', 'diffPairClearance', 'diffSkewMax'] as const;
 
 export interface SignalPlan {
   ops: Op[];
   /** Per net: the computed rules written, and hand-set rules that were kept although smaller. */
-  rules: { net: string; traceWidth?: number; keepOut?: number; diffGap?: number; diffPairClearance?: number; kept?: string[]; note?: string }[];
+  rules: { net: string; traceWidth?: number; keepOut?: number; diffGap?: number; diffPairClearance?: number; diffSkewMax?: number; kept?: string[]; note?: string }[];
 }
 
 /**
@@ -342,6 +343,8 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
         value.diffGap = pg.gap;
         // Other nets at least 3 × the width away, centre to centre (2 × w edge to edge), for crosstalk.
         value.diffPairClearance = Math.ceil(2 * pg.width * 100 - 1e-6) / 100;
+        const sk = s.interface ? SIGNAL_INTERFACES[s.interface]?.skewMax : undefined;
+        if (sk) value.diffSkewMax = sk;
         if (pg.width > 1) notes.push(`${zDiff} Ω differential needs ${pg.width} mm traces ${pg.gap} mm apart on ${opts.layer}: a thinner dielectric to the plane (more layers) would make them narrower`);
       }
     }
@@ -373,7 +376,7 @@ export function planSignalClasses(doc: Doc, opts: { copperMm?: number; nets?: st
     const list = [...nextMine].join(' ') || null;
     if ((n.props.signalRules ?? null) !== list) ops.push({ op: 'setProp', uid: n.uid, key: 'signalRules', value: list });
     if (value.traceWidth || value.keepOut || value.diffGap || kept.length || notes.length)
-      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(nextMine.has('diffGap') ? { diffGap: value.diffGap! } : {}), ...(nextMine.has('diffPairClearance') ? { diffPairClearance: value.diffPairClearance! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
+      rules.push({ net: s.net, ...(nextMine.has('traceWidth') ? { traceWidth: value.traceWidth! } : {}), ...(nextMine.has('keepOut') ? { keepOut: value.keepOut! } : {}), ...(nextMine.has('diffGap') ? { diffGap: value.diffGap! } : {}), ...(nextMine.has('diffPairClearance') ? { diffPairClearance: value.diffPairClearance! } : {}), ...(nextMine.has('diffSkewMax') ? { diffSkewMax: value.diffSkewMax! } : {}), ...(kept.length ? { kept } : {}), ...(notes.length ? { note: notes.join('; ') } : {}) });
   }
   return { ops, rules };
 }

@@ -171,58 +171,131 @@ export function lengthGroups(lengths: NetLength[]): LengthGroup[] {
   });
 }
 
+export interface TuneCandidate {
+  ops: Op[];
+  /** Length added (mm). */
+  added: number;
+  /** The trace turned into the serpentine, and the side its bumps go to (1 = left of start → end). */
+  trace: string;
+  side: 1 | -1;
+}
+
+const SQ2 = Math.SQRT2;
+/** Length a bump of height A with 45° chamfers c adds over its base: 2A − (8 − 4√2)·c. */
+const bumpGain = (A: number, c: number) => 2 * A - (8 - 4 * SQ2) * c;
+
 /**
- * Ops that add `extra` mm to a net by turning its longest straight trace into a
- * serpentine. Amplitude and pitch are kept modest; the caller checks DRC afterwards.
+ * Ways to add `extra` mm to a net with a serpentine, best first (P10): every straight trace long enough
+ * (longest first), on either side, or on the side away from the partner where the trace runs beside it
+ * (a differential pair's half, `partner`). Each bump is a rectangle with 45° chamfered corners, so the
+ * trace never turns more than 45° at once; its height is at most the rule `tuneAmplitude` (default 1.5
+ * mm), and its legs are at least `tuneSpacing` apart edge to edge (default 3 × the width), so the meander
+ * does not couple to itself. The bumps sit at the end of the trace that joins another trace of the net
+ * (the bend that usually caused the mismatch), else in the middle. The caller checks clearance (DRC) and
+ * takes the first candidate that keeps it.
  */
-export function planMeander(doc: Doc, engine: StyleEngine, net: string, extra: number, opts: { amplitude?: number; side?: 1 | -1 } = {}): { ops: Op[]; added: number; error?: string } {
+export function planTune(doc: Doc, engine: StyleEngine, net: string, extra: number, opts: { amplitude?: number; spacing?: number; side?: 1 | -1; partner?: string; max?: number } = {}): { candidates: TuneCandidate[]; error?: string } {
   const node = [...doc.nodes.values()].find((n) => n.type === 'net' && n.name === net);
-  if (!node) return { ops: [], added: 0, error: `No net ${net}` };
-  if (extra <= 0.01) return { ops: [], added: 0, error: 'Nothing to add' };
-  const width = Number(engine.get(node.uid, 'traceWidth')?.value ?? 0.25) || 0.25;
-  let best: { t: DocNode; a: Vec2; b: Vec2; len: number } | null = null;
+  if (!node) return { candidates: [], error: `No net ${net}` };
+  if (extra <= 0.01) return { candidates: [], error: 'Nothing to add' };
+  const num = (name: string) => {
+    const v = engine.get(node.uid, name)?.value;
+    return typeof v === 'number' && v > 0 ? v : undefined;
+  };
+  const traces: { t: DocNode; a: Vec2; b: Vec2; len: number; w: number; layer: string }[] = [];
+  const ends: Vec2[] = [];
   for (const c of node.children) {
     const t = doc.nodes.get(c);
-    if (t?.type !== 'trace' || engine.get(t.uid, 'mid')?.value) continue;
+    if (t?.type !== 'trace') continue;
     const a = vec(engine.get(t.uid, 'start')?.value);
     const b = vec(engine.get(t.uid, 'end')?.value);
     if (!a || !b) continue;
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    if (!best || len > best.len) best = { t, a, b, len };
+    ends.push(a, b);
+    if (engine.get(t.uid, 'mid')?.value || engine.get(t.uid, 'locked')?.value === true || t.props.locked) continue;
+    traces.push({ t, a, b, len: Math.hypot(b.x - a.x, b.y - a.y), w: Number(engine.get(t.uid, 'traceWidth')?.value ?? 0.25) || 0.25, layer: String(engine.get(t.uid, 'layer')?.value ?? '') });
   }
-  if (!best) return { ops: [], added: 0, error: 'The net has no straight trace to tune' };
-  const pitch = Math.max(4 * width, 0.8); // one bump consumes this much of the segment
-  const margin = pitch;
-  const room = best.len - 2 * margin;
-  const maxBumps = Math.floor(room / pitch);
-  if (maxBumps < 1) return { ops: [], added: 0, error: `The longest straight trace (${best.len.toFixed(2)} mm) is too short to tune` };
-  const maxAmp = opts.amplitude ?? 1.5;
-  let bumps = Math.min(maxBumps, Math.ceil(extra / (2 * maxAmp)));
-  let amp = extra / (2 * bumps);
-  if (amp > maxAmp) return { ops: [], added: 0, error: `Needs ${extra.toFixed(2)} mm but this segment can add at most ${(2 * maxAmp * maxBumps).toFixed(2)} mm` };
-  if (amp < width * 1.5) (bumps = Math.max(1, Math.floor(extra / (3 * width)))), (amp = extra / (2 * bumps));
-  const ux = (best.b.x - best.a.x) / best.len;
-  const uy = (best.b.y - best.a.y) / best.len;
-  const side = opts.side ?? 1;
-  const nx = -uy * side;
-  const ny = ux * side;
-  const at = (s: number, h: number): Vec2 => ({ x: +(best!.a.x + ux * s + nx * h).toFixed(4), y: +(best!.a.y + uy * s + ny * h).toFixed(4) });
-  const start = (best.len - bumps * pitch) / 2;
-  const pts: Vec2[] = [best.a, at(start, 0)];
-  for (let k = 0; k < bumps; k++) {
-    const s0 = start + k * pitch;
-    pts.push(at(s0 + pitch / 4, 0), at(s0 + pitch / 4, amp), at(s0 + (3 * pitch) / 4, amp), at(s0 + (3 * pitch) / 4, 0));
+  if (!traces.length) return { candidates: [], error: 'The net has no straight trace to tune' };
+  const partner = opts.partner ? piecesOf(doc, engine, opts.partner) : [];
+  const gap = num('diffGap') ?? 0;
+  const ampMax = opts.amplitude ?? num('tuneAmplitude') ?? 1.5;
+  traces.sort((x, y) => y.len - x.len);
+  const out: TuneCandidate[] = [];
+  let why = '';
+  for (const tr of traces) {
+    const w = tr.w;
+    const L = (opts.spacing ?? num('tuneSpacing') ?? 3 * w) + w; // leg centre to leg centre
+    const ux = (tr.b.x - tr.a.x) / tr.len, uy = (tr.b.y - tr.a.y) / tr.len;
+    // Chamfer and bump height: the fewest bumps that fit under the height limit.
+    const solve = (n: number) => {
+      const per = extra / n;
+      let c = Math.min(w, L / 3);
+      let A = (per + (8 - 4 * SQ2) * c) / 2;
+      if (A < 3 * c) (c = per / (6 - (8 - 4 * SQ2))) && (A = 3 * c); // small bump: c = A / 3
+      return { c, A };
+    };
+    const margin = (c: number) => Math.max(w, c) + c;
+    const span = (n: number, c: number) => n * 2 * L - L + 2 * c; // along the trace, chamfers included
+    let n = 1;
+    let sol = solve(1);
+    while (sol.A > ampMax + 1e-9 && span(n + 1, solve(n + 1).c) + 2 * margin(solve(n + 1).c) <= tr.len) sol = solve(++n);
+    if (sol.A > ampMax + 1e-9) {
+      why ||= `Needs ${extra.toFixed(2)} mm; the longest straight trace (${tr.len.toFixed(2)} mm) fits ${n} bump(s) of at most ${ampMax} mm`;
+      continue;
+    }
+    if (sol.A < w) {
+      why ||= `${extra.toFixed(3)} mm is too little for a bump on a ${w} mm trace`;
+      continue;
+    }
+    const { c, A } = sol;
+    if (span(n, c) + 2 * margin(c) > tr.len) {
+      why ||= `The longest straight trace (${tr.len.toFixed(2)} mm) is too short to tune`;
+      continue;
+    }
+    // Next to the bend: the end that meets another trace of the net.
+    const joins = (q: Vec2) => ends.filter((e) => Math.hypot(e.x - q.x, e.y - q.y) < 1e-3).length > 1;
+    const ja = joins(tr.a), jb = joins(tr.b);
+    const u0 = ja && !jb ? margin(c) + c : jb && !ja ? tr.len - margin(c) - span(n, c) + c : (tr.len - span(n, c)) / 2 + c;
+    // Away from the partner where this trace runs beside it (a pair's half).
+    let sides: (1 | -1)[] = opts.side ? [opts.side] : [1, -1];
+    for (const pc of partner) {
+      if (pc.layer !== tr.layer) continue;
+      const ex = pc.b.x - pc.a.x, ey = pc.b.y - pc.a.y, M = Math.hypot(ex, ey);
+      if (M < 1e-9 || Math.abs(ux * ey - uy * ex) / M > 0.01) continue;
+      const cross = ux * (pc.a.y - tr.a.y) - uy * (pc.a.x - tr.a.x); // > 0: partner on the left
+      if (gap && Math.abs(Math.abs(cross) - w / 2 - pc.w / 2 - gap) > Math.max(0.02, gap * 0.1)) continue;
+      const t0 = (pc.a.x - tr.a.x) * ux + (pc.a.y - tr.a.y) * uy, t1 = (pc.b.x - tr.a.x) * ux + (pc.b.y - tr.a.y) * uy;
+      if (Math.max(t0, t1) < u0 - c || Math.min(t0, t1) > u0 + span(n, c)) continue;
+      const away: 1 | -1 = cross > 0 ? -1 : 1;
+      sides = opts.side && opts.side !== away ? [] : [away];
+      break;
+    }
+    for (const side of sides) {
+      const nx = -uy * side, ny = ux * side;
+      const at = (s0: number, h: number): Vec2 => ({ x: +(tr.a.x + ux * s0 + nx * h).toFixed(4), y: +(tr.a.y + uy * s0 + ny * h).toFixed(4) });
+      const pts: Vec2[] = [tr.a];
+      for (let k = 0; k < n; k++) {
+        const u = u0 + k * 2 * L, v = u + L;
+        pts.push(at(u - c, 0), at(u, c), at(u, A - c), at(u + c, A), at(v - c, A), at(v, A - c), at(v, c), at(v + c, 0));
+      }
+      pts.push(tr.b);
+      const clean = pts.filter((q, i) => i === 0 || Math.hypot(q.x - pts[i - 1]!.x, q.y - pts[i - 1]!.y) > 1e-6);
+      const keep = tr.t.rules.filter((r) => !['start', 'end', 'layer', 'mid'].includes(r.name));
+      const ops: Op[] = [{ op: 'remove', uid: tr.t.uid }];
+      const index = node.children.indexOf(tr.t.uid);
+      for (let i = 0; i + 1 < clean.length; i++)
+        ops.push({ op: 'add', parent: node.uid, index: index + i, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { ...tr.t.props, tuned: true }, rules: [{ name: 'start', value: clean[i]! }, { name: 'end', value: clean[i + 1]! }, { name: 'layer', value: tr.layer }, ...keep], parent: node.uid, children: [] }] } });
+      out.push({ ops, added: Math.round(bumpGain(A, c) * n * 1000) / 1000, trace: tr.t.uid, side });
+      if (out.length >= (opts.max ?? 12)) return { candidates: out };
+    }
   }
-  pts.push(at(start + bumps * pitch, 0), best.b);
-  const clean = pts.filter((p, i) => i === 0 || Math.hypot(p.x - pts[i - 1]!.x, p.y - pts[i - 1]!.y) > 1e-6);
-  const layer = engine.get(best.t.uid, 'layer')?.value as string;
-  const keep = best.t.rules.filter((r) => !['start', 'end', 'layer'].includes(r.name));
-  const ops: Op[] = [{ op: 'remove', uid: best.t.uid }];
-  const index = node.children.indexOf(best.t.uid);
-  for (let i = 0; i + 1 < clean.length; i++) {
-    ops.push({ op: 'add', parent: node.uid, index: index + i, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: { tuned: true }, rules: [{ name: 'start', value: clean[i]! }, { name: 'end', value: clean[i + 1]! }, { name: 'layer', value: layer }, ...keep], parent: node.uid, children: [] }] } });
-  }
-  return { ops, added: Math.round(2 * amp * bumps * 1000) / 1000 };
+  return out.length ? { candidates: out } : { candidates: [], error: why || 'No trace to tune' };
+}
+
+/** The first candidate of `planTune` on the given side (kept for callers of the older generator). */
+export function planMeander(doc: Doc, engine: StyleEngine, net: string, extra: number, opts: { amplitude?: number; side?: 1 | -1 } = {}): { ops: Op[]; added: number; error?: string } {
+  const r = planTune(doc, engine, net, extra, opts);
+  const c = r.candidates[0];
+  return c ? { ops: c.ops, added: c.added } : { ops: [], added: 0, error: r.error ?? 'No trace to tune' };
 }
 
 type Piece = { layer: string; a: Vec2; b: Vec2; w: number };

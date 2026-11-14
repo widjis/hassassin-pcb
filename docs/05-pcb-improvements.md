@@ -787,10 +787,36 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     Test (`diffpair.test.ts`): on the routed `pairs` fixture both pairs run 28.8 – 28.9 mm coupled and
     3.2 – 3.3 mm uncoupled (under 6 mm); taking out the longest trace of USB_N makes the coupled length
     shorter and the uncoupled length longer.
-  - Still open in P10: arc corners for a pair (with `cornerStyle: arc` a pair keeps 45° corners, so the
-    arc style test leaves the fixture out); the router keeping `diffUncoupledMax`; tuning (`diffSkewMax`, serpentines on any
-    segment with 45° / arc corners and 3 × width spacing); a pair whose halves swap sides between its ends
-    (routed one by one today); ground return vias.
+  - *Progress (2026-11-14), fifth part:* length tuning.
+    - `planTune` in `lengths.ts` replaces the old serpentine on the longest trace (`planMeander` stays as a
+      wrapper): candidates on every straight trace long enough, longest first, each side, best first.
+      A bump is a rectangle with 45° chamfered corners (chamfer up to the trace width), so the trace never
+      turns more than 45° at once; it adds 2·A − (8 − 4√2)·c. The fewest bumps under the height limit
+      (rule `tuneAmplitude`, default 1.5 mm); legs `tuneSpacing` apart edge to edge (default 3 × width);
+      small mismatches get one small bump (chamfer A / 3), below one trace width nothing is added. The bumps
+      sit at the end of the trace that meets another trace of the net, else in its middle; where the trace
+      runs beside a partner at the pair gap, only on the side away from it. Tuned pieces keep the
+      original trace's properties (the first version lost the autorouter's mark, seen in the picture).
+    - Rules `diffSkewMax` (length) and `diffSkewMaxPs` (time, wins); the USB 2.0 preset gives 1.27 mm
+      and `classify_nets` writes it as a computed rule.
+    - Tools: `tune_length` uses the candidates (first without a new DRC error); `match` compares in time
+      when the stackup gives delays, its bumps away from that net. New `tune_pairs`: pairs over their
+      limit (in time, from each half's delay per mm) get the shorter half tuned; `all` tunes every pair
+      with a skew over 0.02 mm. `autoroute` tunes pairs over their limit afterwards (`tune=false` leaves
+      them; the result lists them as `tuned`). The Board panel's Match button uses the same candidates.
+    Tests (`tuning.test.ts`): a pair drawn by hand 3 mm apart in length with a 0.5 mm limit is tuned to
+    < 0.02 mm (< 0.2 ps), corners ≤ 45°, legs ≥ 3 W apart, bumps on the side away from the partner and
+    under 1.5 mm, a second run leaves it; a 0.6 mm `tuneAmplitude` spreads it over more bumps; on the
+    routed `pairs` fixture the USB 2.0 limit is set, autoroute has nothing to tune (skew 0.03 mm), and
+    +2 mm on USB_N keeps DRC clean, corners ≤ 45°, legs 3 W apart and the gap to USB_P. Picture:
+    `samples/tune.html`.
+  - Still open in P10: arc corners for a pair and for serpentines (with `cornerStyle: arc` a pair keeps 45°
+    corners, so the arc style test leaves the fixture out); the router keeping `diffUncoupledMax`;
+    tuning a pair close to the bend that caused the skew when both ends of the trace meet other traces
+    (the bumps go in the middle then), and with small bumps on both halves; serpentines over more than one
+    trace when no single one is long enough; length groups tuned by a tool (the Board panel shows their
+    spread only); a pair whose halves swap sides between its ends (routed one by one today); ground return
+    vias.
 - [ ] **P11. Autoplacer that uses the schematic.**
   - The greedy placement of today stays as the start; an improvement pass follows (simulated annealing or
     pairwise swaps, written from textbook descriptions) that minimises total ratsnest length (half-perimeter

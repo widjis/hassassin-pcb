@@ -16,7 +16,7 @@ import {
   planSignalClasses,
   SIGNAL_CLASSES,
   planAutoroute,
-  planMeander,
+  planTune,
   runDrc,
   stackupOf,
   stringifyDoc,
@@ -225,15 +225,19 @@ export function mountBoard(app: App, root: HTMLElement): void {
     const pairs = withCoupling(doc, engine, diffPairs(lens));
     const groups = lengthGroups(lens);
     root.append(h('div', { class: 'section-title', style: 'margin-top:12px' }, h('span', {}, `Lengths · ${pairs.length} pair(s)`)));
-    const tune = (net: string, target: number) => {
+    // Tune `net` with a serpentine to match `other` (in time when the stackup gives delays), bumps away
+    // from it; the first candidate without a new DRC error is kept (P10).
+    const tune = (net: string, other: string) => {
       const before = runDrc(doc, engine, app.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
-      const cur = lens.find((l) => l.net === net)!.length;
-      for (const side of [1, -1] as const) {
-        const plan = planMeander(doc, engine, net, target - cur, { side });
-        if (plan.error) return app.say(plan.error);
-        app.apply(`Tune length ${net}`, plan.ops);
+      const cur = lens.find((l) => l.net === net)!;
+      const m = lens.find((l) => l.net === other)!;
+      const extra = cur.delay !== undefined && m.delay !== undefined && cur.length > 0 ? (m.delay - cur.delay) / (cur.delay / cur.length) : m.length - cur.length;
+      const plan = planTune(doc, engine, net, extra, { partner: other });
+      if (!plan.candidates.length) return app.say(plan.error ?? `Nothing to tune on ${net}`);
+      for (const c of plan.candidates) {
+        app.apply(`Tune length ${net}`, c.ops);
         const after = runDrc(doc, engine, app.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
-        if (after <= before) return app.say(`${net}: +${plan.added} mm`);
+        if (after <= before) return app.say(`${net}: +${c.added} mm`);
         app.undo();
       }
       app.say(`A serpentine on ${net} would break clearance; tune it by hand.`);
@@ -248,7 +252,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
           h('span', { class: 'dim' }, `${p.lengthP.toFixed(2)} / ${p.lengthN.toFixed(2)} mm`),
           h('span', { class: p.skew > 0.15 ? 'err-text' : 'dim', title: 'Skew in length, and in time from each layer\'s propagation delay' }, `skew ${p.skew.toFixed(2)} mm${p.skewPs !== undefined ? ` · ${p.skewPs.toFixed(1)} ps` : ''}`),
           p.uncoupled !== undefined ? h('span', { class: p.uncoupledMax !== undefined && p.uncoupled > p.uncoupledMax ? 'err-text' : 'dim', title: `Side by side at the pair gap: ${p.coupled!.toFixed(2)} mm. Uncoupled: the longer half's length apart from its partner${p.uncoupledMax !== undefined ? ` (rule diffUncoupledMax ${p.uncoupledMax} mm)` : ''}` }, `uncoupled ${p.uncoupled.toFixed(2)} mm`) : null,
-          p.skew > 0.05 ? h('button', { onclick: () => tune(short, Math.max(p.lengthP, p.lengthN)), title: `Add a serpentine to ${short} to match ${long}` }, 'Match') : null,
+          p.skew > 0.05 ? h('button', { onclick: () => tune(short, long), title: `Add a serpentine to ${short} to match ${long}` }, 'Match') : null,
         ),
       );
     }

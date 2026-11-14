@@ -78,6 +78,10 @@ const defs: RuleDef[] = [
   { name: 'diffImpedance', label: 'Differential impedance', kind: 'number', inheritable: true, help: 'Target differential impedance (ohm) of a pair this net belongs to (P10). classify_nets sizes the pair\'s width and gap from it on the outer layer; an interface preset (set_pin_signal interface) gives one too.' },
   { name: 'diffGap', label: 'Pair gap', kind: 'length', inheritable: true, help: 'Edge-to-edge gap between the two traces of a differential pair (P10).' },
   { name: 'diffUncoupledMax', label: 'Pair uncoupled max', kind: 'length', inheritable: true, help: 'Longest length of either half of a differential pair that may run apart from its partner (not side by side at the pair gap), mostly the breakouts at the pads (P10). net_lengths and the Board panel report pairs over it.' },
+  { name: 'diffSkewMax', label: 'Pair skew max', kind: 'length', inheritable: true, help: 'Largest length mismatch allowed between the two halves of a differential pair (P10); compared in time with each layer\'s propagation delay when the stackup gives it. An interface preset gives one (USB 2.0: 1.27 mm). tune_pairs and autoroute tune pairs over it.' },
+  { name: 'diffSkewMaxPs', label: 'Pair skew max (time)', kind: 'number', inheritable: true, help: 'Largest delay mismatch (ps) allowed between the two halves of a differential pair (P10); wins over diffSkewMax.' },
+  { name: 'tuneAmplitude', label: 'Tuning amplitude', kind: 'length', inheritable: true, help: 'Largest height of a serpentine bump when a net is tuned for length (default 1.5 mm).' },
+  { name: 'tuneSpacing', label: 'Tuning spacing', kind: 'length', inheritable: true, help: 'Edge-to-edge spacing between the legs of a serpentine (default 3 × the trace width), so it does not couple to itself.' },
   { name: 'diffPairClearance', label: 'Pair clearance', kind: 'length', inheritable: true, help: 'Autorouter: edge-to-edge clearance from a differential pair\'s traces and vias to other nets\' traces and vias, for crosstalk (P10). classify_nets sets 2 × the trace width (3 W centre to centre). Not applied to pads. The larger of the two nets\' values wins.' },
 ];
 
