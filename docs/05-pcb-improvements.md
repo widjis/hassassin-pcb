@@ -136,7 +136,7 @@ and vias, with no UI; the lock UI stays in P5. Keep-out areas do not exist yet: 
 a hook for them, and the acceptance check that they are respected moves to P6. The interactive parts of
 P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to P4, which they need.
 
-- [ ] **P8a. Benchmark and test harness.**
+- [x] **P8a. Benchmark and test harness.**
   - `apps/cli/bench/autoroute.ts` reads a project folder (snapshot plus `log.jsonl`) as well as a single
     `.hpcb`, so the figures are for the board as it is, not as of the last snapshot; it records the reason
     of every failure, including `time limit`.
@@ -149,8 +149,8 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - The stated time limit and the code agree (today the comment says 20 s, the code uses 30 s).
   - *Progress:* harness, fixtures and log replay done (`packages/tools/src/routeBench.ts`,
     `packages/tools/test/autoroute-fixtures.test.ts`, `apps/cli/bench/autoroute.ts --fixtures`); known gaps
-    are recorded as `it.fails` tests that flip when an item fixes them. Still open: the baselines of the
-    two benchmark boards (their `.data` folders are not on the implementer's machine yet). Fixture
+    are recorded as `it.fails` tests that flip when an item fixes them. The baselines of the two
+    benchmark boards are measured on copies of the owner's boards in the "Hardware Project" folder (below). Fixture
     baselines on v0.0.3:
     | Fixture | Routed | Vias | Length | Sharp corners (≥ 90°) | Bends / connection | Failure reason |
     |---|---|---|---|---|---|---|
@@ -180,6 +180,37 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     routing (pour priority, P6), none from the router; 1 corner of 90° is left. Still poor, for P8f: long
     detours along the board edge on B.Cu, 13 more vias and 15 % more length than the hand routing.
     `bench/compare.ts` draws the hand and the routed copper side by side (`--save` writes both boards).
+
+    *Solar MPPT board (2026-11-14, with the owner's leave):* revision 4 (`solar-mppt-6v-lfp1s/r4-layout`,
+    2 layers, 54 parts, 43 nets, a 0.4 mm VQFN-29 charger, an SOIC-20W, 43 vias, 2 GND pours), run on a
+    copy in the scratchpad with `--kicad-rules` (one Default class: 0.2 mm track and clearance, 0.6 mm via,
+    0.5 mm copper to edge). It imports with 0 ratsnest and 0 DRC errors; 329 items of the unpoured nets are
+    ripped up, 76 connections. v0.0.3 measured in a temporary worktree of tag `v0.0.3` with the same steps:
+    | Router | Routed | Vias | Length | DRC errors | Time |
+    |---|---|---|---|---|---|
+    | Hand routing (same nets) | 76 / 76 | 32 | 568 mm | 0 | — |
+    | v0.0.3 | 45 / 76 (59 %) | 15 | 266 mm | 0 | 14.5 s |
+    | P11 head, before the fixes below | 48 / 76 | 9 | 268 mm | 0 | 0.8 s |
+    | P11 head + fixes | **76 / 76** | 45 | 521 mm | 0 | 5.6 s (+ check 0.6 s) |
+    | the same with signal classes (`--classify`) | 76 / 76 | 40 | 493 mm | 0 | 7.5 s |
+    The run found three router faults, fixed with it:
+    - every connection at the VQFN's 0.2 mm pads was refused ("pad is narrower than the minimum trace
+      width", 28 connections): the pad's width, taken from its outline polygon, measured 0.19999… and was
+      rounded *down* to 0.199, under the 0.2 mm minimum; it is now rounded to the micrometre;
+    - four pads are KiCad `custom` pads (a 0.7 × 0.2 mm polygon on a 0.15 mm anchor) that the importer reads
+      as their anchor only, so they really were narrower than the minimum; a pad narrower than the minimum
+      trace width is now entered at the minimum width (as KiCad allows), not refused; clearance is still
+      checked. (Reading custom pad primitives is for the KiCad importer, outside the PM2 list.)
+    - a route that ended on a fanout stub's end was left 0.21 mm off the copper (BAT_CHG): the route that
+      took the stub in had its corner at the stub's end cut by its own 45° smoothing, and the stub was then
+      not written, as that route "held" it. A route now holds a stub only if it still reaches its end;
+      otherwise the stub is written too. Tests: `narrow-pads.test.ts` (a pad exactly as wide as the minimum,
+      which fails on the old code, and a narrower one).
+    Not like the hand routing: the hand layout runs the power paths 0.5 – 0.8 mm wide (tracks set one by
+    one in KiCad); the project's only net class is 0.2 mm, and the signal classes widen a net only from a
+    current given on it or its pins, which this board does not have, so every autorouted trace is 0.2 mm.
+    That wants currents on the power nets (P16, the owner's review), or a wider net class in the project.
+    Picture: `samples/solar.html`.
 - [x] **P8b. Per-net clearance (clearance field).**
   - The obstacle grid stores, per layer and cell, the distance to the nearest copper and the nearest copper
     of a *different* net than that one (a two-label distance transform, computed once and updated when a
@@ -672,9 +703,23 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     the CLI and the MCP server now load it for `autoroute` as for `refill_pours`. Checked on a copy of the
     RGB lamp with its traces deleted: progress lines on stderr, 81 / 81 routed, 24 vias. Tests check the
     lines of both tools.
-  - Still open in P8g: the acceptance run on the solar MPPT board (needs the owner's permission). On the
-    RGB lamp copy the targets are met except "DRC errors after refill: 0": the 4 errors left are pour
-    against pour on F.Cu, present on the hand-routed board after a refill too (pour priority, P6).
+  - *Acceptance (2026-11-14), on copies:*
+    | Board | Metric | Baseline (v0.0.3) | Target | Now |
+    |---|---|---|---|---|
+    | Solar MPPT (r4) | Connections routed | 45 / 76 (59 %) | ≥ 95 % | **76 / 76 (100 %)** |
+    | RGB sleep lamp (r6) | Connections routed | 33 / 59 (P8a) | 100 % | **59 / 59** |
+    | Solar MPPT | DRC errors after refill | 0 | 0 | **0** |
+    | RGB lamp | DRC errors after refill | 4 (pour against pour) | 0 | 4, the same pour-against-pour errors |
+    | Solar MPPT | Vias, length per routed connection | 0.33, 5.9 mm (only the 45 easy ones) | not worse | 0.59, 6.9 mm (hand: 0.42, 7.5 mm) |
+    | RGB lamp | Vias, length | 6 vias, 244 mm for 33 | not worse per connection | 35 vias, 882 mm for 59 (hand 38, 901) |
+    | Both | Run time | 14.5 s / 30 s | ≤ 30 s each | 6.2 s / 26 s (with the DRC check) |
+    Every target is met except two that the baseline makes hard to read: the RGB lamp's 4 DRC errors are pour
+    against pour on F.Cu, the same after a refill of the hand-routed board with no routing at all (pour
+    priority, P6); and per connection the solar board takes more vias and length than v0.0.3's 45 because
+    v0.0.3 only routed the short, easy ones; against the hand routing of the same nets it is shorter (521
+    against 568 mm) with 13 more vias.
+  - Still open in P8g: the owner's word on the two readings above (the pour errors belong to P6; the per
+    connection figure compared with the hand routing rather than with v0.0.3's partial result).
 - [x] **P9. Shove engine (core).**
   - A core function that, given a new trace or via, moves traces and vias of other nets in its way aside
     (walk-around first, then push), keeping their clearance and connections, and refuses when they cannot
@@ -943,9 +988,15 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     C1 and C2 within 4 mm of a supply pin of U1 and U2 (one each); a group box keeps its parts at most
     as spread as without it, and is reported; a connector marked `placeAtEdge` ends under 1.5 mm from the
     edge; a locked part stays and the same seed gives the same operations. 231 tests pass.
-  - Still open in P11: the acceptance on the solar MPPT board (needs the owner's permission); the RGB
-    lamp meets it with the default seed but not with every seed; "facing out" is not covered by a test
-    (the fixtures' connectors have their pads round their origin); keep-out areas wait for P6.
+  - *Solar MPPT board (2026-11-14, copy of r4):* greedy only 590.1 mm ratsnest, 1 part not placed and
+    1 overlap, then 71 / 76 routed (49 vias, 615 mm); improved 431.0 mm (**−27 %**), 0 overlaps, every part
+    placed, **76 / 76 routed, 0 DRC errors**, 43 vias, 415 mm, routed in 1.7 s (placing 11.5 s). Seeds 2
+    and 3: −29.6 % and −31.7 %, 76 / 76 routed, 33 and 26 vias, 0 DRC errors. 5 decoupling capacitors were
+    tied to their IC, 2 sheet blocks kept together.
+  - Still open in P11: the owner's word on the RGB lamp, which meets the 20 % with the default seed (−30 %)
+    but not with every seed (−24 %, −15 %), and whose 4 DRC errors are the pour-against-pour ones of P8g;
+    "facing out" is not covered by a test (the fixtures' connectors have their pads round their origin);
+    keep-out areas wait for P6.
 
 **PM2 done when:** every item above is checked.
 

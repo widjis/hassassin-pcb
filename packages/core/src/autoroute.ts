@@ -857,13 +857,16 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
     for (const end of [r.a, r.b]) {
       for (const sh of shapes) {
         if (sh.kind !== 'pad' || sh.net !== r.net || !sh.areas[0] || !inArea(end, sh.areas[0])) continue;
-        const w = Math.min(sh.box.maxX - sh.box.minX, sh.box.maxY - sh.box.minY);
-        if (w >= width) continue;
+        // The box of the pad's outline polygon: a 0.2 mm pad measures 0.19999…, so round to the micrometre
+        // (rounding down made it 0.199 and refused every connection of a 0.2 mm pad under a 0.2 mm minimum).
+        const w = Math.round(Math.min(sh.box.maxX - sh.box.minX, sh.box.maxY - sh.box.minY) * 1000) / 1000;
+        if (w >= width - 1e-9) continue;
         const m = width / 2 + cn;
-        necks.push({ box: { minX: sh.box.minX - m, minY: sh.box.minY - m, maxX: sh.box.maxX + m, maxY: sh.box.maxY + m }, w: Math.floor(w * 1000) / 1000 });
+        // A pad narrower than the minimum trace width (a tiny pad, or a custom pad read as its anchor only) is
+        // entered at the minimum width, as KiCad allows; clearance is still checked like anywhere else.
+        necks.push({ box: { minX: sh.box.minX - m, minY: sh.box.minY - m, maxX: sh.box.maxX + m, maxY: sh.box.maxY + m }, w: Math.max(w, minTrace) });
       }
     }
-    if (necks.some((n) => n.w < minTrace)) return { ok: false, reason: 'pad is narrower than the minimum trace width' };
     const neckAt = (x: number, y: number) => {
       let w = width;
       for (const n of necks) if (x >= n.box.minX && x <= n.box.maxX && y >= n.box.minY && y <= n.box.maxY) w = Math.min(w, n.w);
@@ -2353,7 +2356,14 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
     const mine = emitted.filter((rt) => rt.net === f.pad.net);
     const onStub = (q: Vec2) => distToSegment(q, f.a, f.e) <= f.half + 1e-6 && !(f.pad.areas[0] && inArea(q, f.pad.areas[0]));
     const touched = mine.some((rt) => rt.segs.some((sg) => sg.li === f.li && (onStub(sg.a) || onStub(sg.b))) || rt.vias.some(onStub));
-    const has = mine.some((rt) => rt.segs.some((sg) => sg.li === f.li && [sg.a, sg.b].some((q) => Math.hypot(q.x - f.a.x, q.y - f.a.y) < 1e-6) && [sg.a, sg.b].some((q) => distToSegment(q, f.a, f.e) <= 1e-6 && Math.hypot(q.x - f.a.x, q.y - f.a.y) > 1e-6)));
+    // Held: a route takes the stub in from the pad's centre and still reaches its end (the corner there may
+    // have been cut by the route's own smoothing; then the stub is written here too, or a route that ends on
+    // the stub's end is left 0.2 mm off the copper, as on the solar MPPT board).
+    const has = mine.some(
+      (rt) =>
+        rt.segs.some((sg) => sg.li === f.li && [sg.a, sg.b].some((q) => Math.hypot(q.x - f.a.x, q.y - f.a.y) < 1e-6) && [sg.a, sg.b].some((q) => distToSegment(q, f.a, f.e) <= 1e-6 && Math.hypot(q.x - f.a.x, q.y - f.a.y) > 1e-6)) &&
+        rt.segs.some((sg) => sg.li === f.li && distToSegment(f.e, sg.a, sg.b) <= 1e-6),
+    );
     const node = netNode.get(f.pad.net!);
     if (!touched || has || !node) continue;
     const width = netRule(f.pad.net!, 'traceWidth', 0.25);
