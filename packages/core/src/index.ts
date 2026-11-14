@@ -48,3 +48,4 @@ export * from './routeCheck.ts';
 export * from './shove.ts';
 export * from './interactive.ts';
 export * from './boardSelect.ts';
+export * from './keepout.ts';

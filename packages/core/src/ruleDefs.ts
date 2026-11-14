@@ -17,7 +17,8 @@ export type RuleKind =
   | 'points'
   | 'layers'
   | 'keepout'
-  | 'lengthList';
+  | 'lengthList'
+  | 'flags';
 
 export interface RuleDef {
   name: string;
@@ -59,6 +60,8 @@ const defs: RuleDef[] = [
   { name: 'viaHole', label: 'Via hole', kind: 'length', inheritable: true, help: 'Drill diameter of vias.' },
   { name: 'viaKind', label: 'Via kind', kind: 'enum', inheritable: true, options: ['through', 'blind', 'buried', 'micro'], help: 'Which layers a via may connect.' },
   { name: 'pourLayers', label: 'Pour layers', kind: 'layers', inheritable: false, help: 'Layers where this net gets a copper pour.' },
+  { name: 'pourPriority', label: 'Pour priority', kind: 'number', inheritable: false, help: 'Where pours of different nets overlap on a layer, the higher priority is filled first and the other keeps its clearance from it (P6; default 0; equal priorities: the pour listed first wins).' },
+  { name: 'keepoutOf', label: 'Forbids', kind: 'flags', inheritable: false, options: ['traces', 'vias', 'pours', 'parts'], help: 'What a keep-out area forbids on its layers (P6; default traces vias pours).' },
   { name: 'thermalRelief', label: 'Thermal relief', kind: 'enum', inheritable: true, options: ['spokes', 'solid', 'none'], help: 'How pads join a pour.' },
   { name: 'thermalSpokeWidth', label: 'Thermal spoke width', kind: 'length', inheritable: true, help: 'Width of relief spokes.' },
   { name: 'stitchSpacing', label: 'Stitching via spacing', kind: 'length', inheritable: true, help: 'Grid pitch for stitching vias in a pour (0 = off).' },
@@ -156,6 +159,10 @@ export function parseRuleValue(name: string, input: string | RuleValue): RuleVal
       return parseVec2(s, def.kind) ?? fail();
     case 'layers':
       return s.toLowerCase() === 'all' ? ['*'] : splitTopLevel(s);
+    case 'flags': {
+      const xs = splitTopLevel(s.toLowerCase());
+      return xs.every((x) => def.options?.includes(x)) ? xs : fail();
+    }
     case 'lengthList': {
       const vals = splitTopLevel(s).map((p) => parseLength(p));
       return vals.every((v): v is number => v !== null) ? (vals.map((v) => ({ x: v, y: 0 })) as Vec2[]) : fail();
@@ -212,6 +219,8 @@ export function formatRuleValue(name: string, value: RuleValue, unit = 'mm'): st
       return Array.isArray(value) ? ((value as string[])[0] === '*' ? 'All' : (value as string[]).join(', ')) : String(value);
     case 'lengthList':
       return Array.isArray(value) ? (value as Vec2[]).map((v) => L(v.x)).join(', ') : String(value);
+    case 'flags':
+      return Array.isArray(value) ? (value as string[]).join(' ') : String(value);
     case 'points':
       return Array.isArray(value) ? `${value.length} points` : String(value);
     case 'keepout': {

@@ -19,6 +19,7 @@ import { computeRatsnest } from './connectivity.ts';
 import { arcPoints, distToSegment, pointInPolygon, route45 } from './geom.ts';
 import { netSignals } from './signal.ts';
 import { shoveChains, type ShovePusher, type ShoveSeg } from './shove.ts';
+import { keepoutAreas, keepoutShapes } from './keepout.ts';
 
 export interface AutorouteOptions {
   /** Only these nets (default: every net with unrouted connections). */
@@ -321,6 +322,10 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
   }
 
   const shapes = collectCopper(doc, engine, copper);
+  // Keep-out areas (P6): those that forbid traces join the fixed copper as shapes of no net; those that
+  // forbid vias are marked where vias may not sit (below, with the pads).
+  const keepouts = keepoutAreas(doc, engine, copper);
+  shapes.push(...keepoutShapes(keepouts));
   const routedNets = [...new Set(rats.map((r) => r.net))];
 
   // ---- Fanout (P8f). Pads of a dense part (8 or more SMD pads on a layer, centres closer than 0.85 mm)
@@ -333,7 +338,7 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
   if (opts.fanout !== false) {
     const byPart = new Map<string, typeof shapes>();
     for (const s of shapes) {
-      if (s.kind !== 'pad' || s.hole || !s.areas[0] || !layers.includes(s.layer)) continue;
+      if (s.kind !== 'pad' || s.hole || !s.areas[0] || !layers.includes(s.layer) || s.net?.startsWith('__keepout:')) continue;
       const part = doc.nodes.get(s.uid)?.parent;
       if (!part) continue;
       const k = `${part}|${s.layer}`;
@@ -544,6 +549,25 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
           }
         }
       }
+    }
+  }
+
+  // Keep-out areas that forbid vias (P6): no via cell inside them (the via check keeps its radius from them).
+  for (const k of keepouts) {
+    if (!k.forbid.has('vias')) continue;
+    let y0 = Infinity, y1 = -Infinity;
+    for (const q of k.poly) (y0 = Math.min(y0, q.y)), (y1 = Math.max(y1, q.y));
+    for (let j = Math.max(0, Math.floor((y0 - minY) / g)); j <= Math.min(H - 1, Math.ceil((y1 - minY) / g)); j++) {
+      const y = cy(j);
+      const xs: number[] = [];
+      for (let t = 0; t < k.poly.length; t++) {
+        const a0 = k.poly[t]!;
+        const b0 = k.poly[(t + 1) % k.poly.length]!;
+        if ((a0.y > y) !== (b0.y > y)) xs.push(a0.x + ((y - a0.y) * (b0.x - a0.x)) / (b0.y - a0.y));
+      }
+      xs.sort((u, v) => u - v);
+      for (let t = 0; t + 1 < xs.length; t += 2)
+        for (let i = Math.max(0, Math.floor((xs[t]! - minX) / g)); i <= Math.min(W - 1, Math.ceil((xs[t + 1]! - minX) / g)); i++) (padMask[j * W + i] = 1), (thermal[j * W + i] = 0);
     }
   }
 

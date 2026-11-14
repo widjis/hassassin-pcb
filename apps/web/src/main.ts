@@ -2,6 +2,7 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
+import { DRAW_KINDS } from './tools/draw.ts';
 import { isTrackpadScroll, SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
 import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
@@ -673,6 +674,33 @@ $('netExportBtn').addEventListener('click', () => {
   if (r.unresolved.length) notes.push(`no KiCad footprint for ${r.unresolved.map((u) => u.ref).join(', ')}`);
   app.say(`Exported ${base}.net — ${notes.join(' · ')}`);
 });
+// Drawing tools (P6): a menu under the Draw button.
+const drawBtn = $<HTMLButtonElement>('drawBtn');
+let drawMenu: HTMLElement | null = null;
+const closeDraw = () => {
+  drawMenu?.remove();
+  drawMenu = null;
+};
+drawBtn.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  if (drawMenu) return closeDraw();
+  const r = drawBtn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 4}px`, zIndex: '60', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', padding: '6px', fontSize: '12px', display: 'grid', gap: '2px', minWidth: '210px', boxShadow: '0 6px 24px rgba(0,0,0,.4)' });
+  for (const d of DRAW_KINDS) {
+    const b = document.createElement('button');
+    b.textContent = d.label;
+    b.title = d.hint;
+    Object.assign(b.style, { textAlign: 'left', border: 'none', background: app.mode === 'draw' && app.drawing.kind === d.kind ? 'var(--panel-2)' : 'transparent' });
+    b.addEventListener('click', () => (closeDraw(), app.drawing.start(d.kind)));
+    menu.append(b);
+  }
+  menu.addEventListener('click', (e) => e.stopPropagation());
+  document.body.append(menu);
+  drawMenu = menu;
+});
+window.addEventListener('click', closeDraw);
+
 // Selection box filter (P1): a small menu under the Pick button.
 const pickBtn = $<HTMLButtonElement>('pickBtn');
 let pickMenu: HTMLElement | null = null;
@@ -717,6 +745,7 @@ $('fitBtn').addEventListener('click', () => app.fit());
 $('flipBtn').addEventListener('click', () => app.flip());
 const syncToolbar = () => {
   for (const b of tools.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.mode === app.mode);
+  drawBtn.classList.toggle('on', app.mode === 'draw');
   wrap.classList.toggle('route', app.mode === 'route');
   layerBtn.textContent = app.activeLayer;
   layerBtn.style.borderColor = app.activeLayer === 'B.Cu' ? '#3d8bff' : '#ef6a4c';
@@ -733,7 +762,7 @@ syncToolbar();
 
 // ---- canvas interaction ----
 const canvas = app.glCanvas;
-type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' | 'segment' | 'box'; sx: number; sy: number };
+type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' | 'segment' | 'box' | 'draw' | 'vertex'; sx: number; sy: number };
 let drag: Drag | null = null;
 // Space held over the board: dragging pans (P1, as in the schematic).
 let spaceDown = false;
@@ -765,7 +794,12 @@ canvas.addEventListener('pointerdown', (e) => {
   // Pan: middle button or Space + drag. In select mode a left drag on empty board draws a selection box.
   const panning = e.button === 1 || spaceDown;
   let kind: Drag['kind'] = 'pan';
-  if (app.mode === 'select' && !panning) {
+  if (app.mode === 'draw' && !panning && e.button === 0) {
+    kind = 'draw';
+    app.drawing.down(app.toWorld(sx, sy));
+  } else if (app.mode === 'select' && !panning && app.drawing.beginVertex(app.toWorld(sx, sy))) {
+    kind = 'vertex';
+  } else if (app.mode === 'select' && !panning) {
     kind = 'box';
     const uid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
     // One straight trace (P4): drag that segment sideways, its neighbours following.
@@ -802,13 +836,15 @@ canvas.addEventListener('pointermove', (e) => {
         app.selBox = { a: { x: drag.sx, y: drag.sy }, b: { x: sx, y: sy } };
         app.requestRender();
       } else if (drag.kind === 'segment') app.route.dragTo(world);
+      else if (drag.kind === 'vertex') app.drawing.dragVertex(world);
+      else if (drag.kind === 'draw') app.drawing.hover(world);
       else app.dragMove(world, !e.altKey);
     }
   }
   if (app.mode === 'route') {
     app.route.hover(world, e.shiftKey);
     app.requestRender();
-  } else if (!drag?.moved) app.hoverUid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
+  } else if (app.mode === 'draw') app.drawing.hover(world); else if (!drag?.moved) app.hoverUid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
   updateStatus();
 });
 
@@ -816,6 +852,12 @@ canvas.addEventListener('pointerup', (e) => {
   const { sx, sy } = local(e);
   if (drag?.kind === 'move') app.endMove();
   if (drag?.kind === 'segment') app.route.endDrag();
+  if (drag?.kind === 'vertex') app.drawing.endVertex();
+  if (drag?.kind === 'draw') {
+    app.drawing.up(app.toWorld(sx, sy), drag.moved);
+    drag = null;
+    return;
+  }
   canvas.style.cursor = spaceDown ? 'grab' : '';
   if (drag?.kind === 'box') {
     app.selBox = null;
@@ -854,6 +896,7 @@ canvas.addEventListener('contextmenu', (e) => {
   if (app.mode === 'route' && app.route.active) app.route.cancel();
 });
 canvas.addEventListener('dblclick', () => {
+  if (app.mode === 'draw') app.drawing.dblclick();
   if (app.mode === 'route' && app.route.active) app.route.cancel();
 });
 
@@ -981,6 +1024,7 @@ window.addEventListener('keydown', (e) => {
     }
     return e.preventDefault();
   }
+  if (app.mode === 'draw' && app.drawing.key(e)) return e.preventDefault();
   switch (e.key) {
     case 'Tab':
       app.setSpace('schematic');

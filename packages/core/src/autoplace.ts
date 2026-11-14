@@ -16,6 +16,7 @@ import { boardOutline } from './copper.ts';
 import { frameOf, padGeom, toWorld } from './frames.ts';
 import { distToSegment, place, pointInPolygon } from './geom.ts';
 import { netSignals } from './signal.ts';
+import { keepoutAreas, polygonsOverlap } from './keepout.ts';
 
 export interface AutoplaceOptions {
   /** Place these references (default: every part that is not on the board yet). */
@@ -180,7 +181,15 @@ export function planAutoplace(doc: Doc, engine: StyleEngine, copper: string[], o
   const edgeDist = boardDistance(outline);
   let ox0 = Infinity, oy0 = Infinity, ox1 = -Infinity, oy1 = -Infinity;
   for (const q of outline) (ox0 = Math.min(ox0, q.x)), (oy0 = Math.min(oy0, q.y)), (ox1 = Math.max(ox1, q.x)), (oy1 = Math.max(oy1, q.y));
+  // Keep-out areas that forbid parts (P6; on the top side, where parts are placed).
+  const partZones = keepoutAreas(doc, engine, copper).filter((k) => k.forbid.has('parts') && k.layers.includes(copper[0] ?? 'F.Cu'));
+  const inKeepout = (b: Box) => {
+    if (!partZones.length) return false;
+    const r = [{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.minY }, { x: b.maxX, y: b.maxY }, { x: b.minX, y: b.maxY }];
+    return partZones.some((k) => polygonsOverlap(r, k.poly));
+  };
   const inside = (b: Box) => {
+    if (inKeepout(b)) return false;
     if (b.minX < ox0 + sp || b.minY < oy0 + sp || b.maxX > ox1 - sp || b.maxY > oy1 - sp) return false;
     // Quick reject on the distance grid (0.25 mm cells), then the exact test against the edges near the box.
     if (samples(b).some((q) => edgeDist(q) < sp - 0.3)) return false;
@@ -291,7 +300,7 @@ export function planAutoplace(doc: Doc, engine: StyleEngine, copper: string[], o
     report.placed.push({ ref: el.name, at: found, ...(turn ? { rotation: (rot0 + turn) % 360 } : {}) });
   }
   if (opts.improve === false || !report.placed.length) return { ops, report };
-  const better = improvePlacement(doc, engine, copper, outline, { fixed, moving: toPlace.filter((e) => !fixed.includes(e)), positions, turned, failed: new Set(toPlace.filter((e) => !positions.has(e.uid)).map((e) => e.uid)), centre, ext, sp, inside, edgeDist, opts });
+  const better = improvePlacement(doc, engine, copper, outline, { fixed, moving: toPlace.filter((e) => !fixed.includes(e)), positions, turned, failed: new Set(toPlace.filter((e) => !positions.has(e.uid)).map((e) => e.uid)), centre, ext, sp, inside, edgeDist, inKeepout, opts });
   if (!better) return { ops, report };
   const out: Op[] = [];
   const placed: AutoplaceReport['placed'] = [];
@@ -351,7 +360,7 @@ function improvePlacement(
   engine: StyleEngine,
   copper: string[],
   outline: Vec2[],
-  ctx: { fixed: DocNode[]; moving: DocNode[]; positions: Map<string, Vec2>; turned: Map<string, number>; failed: Set<string>; centre: Vec2; ext: Map<string, Box>; sp: number; inside: (b: Box) => boolean; edgeDist: (p: Vec2) => number; opts: AutoplaceOptions },
+  ctx: { fixed: DocNode[]; moving: DocNode[]; positions: Map<string, Vec2>; turned: Map<string, number>; failed: Set<string>; centre: Vec2; ext: Map<string, Box>; sp: number; inside: (b: Box) => boolean; edgeDist: (p: Vec2) => number; inKeepout: (b: Box) => boolean; opts: AutoplaceOptions },
 ): { moves: { el: DocNode; at: Vec2; rot: number }[]; unplaced: string[]; ratsnest: { greedy: number; improved: number }; decoupling: { cap: string; ic: string; pin: string }[]; clusters: { block: string; parts: string[] }[]; atEdge: string[] } | undefined {
   const { sp, opts } = ctx;
   const all = [...ctx.fixed, ...ctx.moving];
@@ -528,6 +537,7 @@ function improvePlacement(
       const d = ctx.edgeDist(pt);
       if (d < need) o += need - d;
     }
+    if (ctx.inKeepout(b)) o += 2;
     return o > 0 ? (o + 0.5) * Math.max(b.maxX - b.minX, b.maxY - b.minY, 1) : 0;
   };
   const edgeCost = (q: Part, b: Box) => {

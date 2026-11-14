@@ -6,6 +6,7 @@ import type { Doc, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { boxValid, dist, pointInPolygon, segSegDist, segSegMid, type BBox } from './geom.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea, type CopperShape } from './copper.ts';
+import { keepoutHits } from './keepout.ts';
 import { computeRatsnest, type Ratsnest } from './connectivity.ts';
 import { formatLength } from './units.ts';
 import { frameOf, toWorld } from './frames.ts';
@@ -21,7 +22,8 @@ export type ViolationKind =
   | 'traceWidth'
   | 'holeSize'
   | 'noOutline'
-  | 'partOutsideBoard';
+  | 'partOutsideBoard'
+  | 'keepout';
 
 export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   short: 'Short circuit',
@@ -33,6 +35,7 @@ export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   holeSize: 'Hole too small',
   noOutline: 'Board outline missing',
   partOutsideBoard: 'Part outside board',
+  keepout: 'Keep-out area',
 };
 
 export interface Violation {
@@ -261,6 +264,13 @@ export function runDrc(doc: Doc, engine: StyleEngine, copper: string[], opts: Dr
         push({ kind: 'holeSize', severity: 'error', at: shape?.probe ?? { x: 0, y: 0 }, uids: [n.uid], message: `${n.type === 'via' ? 'Via' : 'Pad'} hole is ${L(d)}; minimum is ${L(min)}`, actual: d, required: min });
       }
     }
+  }
+
+  // ---- keep-out areas (P6) ----
+  for (const k of keepoutHits(doc, engine, copper, shapes)) {
+    const n = doc.nodes.get(k.uid);
+    const what = n?.type === 'element' ? n.name : n?.type ?? k.what;
+    push({ kind: 'keepout', severity: 'error', layer: k.layer, at: k.at, uids: [k.uid], message: `${what} is in keep-out area ${k.zone}, which forbids ${k.what} on ${k.layer}` }, `keepout:${k.zone}:${k.uid}`);
   }
 
   // ---- unrouted ----

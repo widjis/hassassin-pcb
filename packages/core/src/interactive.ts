@@ -17,6 +17,7 @@
 import type { Op } from './commands.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea, type CopperShape } from './copper.ts';
 import { padGeom } from './frames.ts';
+import { keepoutAreas } from './keepout.ts';
 import { diffPairs, netLengths } from './lengths.ts';
 import { distToSegment, pointInPolygon, route45, segSegDist } from './geom.ts';
 import { newUid, type Doc, type DocNode, type KeepOut, type Vec2 } from './model.ts';
@@ -50,6 +51,8 @@ export interface RouteWorld {
   /** The board outline (first loop) and edge segments with the distance to keep from them. */
   outline?: Vec2[];
   edges: Obstacle[];
+  /** Keep-out areas where no via may sit (P6). */
+  viaAreas: Vec2[][];
 }
 
 export interface WorldOptions {
@@ -107,10 +110,22 @@ export function routeWorld(doc: Doc, engine: StyleEngine, copper: string[], net:
       file(s.layer, { uid: s.uid, net: s.net, kind: s.kind, a, b, r: rr, ...(s.kind === 'pad' ? { area: s.areas[0] } : {}), minX: Math.min(a.x, b.x) - rr, minY: Math.min(a.y, b.y) - rr, maxX: Math.max(a.x, b.x) + rr, maxY: Math.max(a.y, b.y) + rr });
     }
   }
+  // Keep-out areas (P6): those that forbid traces are obstacles on their layers (no clearance of their own);
+  // those that forbid vias are kept for the via check.
+  const viaAreas: Vec2[][] = [];
+  for (const k of keepoutAreas(doc, engine, copper)) {
+    if (k.forbid.has('vias')) viaAreas.push(k.poly);
+    if (!k.forbid.has('traces')) continue;
+    for (const layer of k.layers)
+      k.poly.forEach((a, i) => {
+        const b = k.poly[(i + 1) % k.poly.length]!;
+        file(layer, { uid: k.uid, net: null, kind: 'pad', a, b, r: half, area: [k.poly], minX: Math.min(a.x, b.x) - half, minY: Math.min(a.y, b.y) - half, maxX: Math.max(a.x, b.x) + half, maxY: Math.max(a.y, b.y) + half });
+      });
+  }
   const board = boardOutline(doc, engine);
   const edgeCl = Number(engine.get(netNodeOf(doc, net)?.uid ?? doc.rootId, 'boardEdgeClearance')?.value ?? 0) || 0;
   const edges: Obstacle[] = board.segments.map(([a, b]) => ({ uid: 'edge', net: null, kind: 'trace', a, b, r: edgeCl + half, minX: 0, minY: 0, maxX: 0, maxY: 0 }));
-  return { net, width, clearance: clearanceFor(rules.keepOut, 'trace'), layers: copper, grid, cell, ...(board.loops[0] ? { outline: board.loops[0] } : {}), edges };
+  return { net, width, clearance: clearanceFor(rules.keepOut, 'trace'), layers: copper, grid, cell, ...(board.loops[0] ? { outline: board.loops[0] } : {}), edges, viaAreas };
 }
 
 function near(w: RouteWorld, layer: string, minX: number, minY: number, maxX: number, maxY: number): Set<Obstacle> {
@@ -161,6 +176,7 @@ export function pathFree(w: RouteWorld, layer: string, pts: Vec2[]): boolean {
 /** A via of the net (diameter `d`) at `p`: legal on every copper layer it spans. */
 export function viaFree(w: RouteWorld, p: Vec2, d: number, layers = w.layers): boolean {
   const extra = d / 2 - w.width / 2;
+  for (const poly of w.viaAreas) if (pointInPolygon(p, poly) || poly.some((q, i) => distToSegment(p, q, poly[(i + 1) % poly.length]!) < d / 2)) return false;
   return layers.every((l) => pointFree(w, l, p, extra));
 }
 

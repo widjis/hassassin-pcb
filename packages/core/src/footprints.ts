@@ -248,6 +248,21 @@ function hole(m: number, plated: boolean): FootprintSpec {
   };
 }
 
+/** A fiducial: a bare copper dot of diameter `d` on the top, with a solder mask opening twice as wide (P6). */
+function fiducial(d: number): FootprintSpec {
+  return {
+    name: `fiducial-${d}mm`,
+    description: `Fiducial, ${d} mm copper, ${r2(d * 2)} mm mask opening`,
+    pads: [{ number: '1', at: { x: 0, y: 0 }, size: { x: d, y: d }, shape: 'circle', type: 'smd', layers: ['F.Cu', 'F.Mask'] }],
+    graphics: [
+      { kind: 'circle', layer: 'F.Mask', w: 0, c: { x: 0, y: 0 }, r: d, fill: true },
+      { kind: 'circle', layer: 'F.CrtYd', w: CRT, c: { x: 0, y: 0 }, r: r2(d * 1.25) },
+    ],
+    source: 'generic',
+    tags: ['fiducial', 'mechanical'],
+  };
+}
+
 /** Every generic name with a short description (for browsing). */
 export function genericFootprintNames(): string[] {
   const out: string[] = [];
@@ -261,7 +276,7 @@ export function genericFootprintNames(): string[] {
   for (const n of [1, 2, 3, 4, 5, 6, 8, 10]) out.push(`header-1x${String(n).padStart(2, '0')}-p2.54`);
   for (const n of [3, 5, 10]) out.push(`header-2x${String(n).padStart(2, '0')}-p2.54`);
   for (const n of [2, 3, 4]) out.push(`terminal-1x${String(n).padStart(2, '0')}-p5.08`);
-  out.push('hole-m2', 'hole-m2.5', 'hole-m3', 'hole-m3-pad');
+  out.push('hole-m2', 'hole-m2.5', 'hole-m3', 'hole-m3-pad', 'fiducial-1mm');
   return out;
 }
 
@@ -281,6 +296,7 @@ export function genericFootprint(name: string): FootprintSpec | null {
   if ((m = /^header-([12])x(\d+)-p([\d.]+)$/.exec(s))) return header(Number(m[1]), Number(m[2]), Number(m[3]));
   if ((m = /^terminal-1x(\d+)-p([\d.]+)$/.exec(s))) return terminal(Number(m[1]), Number(m[2]));
   if ((m = /^hole-m([\d.]+)(-pad)?$/.exec(s))) return hole(Number(m[1]), !!m[2]);
+  if ((m = /^fiducial-([\d.]+)mm$/.exec(s))) return fiducial(Number(m[1]));
   // A ball grid, pads numbered 1 … rows × cols row by row (a stand-in; the generator names them A1, B2 …).
   if ((m = /^bga-(\d+)x(\d+)-p([\d.]+)$/.exec(s))) {
     const rows = Number(m[1]), cols = Number(m[2]), pitch = Number(m[3]);

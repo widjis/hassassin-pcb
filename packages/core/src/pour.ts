@@ -17,6 +17,7 @@ import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea, netNameOf, type CopperShape, type PolyWithHoles } from './copper.ts';
 import { place, pointInPolygon } from './geom.ts';
+import { keepoutAreas, type KeepoutArea } from './keepout.ts';
 import { ARC_MARGIN, difference, fromIPath, intersect, isOuter, offsetAreas, offsetLine, toIAreas, toIPath, union, type IPaths } from './clip.ts';
 
 function signedArea(p: Vec2[]): number {
@@ -50,6 +51,22 @@ export function groupRings(paths: IPaths): PolyWithHoles[] {
 }
 
 /** A polygon that fully contains the circle (vertices pushed out so chords never cut in). */
+/** Polygons with holes as clipper paths (outer rings and holes with their own winding). */
+function toIAreasWithHoles(polys: PolyWithHoles[]): IPaths {
+  const out: IPaths = [];
+  for (const p of polys) {
+    if (!p[0]) continue;
+    out.push(...toIAreas([p[0]]));
+    if (p.length > 1) {
+      // Holes: subtract them from the outer ring.
+      const holes = toIAreas(p.slice(1));
+      const outer = out.splice(out.length - toIAreas([p[0]]).length);
+      out.push(...difference(outer, holes));
+    }
+  }
+  return out;
+}
+
 function circleAround(c: Vec2, r: number): IPaths {
   const n = Math.max(16, Math.min(96, Math.ceil(r * 64)));
   const R = r / Math.cos(Math.PI / n);
@@ -81,7 +98,13 @@ export interface PourResult {
 }
 
 /** Compute the copper of one pour node. */
-export function fillPour(doc: Doc, engine: StyleEngine, pour: DocNode, copper: string[], shapes?: CopperShape[]): PourResult {
+/** Pours already filled that this one must keep clear of (higher priority, other nets), and the keep-out areas. */
+export interface PourContext {
+  higher?: { uid: string; net: string | null; keepOut: { all?: number; byType: Record<string, number> }; fills: Record<string, PolyWithHoles[]> }[];
+  keepouts?: KeepoutArea[];
+}
+
+export function fillPour(doc: Doc, engine: StyleEngine, pour: DocNode, copper: string[], shapes?: CopperShape[], ctx: PourContext = {}): PourResult {
   const t0 = performance.now();
   const net = netNameOf(doc, pour);
   const raw = engine.get(pour.uid, 'layers')?.value;
@@ -140,6 +163,19 @@ export function fillPour(doc: Doc, engine: StyleEngine, pour: DocNode, copper: s
       cut.push(...g);
       keepOut.push(...g);
     }
+    // Pours of other nets filled before this one (higher priority) keep this one away (P6).
+    for (const h of ctx.higher ?? []) {
+      if (h.uid === pour.uid || (net !== null && h.net === net)) continue;
+      const polys = h.fills[layer];
+      if (!polys?.length) continue;
+      const c = Math.max(clearanceFor(own, 'fill'), clearanceFor(h.keepOut, 'fill')) + ARC_MARGIN;
+      const g = offsetAreas(toIAreasWithHoles(polys), c);
+      cut.push(...g);
+      keepOut.push(...g);
+    }
+    // Keep-out areas that forbid pours on this layer (P6).
+    // (Grown a little, so the pour's edge stays off the area's edge rather than on it.)
+    for (const k of ctx.keepouts ?? []) if (k.forbid.has('pours') && k.layers.includes(layer)) cut.push(...offsetAreas(toIAreas([k.poly]), 0.01 + ARC_MARGIN));
     let res = difference(base, union(cut));
     if (back.length) {
       // Put pads and spokes back, but never closer to other nets than allowed.
@@ -190,13 +226,19 @@ export function planPours(doc: Doc, engine: StyleEngine, copper: string[]): Op[]
 export function refillOps(doc: Doc, engine: StyleEngine, copper: string[]): { ops: Op[]; ms: number; pours: number } {
   const t0 = performance.now();
   const shapes = collectCopper(doc, engine, copper);
+  const keepouts = keepoutAreas(doc, engine, copper);
   const ops: Op[] = [];
-  let pours = 0;
-  for (const n of doc.nodes.values()) {
-    if (n.type !== 'fill') continue;
-    pours++;
-    const { fills } = fillPour(doc, engine, n, copper, shapes);
+  // Highest `pourPriority` first; equal priorities in document order (P6). Each pour keeps clear of the
+  // pours of other nets filled before it, so two pours never overlap.
+  const all = [...doc.nodes.values()].filter((n) => n.type === 'fill');
+  const prio = (n: DocNode) => Number(engine.get(n.uid, 'pourPriority')?.value ?? 0) || 0;
+  const order = all.map((n, i) => ({ n, i })).sort((a, b) => prio(b.n) - prio(a.n) || a.i - b.i).map((x) => x.n);
+  const higher: NonNullable<PourContext['higher']> = [];
+  for (const n of order) {
+    const { fills } = fillPour(doc, engine, n, copper, shapes, { higher, keepouts });
     ops.push({ op: 'setData', uid: n.uid, key: 'fills', value: fills });
+    const keep = engine.get(n.uid, 'keepOut')?.value as { all?: number; byType: Record<string, number> } | undefined;
+    higher.push({ uid: n.uid, net: netNameOf(doc, n), keepOut: keep ?? { byType: {} }, fills });
   }
-  return { ops, ms: performance.now() - t0, pours };
+  return { ops, ms: performance.now() - t0, pours: all.length };
 }

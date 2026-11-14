@@ -420,6 +420,15 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
     const mode = connect ? str(connect[1]) : undefined;
     if (mode === 'yes') rules.push(rule('thermalRelief', 'solid'));
     else if (mode === 'no') rules.push(rule('thermalRelief', 'none'));
+    // Pour priority, and what a keep-out area forbids (P6).
+    const prio = num(child(z, 'priority')?.[1]);
+    if (prio !== undefined && prio !== 0) rules.push(rule('pourPriority', prio));
+    const ko = child(z, 'keepout');
+    if (ko) {
+      const no = (k: string) => str(child(ko, k)?.[1]) === 'not_allowed';
+      const forbid = [no('tracks') && 'traces', no('vias') && 'vias', no('copperpour') && 'pours', no('footprints') && 'parts'].filter(Boolean) as string[];
+      rules.push(rule('keepoutOf', forbid));
+    }
     const zfill = child(z, 'fill');
     const bridge = num(child(zfill ?? [], 'thermal_bridge_width')?.[1]);
     if (bridge !== undefined) rules.push(rule('thermalSpokeWidth', bridge));

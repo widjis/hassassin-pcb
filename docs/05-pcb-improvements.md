@@ -161,7 +161,7 @@ document before work on a measured item starts.
   - A layout grid picker in the toolbar (for example 0.05 / 0.1 / 0.25 / 0.5 / 1.27 mm and inch steps),
     saved in the project and reported by `project_status`, plus a `set_layout_grid` tool.
   - Align and distribute for a selection of parts (as S8 for the schematic).
-- [ ] **P6. Drawing tools for board, pours, keep-outs and graphics.**
+- [x] **P6. Drawing tools for board, pours, keep-outs and graphics.**
   - Draw and edit the board outline in the editor (rectangle, polygon, arcs, rounded corners; vertex drag).
   - Draw a pour / zone outline for a net and a layer; a pour priority decides which pour yields where
     two pours of different nets overlap on one layer.
@@ -169,6 +169,34 @@ document before work on a measured item starts.
     pour fill and DRC all respect them.
   - Silkscreen text and lines, mounting holes (plated or not) and fiducials can be placed.
   - Tools for agents: `add_pour`, `add_keepout`, `add_text`, `add_mounting_hole` (names may change).
+  - *Done (2026-11-15):*
+    - Pour priority: rule `pourPriority` (KiCad `priority` imported). Pours are filled highest first (equal:
+      document order); each keeps its clearance from the pours of other nets filled before it, so two
+      pours never overlap.
+    - Keep-out areas: `zone` nodes with `layers`, `points` and the new rule `keepoutOf` ("Forbids": traces
+      vias pours parts; default traces vias pours, as KiCad; KiCad keep-out flags imported). Core module
+      `keepout.ts`. The pour fill cuts them (with a hole where the area lies inside a pour); the
+      autorouter takes trace areas as fixed copper of no net and keeps vias out of via areas; the
+      interactive router walks around them and refuses vias in them; the autoplacer keeps parts out of
+      parts areas (top side); DRC reports a new kind `keepout` for any trace, via, pour or part where an
+      area forbids it.
+    - Tools for agents: `add_pour` (net, layers, rectangle or points, priority; refills), `add_keepout`
+      (rectangle or points, layers, forbid; refills when it forbids pours), `add_text`, `add_line`,
+      `add_mounting_hole` (m2–m8, plated with a net or not) and `add_fiducial` (new generic footprint
+      `fiducial-<d>mm`); holes and fiducials are board-only parts (H1, FID1 …) that Update PCB keeps.
+    - Editor: `Draw ▾` in the layout toolbar: board outline as a rectangle with a corner radius or as a
+      polygon (A makes the next segment an arc), copper pour and keep-out (drag a rectangle or click a
+      polygon, then a small form for net / layers / priority or what it forbids), silkscreen line, text,
+      mounting hole, fiducial; each one undo step, through the agents' tools. Corners of a selected
+      outline, pour or keep-out show handles that drag (pours refilled in the same step); pours and
+      keep-outs are picked on their edge. Keep-out areas are drawn with a red dashed outline and hatch.
+    - Tests: `p6.test.ts` (priority keeps pours apart; a traces keep-out respected by the autorouter, the
+      interactive router and DRC; a pours keep-out cuts the pour and makes a hole in it; a parts keep-out
+      reported and left by auto_place; text, line, holes and fiducial, kept by Update PCB; KiCad import of
+      priority and keep-out flags). In the browser on a copy of the solar board: its four KiCad keep-outs
+      round the mounting holes now cut the pours (the saved fills were reported until refilled, then 0
+      DRC errors); every Draw tool used with the mouse; corner drag and undo; an outline with an arc.
+      Solar benchmark unchanged (76 / 76, 39 vias, 0 DRC errors with the keep-out check).
 - [ ] **P7. Measure tool.**
   - A measure tool shows distance and Δx / Δy between two points, snapping to pad centres, pad edges and
     trace centres; a clearance readout between two selected objects.

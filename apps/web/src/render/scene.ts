@@ -76,6 +76,13 @@ export function copperSpan(layers: string[], copper: string[]): string[] {
   return copper.slice(Math.min(...idx), Math.max(...idx) + 1);
 }
 
+/** Register a closed outline as pickable near its edge (lowest priority). */
+function regOutline(reg: (layers: string[], priority: number, box: BBox, hit: Pickable['hit']) => void, layers: string[], outline: Vec2[]): void {
+  const box = emptyBox();
+  for (const p of outline) growBox(box, p.x, p.y, 0.2);
+  reg(layers, 0, box, (p, tol) => outline.some((q, i) => distToSegment(p, q, outline[(i + 1) % outline.length]!) <= tol * 2 + 0.05));
+}
+
 /** Emit one node's own geometry (not its children). */
 export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string[], sink: Sink, geom?: NodeGeom): void {
   const uid = node.uid;
@@ -162,6 +169,8 @@ export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string
           if (out) polyline(out, outline, 0.1, true);
         }
       }
+      // A pour with its own outline is picked on that outline's edge (P6: select it to drag its corners).
+      if (outline.length > 2) regOutline(reg, expand(listOf(e, uid, 'layers'), copper), outline);
       return;
     }
     case 'zone': {
@@ -170,6 +179,7 @@ export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string
         const out = sink(l);
         if (out) polyline(out, outline, 0.08, true);
       }
+      if (outline.length > 2) regOutline(reg, expand(listOf(e, uid, 'layers'), copper), outline);
       return;
     }
     case 'line':

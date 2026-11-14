@@ -4,6 +4,8 @@
  * project is live, shared with collaborators).
  */
 import {
+  footprintNodes,
+  KEEPOUT_DEFAULT,
   planShove,
   routeWorld,
   walkaround,
@@ -479,6 +481,62 @@ export function resolveTargets(p: Project, target: string): DocNode[] {
 /** Quote every #id in a selector that holds characters the bare form does not allow, e.g. net#Net-(U1-SW1) → net#"Net-(U1-SW1)". */
 export function quoteSelectorIds(sel: string): string {
   return sel.replace(/#(?!["'])([^\s>,[\]"']+)/g, (m, id: string) => (/[():*=]/.test(id) ? `#"${id}"` : m));
+}
+
+/** The copper layers named in a tool argument (default every copper layer). */
+function boardLayersArg(p: Project, v: unknown): string[] {
+  if (v === undefined || v === null || v === '' || v === '*' || String(v).toLowerCase() === 'all') return [...p.copper];
+  const ls = String(v).split(/[\s,]+/).filter(Boolean);
+  const bad = ls.filter((l) => !p.copper.includes(l));
+  if (bad.length) throw new ToolError(`Unknown copper layer ${bad.join(', ')}. Layers: ${p.copper.join(', ')}`);
+  return ls;
+}
+
+/** An outline from tool arguments: points ("x y, …") or a rectangle (x, y top-left, width, height). */
+function outlineArg(a: Record<string, unknown>, required: boolean): Vec2[] | undefined {
+  if (typeof a.points === 'string' && a.points.trim()) {
+    const pts = parsePoints(a.points);
+    if (!pts) throw new ToolError('points: at least three "x y" pairs in mm, e.g. "100 100, 140 100, 140 130"');
+    return pts;
+  }
+  if (a.width !== undefined || a.height !== undefined || a.x !== undefined) {
+    const x = num(a.x, 'x');
+    const y = num(a.y, 'y');
+    const w = num(a.width, 'width');
+    const h = num(a.height, 'height');
+    if (w <= 0 || h <= 0) throw new ToolError('width and height must be positive');
+    return [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  }
+  if (required) throw new ToolError('Give the area: points, or x, y, width and height.');
+  return undefined;
+}
+
+/** A container of the layout by name (created with the returned ops when missing), and where to add into it. */
+function layoutContainer(p: Project, name: string): { uid: string; index: number; ops: Op[] } {
+  const layout = [...p.doc.nodes.values()].find((n) => n.type === 'layout');
+  if (!layout) throw new ToolError('The project has no board yet.');
+  const c = layout.children.map((u) => p.doc.nodes.get(u)!).find((n) => n?.type === 'container' && n.name === name);
+  if (c) return { uid: c.uid, index: c.children.length, ops: [] };
+  const uid = newUid('ct');
+  return { uid, index: 0, ops: [{ op: 'add', parent: layout.uid, index: layout.children.length, tree: { nodes: [{ uid, type: 'container', name, props: {}, rules: [], parent: layout.uid, children: [] }] } }] };
+}
+
+/** The next free reference with this prefix (H1, H2 …). */
+function nextRef(p: Project, prefix: string): string {
+  const used = new Set([...p.doc.nodes.values()].filter((n) => n.type === 'element').map((n) => n.name));
+  let i = 1;
+  while (used.has(`${prefix}${i}`)) i++;
+  return `${prefix}${i}`;
+}
+
+/** Place a part that exists only on the board (mounting hole, fiducial). */
+function placeBoardOnly(p: Project, fp: FootprintSpec, ref: string, at: Vec2, net: string | null, value: string) {
+  if ([...p.doc.nodes.values()].some((n) => n.type === 'element' && n.name === ref)) throw new ToolError(`${ref} is already on the board`);
+  const comps = layoutContainer(p, 'Components');
+  const nodes = footprintNodes(fp, { ref, value, copper: p.copper, position: at, props: { boardOnly: true }, netOf: () => net });
+  nodes[0]!.parent = comps.uid;
+  apply(p, `Add ${ref}`, [...comps.ops, { op: 'add', parent: comps.uid, index: comps.index, tree: { nodes } }]);
+  return { ref, footprint: fp.name, at, ...(net ? { net } : {}) };
 }
 
 function one(p: Project, target: string, type?: DocNode['type']): DocNode {
@@ -1967,6 +2025,128 @@ export const TOOLS: ToolDef[] = [
       for (const n of top) byType[n.type] = (byType[n.type] ?? 0) + 1;
       apply(p, `Delete ${top.length} object(s)`, top.map((n) => ({ op: 'remove', uid: n.uid }) as Op));
       return { deleted: top.length, byType, ...(refused.length ? { notDeleted: [...new Set(refused.map((n) => n.type))].map((t) => `${t} (structural or part of a symbol)`) } : {}) };
+    },
+  },
+  {
+    name: 'add_pour',
+    description: 'Add a copper pour (zone) of a net on copper layers, over the whole board or inside an outline: a rectangle (x, y = top-left, width, height, mm) or points ("x y, x y, …"). priority: where pours of different nets overlap, the higher one is filled first and the other keeps clear of it. The pours are refilled afterwards.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        net: { type: 'string' },
+        layers: { type: 'string', description: 'Copper layers, e.g. "F.Cu" or "F.Cu B.Cu" (default all copper layers)' },
+        x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' },
+        points: { type: 'string', description: 'Outline, e.g. "100 100, 140 100, 140 130, 100 130"' },
+        priority: { type: 'number', description: 'Pour priority (default 0)' },
+        name: { type: 'string' },
+      },
+      required: ['net'],
+    },
+    run: (p, a) => {
+      const netName = str(a.net, 'net');
+      const net = [...p.doc.nodes.values()].find((n) => n.type === 'net' && n.name === netName);
+      if (!net) throw new ToolError(`No net ${netName} on the board (run update_pcb first, or check the name with list_nets).`);
+      const layers = boardLayersArg(p, a.layers);
+      const pts = outlineArg(a, false);
+      const prio = optNum(a.priority, 'priority');
+      const uid = newUid('pour');
+      const rules: RuleDecl[] = [{ name: 'layers', value: layers }, ...(pts ? [{ name: 'points', value: pts }] : []), ...(prio ? [{ name: 'pourPriority', value: prio }] : [])];
+      apply(p, 'Add pour', [{ op: 'add', parent: net.uid, index: net.children.length, tree: { nodes: [{ uid, type: 'fill', name: typeof a.name === 'string' ? a.name : `${netName} pour`, props: {}, rules, parent: net.uid, children: [] }] } }]);
+      const { ops } = refillOps(p.doc, p.engine, p.copper);
+      apply(p, 'Refill pours', ops);
+      const fills = (p.doc.nodes.get(uid)?.data?.fills ?? {}) as Record<string, unknown[]>;
+      return { uid, net: netName, layers, priority: prio ?? 0, filled: Object.fromEntries(Object.entries(fills).map(([l, v]) => [l, v.length])) };
+    },
+  },
+  {
+    name: 'add_keepout',
+    description: 'Add a keep-out area: a rectangle (x, y = top-left, width, height, mm) or points ("x y, x y, …") on copper layers, forbidding any of traces, vias, pours, parts (default "traces vias pours"). The autorouter, the interactive router, the autoplacer, pour fill and DRC respect it.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' },
+        points: { type: 'string' },
+        layers: { type: 'string', description: 'Copper layers (default all)' },
+        forbid: { type: 'string', description: 'Words from traces vias pours parts (default "traces vias pours")' },
+        name: { type: 'string' },
+      },
+    },
+    run: (p, a) => {
+      const pts = outlineArg(a, true)!;
+      const layers = boardLayersArg(p, a.layers);
+      let forbid: unknown = KEEPOUT_DEFAULT;
+      if (typeof a.forbid === 'string') {
+        try {
+          forbid = parseRuleValue('keepoutOf', a.forbid);
+        } catch (e) {
+          throw new ToolError(`forbid: ${(e as Error).message}; use words from traces vias pours parts`);
+        }
+      }
+      const parent = layoutContainer(p, 'Keep-out zones');
+      const uid = newUid('ko');
+      const ops: Op[] = parent.ops;
+      ops.push({ op: 'add', parent: parent.uid, index: parent.index, tree: { nodes: [{ uid, type: 'zone', name: typeof a.name === 'string' ? a.name : 'Keep-out', props: {}, rules: [{ name: 'layers', value: layers }, { name: 'points', value: pts }, { name: 'keepoutOf', value: forbid as string[] }], parent: parent.uid, children: [] }] } });
+      apply(p, 'Add keep-out', ops);
+      // Pours give way at once.
+      if ((forbid as string[]).includes('pours')) apply(p, 'Refill pours', refillOps(p.doc, p.engine, p.copper).ops);
+      const drc = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.kind === 'keepout');
+      return { uid, layers, forbid, violations: drc.map((v) => v.message) };
+    },
+  },
+  {
+    name: 'add_text',
+    description: 'Put text on the board (silkscreen by default): text, x, y (mm, centre), layer (F.SilkS, B.SilkS, F.Fab, a copper layer …), size (mm height, default 1), rotation (degrees).',
+    mutates: true,
+    input: { type: 'object', properties: { text: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, layer: { type: 'string' }, size: { type: 'number' }, rotation: { type: 'number' } }, required: ['text', 'x', 'y'] },
+    run: (p, a) => {
+      const board = layoutContainer(p, 'Board');
+      const uid = newUid('tx');
+      const layer = typeof a.layer === 'string' ? a.layer : 'F.SilkS';
+      const rules: RuleDecl[] = [{ name: 'position', value: { x: num(a.x, 'x'), y: num(a.y, 'y') } }, { name: 'text', value: str(a.text, 'text') }, { name: 'layer', value: layer }, { name: 'fontSize', value: optNum(a.size, 'size') ?? 1 }];
+      const rot = optNum(a.rotation, 'rotation');
+      if (rot) rules.push({ name: 'rotation', value: rot });
+      apply(p, 'Add text', [...board.ops, { op: 'add', parent: board.uid, index: board.index, tree: { nodes: [{ uid, type: 'text', name: str(a.text, 'text'), props: {}, rules, parent: board.uid, children: [] }] } }]);
+      return { uid, layer };
+    },
+  },
+  {
+    name: 'add_line',
+    description: 'Draw a line on the board (silkscreen by default) from (x1, y1) to (x2, y2) mm; layer and width (mm, default 0.15). On Edge.Cuts it becomes part of the board outline.',
+    mutates: true,
+    input: { type: 'object', properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, layer: { type: 'string' }, width: { type: 'number' } }, required: ['x1', 'y1', 'x2', 'y2'] },
+    run: (p, a) => {
+      const board = layoutContainer(p, 'Board');
+      const uid = newUid('gr');
+      const layer = typeof a.layer === 'string' ? a.layer : 'F.SilkS';
+      apply(p, 'Add line', [...board.ops, { op: 'add', parent: board.uid, index: board.index, tree: { nodes: [{ uid, type: 'line', name: '', props: {}, rules: [{ name: 'start', value: { x: num(a.x1, 'x1'), y: num(a.y1, 'y1') } }, { name: 'end', value: { x: num(a.x2, 'x2'), y: num(a.y2, 'y2') } }, { name: 'layer', value: layer }, { name: 'strokeWidth', value: optNum(a.width, 'width') ?? 0.15 }], parent: board.uid, children: [] }] } }]);
+      return { uid, layer };
+    },
+  },
+  {
+    name: 'add_mounting_hole',
+    description: 'Place a mounting hole for a screw size (m2, m2.5, m3, m4; default m3) at x, y (mm): unplated by default, plated with a copper ring when plated is true (then net, e.g. GND, connects it). It is a board-only part (H1, H2 …) that Update PCB keeps.',
+    mutates: true,
+    input: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, size: { type: 'string' }, plated: { type: 'boolean' }, net: { type: 'string' }, ref: { type: 'string' } }, required: ['x', 'y'] },
+    run: (p, a) => {
+      const m = String(a.size ?? 'm3').toLowerCase().replace(/^m/, '');
+      if (!/^\d+(\.\d+)?$/.test(m) || Number(m) < 1 || Number(m) > 8) throw new ToolError('size: a metric screw size such as m2, m2.5, m3 or m4');
+      const fp = genericFootprint(`hole-m${m}${a.plated ? '-pad' : ''}`)!;
+      const net = typeof a.net === 'string' && a.net ? a.net : null;
+      if (net && !a.plated) throw new ToolError('Only a plated hole connects to a net: set plated true.');
+      return placeBoardOnly(p, fp, typeof a.ref === 'string' ? a.ref : nextRef(p, 'H'), { x: num(a.x, 'x'), y: num(a.y, 'y') }, net, `M${m} hole`);
+    },
+  },
+  {
+    name: 'add_fiducial',
+    description: 'Place a fiducial (bare copper dot for pick-and-place cameras, default 1 mm with a 2 mm mask opening) at x, y (mm). A board-only part (FID1, FID2 …).',
+    mutates: true,
+    input: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, diameter: { type: 'number' }, ref: { type: 'string' } }, required: ['x', 'y'] },
+    run: (p, a) => {
+      const d = optNum(a.diameter, 'diameter') ?? 1;
+      if (d < 0.5 || d > 3) throw new ToolError('diameter: 0.5 to 3 mm');
+      return placeBoardOnly(p, genericFootprint(`fiducial-${d}mm`)!, typeof a.ref === 'string' ? a.ref : nextRef(p, 'FID'), { x: num(a.x, 'x'), y: num(a.y, 'y') }, null, 'Fiducial');
     },
   },
   {
