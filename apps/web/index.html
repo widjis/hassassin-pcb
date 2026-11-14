@@ -73,6 +73,18 @@
             <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
             <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
             <button id="pickBtn" title="What a selection box picks: kinds of item, and the active layer only or every layer">Pick ▾</button>
+            <select id="layoutGridSelect" title="Layout grid: where parts, traces and drawings snap"></select>
+            <select id="layoutAlignSelect" title="Align or spread the selected parts (traces follow)">
+              <option value="">Align…</option>
+              <option value="left">Align left</option>
+              <option value="right">Align right</option>
+              <option value="top">Align top</option>
+              <option value="bottom">Align bottom</option>
+              <option value="centerX">Align centres (column)</option>
+              <option value="centerY">Align centres (row)</option>
+              <option value="distributeX">Spread evenly ↔</option>
+              <option value="distributeY">Spread evenly ↕</option>
+            </select>
           </div>
           <div class="sch-tools" id="schTools">
             <select id="sheetSelect" title="Sheet"></select>

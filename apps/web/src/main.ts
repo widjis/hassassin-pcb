@@ -6,7 +6,7 @@ import { DRAW_KINDS } from './tools/draw.ts';
 import { isTrackpadScroll, SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
 import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
-import { BOX_KINDS, type BoxKind, type DocNode, type Vec2 } from '@hassassin/core';
+import { BOX_KINDS, LAYOUT_GRIDS, type BoxKind, type DocNode, type Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
@@ -741,6 +741,23 @@ pickBtn.addEventListener('click', (ev) => {
 });
 window.addEventListener('click', closePick);
 
+// Layout grid and align (P5).
+const layoutGridSelect = $<HTMLSelectElement>('layoutGridSelect');
+for (const g of LAYOUT_GRIDS) layoutGridSelect.append(new Option(`Grid ${g.label}`, String(g.mm)));
+layoutGridSelect.addEventListener('change', () => app.setLayoutGrid(Number(layoutGridSelect.value)));
+const syncLayoutGrid = () => {
+  const g = app.gridStep();
+  if (![...layoutGridSelect.options].some((o) => Math.abs(Number(o.value) - g) < 1e-9)) layoutGridSelect.append(new Option(`Grid ${g} mm`, String(g)));
+  layoutGridSelect.value = [...layoutGridSelect.options].find((o) => Math.abs(Number(o.value) - g) < 1e-9)!.value;
+};
+for (const ev of ['change', 'doc'] as const) app.on(ev, syncLayoutGrid);
+const layoutAlignSelect = $<HTMLSelectElement>('layoutAlignSelect');
+layoutAlignSelect.addEventListener('change', () => {
+  const mode = layoutAlignSelect.value as AlignMode;
+  layoutAlignSelect.value = '';
+  if (mode) app.alignSelection(mode);
+});
+
 $('fitBtn').addEventListener('click', () => app.fit());
 $('flipBtn').addEventListener('click', () => app.flip());
 const syncToolbar = () => {
@@ -1097,7 +1114,12 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'f':
     case 'F':
-      app.flip();
+      // The selected parts go to the other side (P5); with none selected, the view turns over.
+      if (!app.flipSelection()) app.flip();
+      break;
+    case 'k':
+    case 'K':
+      app.toggleLock();
       break;
     case 'Home':
     case '0':

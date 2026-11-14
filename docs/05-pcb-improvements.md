@@ -185,7 +185,7 @@ document before work on a measured item starts.
       U3-PA5 by hand 0 new DRC errors after refilling pours, hover 9–12 ms; drags and shove clicks left
       no new errors and no lost connection; both pairs of the `pairs` fixture routed by hand with 0 DRC
       errors, about 30 mm coupled. Solar benchmark unchanged (76 / 76, 39 vias, 0 DRC errors).
-- [ ] **P5. Bottom side, locking and grid.**
+- [x] **P5. Bottom side, locking and grid.**
   - A selected part can be flipped to the other side (key and inspector): pads, silkscreen, courtyard and
     fabrication layers are mirrored to the bottom; the 3D view, Gerbers and pick-and-place follow.
   - Parts, traces and vias can be locked; locked items are not moved by dragging, the autoplacer or the
@@ -193,6 +193,22 @@ document before work on a measured item starts.
   - A layout grid picker in the toolbar (for example 0.05 / 0.1 / 0.25 / 0.5 / 1.27 mm and inch steps),
     saved in the project and reported by `project_status`, plus a `set_layout_grid` tool.
   - Align and distribute for a selection of parts (as S8 for the schematic).
+  - *Done (2026-11-15):* core module `boardEdit.ts`. `flipPartOps` mirrors a part's pads, graphics and
+    texts left to right about its origin, swaps F.* and B.* layers, turns its rotation the other way and
+    sets `side` (as KiCad's flip, and as KiCad files store bottom parts); the 3D view, Gerbers and the
+    pick-and-place file read those. F flips the selected parts (the view when nothing is selected), and
+    the inspector has "Flip to bottom / top"; the traces on the pads follow (rubber-banding) and pours are
+    refilled, in one undo step. `lockOps` / K / inspector Lock: locked parts and traces are not moved by
+    dragging, R, segment drag, move_part, align, the autoplacer or a shove (the autorouter only rips up
+    routes of its own run, so existing copper is never touched). Layout grid: a picker in the layout
+    toolbar (0.05, 0.1, 0.25, 0.5, 1 mm; 5, 10, 25, 50, 100 mil) setting the root's `gridSpacing` (saved in
+    the project), `project_status` reports `layoutGrid`, tool `set_layout_grid`. Align and spread (left,
+    right, top, bottom, centres, even gaps) by part outlines, as the schematic's, with traces following;
+    toolbar "Align…" and tool `align_parts`. Tools `flip_part` and `lock`. Tests: `p5.test.ts` (flip
+    mirrors pads to B.Cu and back exactly, silkscreen to B.*, pick-and-place says bottom; a locked part
+    refused by move_part and kept by auto_place, then freed; grid in mm and mil; align top and spread with
+    even gaps, connections unchanged). In the browser on a copy of the solar board: F, K, R on a locked
+    part, F with nothing selected, the grid and Align selects.
 - [x] **P6. Drawing tools for board, pours, keep-outs and graphics.**
   - Draw and edit the board outline in the editor (rectangle, polygon, arcs, rounded corners; vertex drag).
   - Draw a pour / zone outline for a net and a layer; a pour priority decides which pour yields where

@@ -51,3 +51,4 @@ export * from './boardSelect.ts';
 export * from './keepout.ts';
 export * from './rubberband.ts';
 export * from './boardClipboard.ts';
+export * from './boardEdit.ts';

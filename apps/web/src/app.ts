@@ -20,6 +20,11 @@ import { type WaivedViolation,
   mapFills,
   movablePoints,
   rotateSelectionOps,
+  alignPartsMoves,
+  flipPartOps,
+  lockOps,
+  setLayoutGridOp,
+  type AlignMode,
   copyBoardItems,
   matchingBlocks,
   pasteBoardOps,
@@ -685,6 +690,7 @@ export class App {
     let f: ((p: Vec2) => Vec2) | null = null;
     if (sel.length === 1 && this.node(sel[0]!)?.type === 'element') {
       const uid = sel[0]!;
+      if (this.node(uid)!.props.locked) return this.say('The part is locked (K unlocks it).');
       const cur = Number(this.engine.get(uid, 'rotation')?.value ?? 0);
       ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: (((cur + deg) % 360) + 360) % 360 } });
       const at = this.engine.get(uid, 'position')?.value as Vec2 | undefined;
@@ -709,6 +715,60 @@ export class App {
 
   /** The selection box being drawn, in screen pixels (P1). */
   selBox: { a: { x: number; y: number }; b: { x: number; y: number } } | null = null;
+
+  /** F: flip the selected parts to the other side (P5); the traces on their pads follow. */
+  flipSelection(): boolean {
+    if (!this.doc || !this.engine) return false;
+    const parts = [...this.selection].filter((u) => this.node(u)?.type === 'element');
+    if (!parts.length) return false;
+    const key = newUid('flip');
+    const locked = parts.filter((u) => this.node(u)!.props.locked);
+    for (const u of parts.filter((x) => !locked.includes(x))) {
+      const at = this.engine.get(u, 'position')?.value as Vec2;
+      const plan = rubberbandPlan(this.doc, this.engine, this.copper, [u]);
+      this.apply('Flip', [...flipPartOps(this.doc, this.engine, u), ...rubberbandOps(plan, (p: Vec2) => ({ x: 2 * at.x - p.x, y: p.y }), { fix45: true, doc: this.doc })], key);
+    }
+    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    this.history?.seal();
+    this.say(locked.length ? `${locked.length} locked part(s) left as they are.` : `Flipped ${parts.length} part${parts.length > 1 ? 's' : ''}.`);
+    this.emit('inspect');
+    return true;
+  }
+
+  /** K: lock the selection, or unlock it when everything in it is locked (P5). */
+  toggleLock(): void {
+    if (!this.doc) return;
+    const sel = [...this.selection];
+    const allLocked = sel.length > 0 && sel.every((u) => this.node(u)?.props.locked);
+    const ops = lockOps(this.doc, sel, !allLocked);
+    if (!ops.length) return this.say('Select parts, traces, vias, pours or graphics to lock them.');
+    this.apply(allLocked ? 'Unlock' : 'Lock', ops);
+    this.say(`${allLocked ? 'Unlocked' : 'Locked'} ${ops.length} item${ops.length > 1 ? 's' : ''}.`);
+    this.emit('inspect');
+  }
+
+  /** Align or spread the selected parts (P5), traces following each part. One undo step. */
+  alignSelection(mode: AlignMode): void {
+    if (!this.doc || !this.engine) return;
+    const moves = alignPartsMoves(this.doc, this.engine, this.copper, [...this.selection], mode);
+    if (!moves.length) return this.say(mode.startsWith('distribute') ? 'Select three or more unlocked parts to spread them.' : 'Select two or more unlocked parts to align them.');
+    const key = newUid('align');
+    for (const m of moves) {
+      const from = this.engine.get(m.uid, 'position')?.value as Vec2;
+      const plan = rubberbandPlan(this.doc, this.engine, this.copper, [m.uid]);
+      const d = { x: m.to.x - from.x, y: m.to.y - from.y };
+      this.apply('Align', [{ op: 'setRule', uid: m.uid, name: 'position', decl: { name: 'position', value: m.to } }, ...rubberbandOps(plan, (p: Vec2) => ({ x: p.x + d.x, y: p.y + d.y }), { fix45: true, doc: this.doc })], key);
+    }
+    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    this.history?.seal();
+  }
+
+  /** Set the layout grid (P5), one undo step. */
+  setLayoutGrid(mm: number): void {
+    if (!this.doc) return;
+    this.apply('Layout grid', [setLayoutGridOp(this.doc, mm)]);
+    this.say(`Layout grid ${mm} mm.`);
+  }
 
   /** What a box selection picks (P1): kinds of item, and the active copper layer only or every layer. */
   boxFilter: { kinds: Set<BoxKind>; activeOnly: boolean } = { kinds: new Set(BOX_KINDS), activeOnly: false };

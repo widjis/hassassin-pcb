@@ -4,6 +4,12 @@
  * project is live, shared with collaborators).
  */
 import {
+  alignPartsMoves,
+  flipPartOps,
+  layoutGrid,
+  LAYOUT_GRIDS,
+  lockOps,
+  setLayoutGridOp,
   copyBoardItems,
   matchingBlocks,
   pasteBoardOps,
@@ -638,6 +644,7 @@ export const TOOLS: ToolDef[] = [
         counts: { parts: count('element'), symbols: nodes.filter((n) => n.type === 'symbol' && !n.props.power).length, pads: count('pad'), nets: count('net'), traces: count('trace'), vias: count('via'), pours: count('fill'), sheets: count('sheet') },
         copperLayers: p.copper,
         schematicGrid: schematicGrid(p.doc),
+        layoutGrid: layoutGrid(p.doc, p.engine),
         board: (() => {
           const loop = boardOutline(p.doc, p.engine).loops[0];
           if (!loop) return 'no outline';
@@ -1540,6 +1547,7 @@ export const TOOLS: ToolDef[] = [
     input: { type: 'object', properties: { ref: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' }, rotation: { type: 'number' }, keep_traces: { type: 'boolean', description: 'Default true: traces follow the part' } }, required: ['ref', 'x', 'y'] },
     run: (p, a) => {
       const el = one(p, str(a.ref, 'ref'), 'element');
+      if (el.props.locked) throw new ToolError(`${el.name} is locked; unlock it first (lock with locked: false).`);
       const p0 = vec(p.engine.get(el.uid, 'position')?.value) ?? { x: 0, y: 0 };
       const r0 = Number(p.engine.get(el.uid, 'rotation')?.value ?? 0);
       const p1 = { x: num(a.x, 'x'), y: num(a.y, 'y') };
@@ -2042,6 +2050,71 @@ export const TOOLS: ToolDef[] = [
       for (const n of top) byType[n.type] = (byType[n.type] ?? 0) + 1;
       apply(p, `Delete ${top.length} object(s)`, top.map((n) => ({ op: 'remove', uid: n.uid }) as Op));
       return { deleted: top.length, byType, ...(refused.length ? { notDeleted: [...new Set(refused.map((n) => n.type))].map((t) => `${t} (structural or part of a symbol)`) } : {}) };
+    },
+  },
+  {
+    name: 'flip_part',
+    description: 'Flip board parts to the other side (P5): pads, silkscreen, courtyard and fabrication graphics mirror to the bottom (or back to the top), the rotation turns the other way, and the 3D view, Gerbers and pick-and-place follow. Traces on their pads follow (an SMD pad on the other copper layer needs routing again).',
+    mutates: true,
+    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } } }, required: ['refs'] },
+    run: (p, a) => {
+      const refs = (Array.isArray(a.refs) ? a.refs : []).map(String);
+      const out: Record<string, string> = {};
+      for (const r of refs) {
+        const el = one(p, r, 'element');
+        if (el.props.locked) throw new ToolError(`${el.name} is locked`);
+        const at = vec(p.engine.get(el.uid, 'position')?.value) ?? { x: 0, y: 0 };
+        const plan = rubberbandPlan(p.doc, p.engine, p.copper, [el.uid]);
+        apply(p, `Flip ${el.name}`, [...flipPartOps(p.doc, p.engine, el.uid), ...rubberbandOps(plan, (q) => ({ x: 2 * at.x - q.x, y: q.y }), { fix45: true, doc: p.doc })]);
+        out[el.name] = String(p.engine.get(el.uid, 'side')?.value ?? 'top');
+      }
+      return { side: out };
+    },
+  },
+  {
+    name: 'lock',
+    description: 'Lock (or with locked: false unlock) board items by reference, uid or selector: locked parts, traces and vias are not moved by dragging, rotating, move_part, the autoplacer or a shove (P5).',
+    mutates: true,
+    input: { type: 'object', properties: { targets: { type: 'array', items: { type: 'string' } }, locked: { type: 'boolean' } }, required: ['targets'] },
+    run: (p, a) => {
+      const uids = (Array.isArray(a.targets) ? a.targets : []).map(String).flatMap((t) => resolveTargets(p, t).map((n) => n.uid));
+      const ops = lockOps(p.doc, uids, a.locked !== false);
+      apply(p, a.locked === false ? 'Unlock' : 'Lock', ops);
+      return { changed: ops.length, locked: a.locked !== false };
+    },
+  },
+  {
+    name: 'set_layout_grid',
+    description: `Set the layout grid where parts, traces and drawings snap (P5), e.g. "0.25mm", "25mil", 0.1 (mm). Common steps: ${LAYOUT_GRIDS.map((g) => g.label).join(', ')}.`,
+    mutates: true,
+    input: { type: 'object', properties: { grid: { type: 'string' } }, required: ['grid'] },
+    run: (p, a) => {
+      let mm: number;
+      try {
+        mm = parseRuleValue('gridSpacing', String(a.grid)) as number;
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      if (!(mm > 0.001 && mm <= 10)) throw new ToolError('grid: between 0.001 and 10 mm');
+      apply(p, 'Layout grid', [setLayoutGridOp(p.doc, mm)]);
+      return { layoutGrid: mm };
+    },
+  },
+  {
+    name: 'align_parts',
+    description: 'Align or spread board parts by their outlines (P5): mode left, right, top, bottom, centerX (one column), centerY (one row), distributeX or distributeY (even gaps, three or more parts). Traces on their pads follow. Locked parts stay.',
+    mutates: true,
+    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, mode: { type: 'string', enum: ['left', 'right', 'top', 'bottom', 'centerX', 'centerY', 'distributeX', 'distributeY'] } }, required: ['refs', 'mode'] },
+    run: (p, a) => {
+      const uids = (Array.isArray(a.refs) ? a.refs : []).map(String).map((r) => one(p, r, 'element').uid);
+      const moves = alignPartsMoves(p.doc, p.engine, p.copper, uids, str(a.mode, 'mode') as AlignMode);
+      for (const m of moves) {
+        const from = vec(p.engine.get(m.uid, 'position')?.value) ?? { x: 0, y: 0 };
+        const d = { x: m.to.x - from.x, y: m.to.y - from.y };
+        const plan = rubberbandPlan(p.doc, p.engine, p.copper, [m.uid]);
+        apply(p, 'Align parts', [{ op: 'setRule', uid: m.uid, name: 'position', decl: { name: 'position', value: m.to } }, ...rubberbandOps(plan, (q) => ({ x: q.x + d.x, y: q.y + d.y }), { fix45: true, doc: p.doc })]);
+      }
+      return { moved: moves.map((m) => p.doc.nodes.get(m.uid)!.name) };
     },
   },
   {

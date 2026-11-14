@@ -196,6 +196,18 @@ export function mountInspector(app: App, root: HTMLElement, helpRoot: HTMLElemen
     for (const [k, v] of props) kv.append(h('div', { class: 'k', title: k }, k), h('div', { class: 'v' }, String(v)));
     kv.append(h('div', { class: 'k' }, 'UID'), h('div', { class: 'v dim', style: 'font-size:11px' }, n.uid));
     box.append(kv);
+    // Board items (P5): flip a part to the other side; lock or unlock.
+    if (['element', 'trace', 'via', 'fill', 'zone'].includes(n.type)) {
+      const side = String(engine.get(n.uid, 'side')?.value ?? 'top');
+      box.append(
+        h(
+          'div',
+          { style: 'display:flex;gap:6px;flex-wrap:wrap' },
+          n.type === 'element' ? h('button', { title: 'Flip the part to the other side of the board (F)', onclick: () => (app.select([n.uid]), app.flipSelection()) }, side === 'bottom' ? 'Flip to top' : 'Flip to bottom') : null,
+          h('button', { title: 'Locked items are not moved by dragging, rotating, the autoplacer or a shove (K)', onclick: () => (app.select([n.uid]), app.toggleLock()) }, n.props.locked ? 'Unlock' : 'Lock'),
+        ),
+      );
+    }
 
     const seg = h(
       'div',
@@ -371,7 +383,7 @@ export function mountInspector(app: App, root: HTMLElement, helpRoot: HTMLElemen
             { class: 'dim', style: 'font-size:12px;line-height:1.6' },
             h('b', {}, 'Select'), ' click · Cmd/Ctrl+click for a pad · drag on empty board for a box (left to right: inside; right to left: touching; Shift adds; Pick ▾ sets what it picks) · drag to move (a single trace: drag the segment sideways) · R rotate · Del delete', h('br', {}),
             h('b', {}, 'Route'), ' X · click a pad to start · M mode (walkaround / shove / free) · W / Shift+W width · V via · Shift+V via size · / corner · Esc stop · L switch layer', h('br', {}),
-            h('b', {}, 'View'), ' middle drag or Space+drag to pan · two-finger scroll pans · wheel or pinch zooms · F flip · Home fit', h('br', {}),
+            h('b', {}, 'View'), ' middle drag or Space+drag to pan · two-finger scroll pans · wheel or pinch zooms · F flips the selected parts (or the view) · K lock · Home fit', h('br', {}),
             h('b', {}, 'Edit'), ' Cmd/Ctrl+C copy · V paste (follows the mouse, click to place) · D duplicate · Cmd/Ctrl+Z undo · Shift+Cmd/Ctrl+Z redo · Cmd/Ctrl+S save',
           ),
     );
