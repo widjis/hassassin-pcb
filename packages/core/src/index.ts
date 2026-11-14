@@ -43,3 +43,6 @@ export * from './multiUnit.ts';
 export * from './symbolEditor.ts';
 export * from './footprintGen.ts';
 export * from './pinPad.ts';
+export * from './signal.ts';
+export * from './routeCheck.ts';
+export * from './shove.ts';

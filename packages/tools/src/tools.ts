@@ -68,11 +68,20 @@ import {
   defaultStackup,
   diffImpedance,
   diffPairs,
+  withCoupling,
   impedance,
   lengthGroups,
   lineGeometry,
   netLengths,
-  planMeander,
+  netSignals,
+  planSignalClasses,
+  isSignalClass,
+  isSignalInterface,
+  SIGNAL_CLASSES,
+  SIGNAL_INTERFACES,
+  planTune,
+  checkAutoroute,
+  autorouteSummary,
   stackupOf,
   widthForImpedance,
   type Stackup,
@@ -153,6 +162,8 @@ export interface ToolContext {
   readFile?: (path: string) => Promise<string>;
   /** Extra part/footprint sources (installed KiCad libraries, team library…). */
   library?: Library;
+  /** Progress of a long tool (autoroute): one line now and then, e.g. "Routing: 27/32 connections, round 2 · 1 s". */
+  onProgress?: (line: string) => void;
 }
 
 const DEFAULT_LIBRARY = new Library();
@@ -280,6 +291,127 @@ function symbolsByRefs(p: Project, refs: string): string[] {
 }
 
 /** Apply a move-type edit only if every connection stays as it was. */
+const drcErrorCount = (p: Project) => runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
+
+/**
+ * Add `extra` mm to a net with a serpentine (P10, `planTune`): the first candidate that adds no DRC error
+ * is kept, the others are undone. `partner`: the other half of a pair, so bumps go away from it.
+ */
+function tuneNet(p: Project, net: string, extra: number, opts: { partner?: string; amplitude?: number } = {}): { added: number } | { error: string } {
+  const plan = planTune(p.doc, p.engine, net, extra, opts);
+  if (!plan.candidates.length) return { error: plan.error ?? 'No trace to tune' };
+  const before = drcErrorCount(p);
+  for (const c of plan.candidates) {
+    apply(p, `Tune length ${net}`, c.ops);
+    if (drcErrorCount(p) <= before) return { added: c.added };
+    p.history.undo();
+  }
+  return { error: 'A serpentine on any straight trace of the net would break clearance; move nearby copper or tune it by hand.' };
+}
+
+/** Delay per mm (ps) of a net's routed copper, when the stackup gives delays. */
+const psPerMm = (l: { length: number; delay?: number } | undefined) => (l && l.delay !== undefined && l.length > 0 ? l.delay / l.length : undefined);
+
+/**
+ * Tune differential pairs whose skew is over their limit (rule diffSkewMaxPs, else diffSkewMax compared in
+ * time with the pair's delay per mm), or every pair with `all`: the shorter half in time gets a serpentine
+ * on the side away from its partner, so both halves arrive together.
+ */
+function tunePairs(p: Project, opts: { all?: boolean; nets?: string[] } = {}) {
+  const ruleOf = (net: string, name: string) => {
+    const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === net);
+    const v = n ? p.engine.get(n.uid, name)?.value : undefined;
+    return typeof v === 'number' && v > 0 ? v : undefined;
+  };
+  const st = stackupOf(p.doc, p.copper);
+  const out: { pair: string; skew: number; skewPs?: number; limit?: string; tuned?: string; added?: number; after?: number; afterPs?: number; status: string }[] = [];
+  for (const d of diffPairs(netLengths(p.doc, p.engine, st))) {
+    if (opts.nets && !opts.nets.includes(d.p) && !opts.nets.includes(d.n)) continue;
+    const lens = netLengths(p.doc, p.engine, st);
+    const lp = lens.find((l) => l.net === d.p), ln = lens.find((l) => l.net === d.n);
+    const k = psPerMm(lp) !== undefined && psPerMm(ln) !== undefined ? (psPerMm(lp)! + psPerMm(ln)!) / 2 : undefined;
+    const minOf = (name: string) => [ruleOf(d.p, name), ruleOf(d.n, name)].filter((v): v is number => v !== undefined).reduce((a, b) => Math.min(a, b), Infinity);
+    const limPs = Number.isFinite(minOf('diffSkewMaxPs')) ? minOf('diffSkewMaxPs') : undefined;
+    const limMm = Number.isFinite(minOf('diffSkewMax')) ? minOf('diffSkewMax') : undefined;
+    const limit = limPs !== undefined ? `${limPs} ps` : limMm !== undefined ? `${limMm} mm` : undefined;
+    const row = { pair: d.name, skew: d.skew, ...(d.skewPs !== undefined ? { skewPs: d.skewPs } : {}), ...(limit ? { limit } : {}) };
+    // Mismatch in time when the stackup gives delays, else in length.
+    const inTime = d.skewPs !== undefined && k !== undefined;
+    const over = limPs !== undefined && inTime ? d.skewPs! > limPs : limMm !== undefined ? (inTime ? d.skewPs! > limMm * k! : d.skew > limMm) : !!opts.all;
+    if (!over && !(opts.all && d.skew > 0.02)) {
+      out.push({ ...row, status: limit ? 'within the limit' : 'no limit set' });
+      continue;
+    }
+    const pShort = inTime ? lp!.delay! < ln!.delay! : lp!.length < ln!.length;
+    const [short, long] = pShort ? [lp!, ln!] : [ln!, lp!];
+    const extra = inTime ? (long.delay! - short.delay!) / psPerMm(short)! : long.length - short.length;
+    const r = tuneNet(p, short.net, extra, { partner: long.net });
+    if ('error' in r) {
+      out.push({ ...row, tuned: short.net, status: r.error });
+      continue;
+    }
+    const after = diffPairs(netLengths(p.doc, p.engine, st)).find((x) => x.p === d.p && x.n === d.n)!;
+    out.push({ ...row, tuned: short.net, added: r.added, after: after.skew, ...(after.skewPs !== undefined ? { afterPs: after.skewPs } : {}), status: 'tuned' });
+  }
+  return out;
+}
+
+/**
+ * Tune length-match groups (net property lengthGroup): every net slower than the group's slowest net by
+ * more than the tolerance (rule lengthMatchPs, else lengthMatch compared in time with the net's delay per
+ * mm; with `all` and no rule, 0.05 mm) gets a serpentine up to it. The halves of a pair in the group get
+ * their bumps away from their partner.
+ */
+function tuneGroups(p: Project, opts: { all?: boolean; groups?: string[] } = {}) {
+  const ruleOf = (net: string, name: string) => {
+    const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === net);
+    const v = n ? p.engine.get(n.uid, name)?.value : undefined;
+    return typeof v === 'number' && v > 0 ? v : undefined;
+  };
+  const st = stackupOf(p.doc, p.copper);
+  const partnerOf = new Map<string, string>();
+  for (const d of diffPairs(netLengths(p.doc, p.engine, st))) partnerOf.set(d.p, d.n).set(d.n, d.p);
+  const out: { group: string; spread: number; spreadPs?: number; limit?: string; target: string; nets: { net: string; before: number; after?: number; added?: number; status: string }[]; afterSpread?: number; afterSpreadPs?: number; status: string }[] = [];
+  for (const g0 of lengthGroups(netLengths(p.doc, p.engine, st).filter((l) => l.segments))) {
+    if (opts.groups && !opts.groups.includes(g0.group)) continue;
+    const lens = () => netLengths(p.doc, p.engine, st).filter((l) => l.group === g0.group && l.segments);
+    const ls = lens();
+    const inTime = ls.every((l) => psPerMm(l) !== undefined);
+    const time = (l: { length: number; delay?: number }) => (inTime ? l.delay! : l.length);
+    const slowest = ls.reduce((a, b) => (time(b) > time(a) ? b : a));
+    const minOf = (name: string) => ls.map((l) => ruleOf(l.net, name)).filter((v): v is number => v !== undefined).reduce((a, b) => Math.min(a, b), Infinity);
+    const limPs = Number.isFinite(minOf('lengthMatchPs')) ? minOf('lengthMatchPs') : undefined;
+    const limMm = Number.isFinite(minOf('lengthMatch')) ? minOf('lengthMatch') : undefined;
+    const limit = limPs !== undefined ? `${limPs} ps` : limMm !== undefined ? `${limMm} mm` : undefined;
+    const row = { group: g0.group, spread: g0.spread, ...(g0.spreadPs !== undefined ? { spreadPs: g0.spreadPs } : {}), ...(limit ? { limit } : {}), target: slowest.net };
+    if (!limit && !opts.all) {
+      out.push({ ...row, nets: [], status: 'no limit set (rule lengthMatch or lengthMatchPs, or all=true)' });
+      continue;
+    }
+    // Allowed lag of a net behind the slowest one, in the group's unit (ps or mm).
+    const lag = (l: { length: number; delay?: number }) =>
+      limPs !== undefined && inTime ? limPs : (limMm ?? 0.05) * (inTime ? psPerMm(l)! : 1);
+    const nets: { net: string; before: number; after?: number; added?: number; status: string }[] = [];
+    for (const l of ls) {
+      if (l.net === slowest.net) continue;
+      const behind = time(slowest) - time(l);
+      if (behind <= lag(l)) {
+        nets.push({ net: l.net, before: l.length, status: 'within the limit' });
+        continue;
+      }
+      const extra = inTime ? behind / psPerMm(l)! : behind;
+      const partner = partnerOf.get(l.net);
+      const r = tuneNet(p, l.net, extra, partner ? { partner } : {});
+      const now = lens().find((x) => x.net === l.net);
+      nets.push('error' in r ? { net: l.net, before: l.length, status: r.error } : { net: l.net, before: l.length, after: now?.length, added: r.added, status: 'tuned' });
+    }
+    const g1 = lengthGroups(lens()).find((x) => x.group === g0.group)!;
+    const left = nets.filter((n) => n.status !== 'tuned' && n.status !== 'within the limit').length;
+    out.push({ ...row, nets, afterSpread: g1.spread, ...(g1.spreadPs !== undefined ? { afterSpreadPs: g1.spreadPs } : {}), status: left ? `${left} net(s) could not be tuned` : nets.some((n) => n.status === 'tuned') ? 'tuned' : 'within the limit' });
+  }
+  return out;
+}
+
 function applyKeepingConnections(p: Project, label: string, ops: Op[]): void {
   if (!ops.length) return;
   const before = groupsOf(p);
@@ -424,7 +556,7 @@ const TARGET: Schema = { type: 'string', description: 'A part ("R1"), a pin/pad 
 export const TOOLS: ToolDef[] = [
   {
     name: 'project_status',
-    description: 'Overview of the project: counts, layers, sheets, check results and the stage gates (requirements → schematic → components → layout → review → fabrication). Start here.',
+    description: 'Overview of the project: counts, layers, sheets, check results, the signal class of each net that is not general (and how many are not applied yet), and the stage gates (requirements → schematic → components → layout → review → fabrication). Start here.',
     mutates: false,
     input: { type: 'object', properties: {} },
     run: (p) => {
@@ -450,6 +582,22 @@ export const TOOLS: ToolDef[] = [
           unroutedConnections: c.ratsnest.lines.length,
         },
         gates: computeGates({ doc: p.doc, erc: c.erc, drc: c.drc, ratsnest: c.ratsnest }),
+        signalClasses: (() => {
+          // P16: the class of each net that is not general, and how many are not written onto the nets yet.
+          const sigs = netSignals(p.doc);
+          if (!sigs.length) return 'no nets';
+          const counts: Record<string, number> = {};
+          for (const x of sigs) counts[x.signal] = (counts[x.signal] ?? 0) + 1;
+          const byName = new Map(nodes.filter((n) => n.type === 'net').map((n) => [n.name, n]));
+          const notApplied = sigs.filter((x) => x.source !== 'net' && (byName.get(x.net)?.props.signal ?? 'general') !== x.signal).length;
+          const nets = sigs.filter((x) => x.signal !== 'general' || x.source === 'net');
+          return {
+            counts,
+            nets: Object.fromEntries(nets.slice(0, 80).map((x) => [x.net, `${x.signal} (${x.source})`])),
+            ...(nets.length > 80 ? { more: nets.length - 80 } : {}),
+            ...(notApplied ? { notApplied, hint: 'Review with classify_nets, then apply=true so the per-class rules take effect.' } : {}),
+          };
+        })(),
         spec: p.doc.meta.spec ?? {},
       };
     },
@@ -1510,24 +1658,57 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'auto_place',
-    description: 'Move parts onto the board automatically: connected parts end up near each other, courtyards do not overlap. By default only parts that are not on the board yet (e.g. new parts parked beside it); `refs` to choose, `all` to re-place everything not locked. A starting point to refine.',
+    description: 'Move parts onto the board automatically: a greedy start (connected parts near each other), then an improvement pass (simulated annealing: moves, swaps, 90° turns) that shortens the total ratsnest (half-perimeter per net), keeps courtyards apart and on the board, keeps the parts of a schematic block (group box, or sheet when there are several) together, puts each decoupling capacitor (a C on a supply and ground shared with one IC) next to that IC\'s supply pin and moves it with the IC, and puts connectors with the part property placeAtEdge against the board edge, facing out. Locked parts stay. By default only parts that are not on the board yet (e.g. new parts parked beside it); `refs` to choose, `all` to re-place everything not locked. improve=false keeps the greedy start only; `seed`, `iterations` (moves per run) and `restarts` (runs, default 3) tune the pass. Reports the ratsnest before and after, the decoupling pairs, the blocks and the edge connectors. A starting point to refine.',
     mutates: true,
-    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, spacing: { type: 'number', description: 'mm between parts (default 0.5)' } } },
-    run: (p, a) => {
-      const { ops, report } = planAutoplace(p.doc, p.engine, p.copper, { ...(Array.isArray(a.refs) ? { refs: a.refs.map(String) } : {}), ...(a.all ? { all: true } : {}), ...(a.spacing !== undefined ? { spacing: num(a.spacing, 'spacing') } : {}) });
+    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, spacing: { type: 'number', description: 'mm between parts (default 0.5)' }, improve: { type: 'boolean' }, seed: { type: 'number' }, iterations: { type: 'number' }, restarts: { type: 'number' } } },
+    run: (p, a, ctx) => {
+      const say = ctx.onProgress;
+      let last = -1;
+      const { ops, report } = planAutoplace(p.doc, p.engine, p.copper, {
+        ...(say ? { onProgress: (q: { run: number; runs: number; done: number }) => { const pct = Math.floor(q.done * 10) * 10; if (pct !== last) (last = pct), say(`Placing: run ${q.run}/${q.runs}, ${pct} %`); } } : {}),
+        ...(Array.isArray(a.refs) ? { refs: a.refs.map(String) } : {}),
+        ...(a.all ? { all: true } : {}),
+        ...(a.spacing !== undefined ? { spacing: num(a.spacing, 'spacing') } : {}),
+        ...(a.improve === false || a.improve === 'false' ? { improve: false } : {}),
+        ...(a.seed !== undefined ? { seed: num(a.seed, 'seed') } : {}),
+        ...(a.iterations !== undefined ? { iterations: num(a.iterations, 'iterations') } : {}),
+        ...(a.restarts !== undefined ? { restarts: num(a.restarts, 'restarts') } : {}),
+      });
       apply(p, 'Auto-place parts', ops);
       return report;
     },
   },
   {
     name: 'autoroute',
-    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, net clearances kept). `nets` limits it to some nets. Connections it cannot finish are listed; it never forces a route. Run refill_pours and run_drc afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
+    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, each net\'s width and clearance kept, rip-up and retry when connections block each other). `nets` limits it to some nets, `layers` to some copper layers, `rounds` sets the rip-up rounds (1 = no rip-up). Layers have a preferred direction (rule routeDirection: top horizontal, next vertical; runs against it cost direction_cost times more, default 1.5), traces keep some air from other nets where there is room (proximity_cost), and connections are routed shortest first (rule autoPlacePriority first; order=difficulty puts fine-pitch pads and long connections first). A connection that runs into routes of other nets first tries to shove them aside (walked round it, clearance and connections kept) before they are ripped up (shove=false turns it off). Differential pairs (nets with a diffGap, from classify_nets) are routed together first: one path split into two traces at the pair width and gap, 45° turns, vias side by side, mirrored 45° breakouts (pairs=false routes them one by one); afterwards a pair over its skew limit (diffSkewMax) is tuned with a serpentine on its shorter half (tune=false leaves it), and pairs whose halves run apart longer than diffUncoupledMax are listed as uncoupledOver. Dense fine-pitch parts (QFN, QFP, TSSOP) are fanned out first: each pin leaves its pad row with a straight stub and routing starts at the stub\'s end (fanout=false turns it off). With plane_gap_cost (or rule planeGapCost on a net, e.g. high-speed) traces prefer to run over a pour on the neighbouring layer, not over gaps in it or over traces that cut it. Connections it cannot finish are listed with the reason; it never forces a route and never moves copper that was on the board before. Before applying, the result is checked with DRC (pours refilled for the check): a connection whose new copper causes an error is left out and listed with reason "DRC: …" (check=false skips this). Run refill_pours afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
     mutates: true,
-    input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number' } } },
-    run: (p, a) => {
-      const { ops, report } = planAutoroute(p.doc, p.engine, p.copper, { ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}) });
+    input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, layers: { type: 'array', items: { type: 'string' }, description: 'Copper layers to route on (default: all)' }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number', description: 'Via cost in grid steps for every net (default: rule viaCost, else 4 mm of trace)' }, rounds: { type: 'number', description: 'Rip-up and retry rounds (default 30; 1 = route once)' }, directions: { type: 'object', description: 'Preferred direction per copper layer, e.g. {"F.Cu":"horizontal","B.Cu":"vertical"} (default: rule routeDirection)' }, direction_cost: { type: 'number', description: 'Cost factor of a step against a layer direction (default 1.5; 1 = off)' }, proximity_cost: { type: 'number', description: 'Cost per step next to other nets (default 0.3; 0 = off)' }, order: { type: 'string', enum: ['difficulty', 'short'] }, fanout: { type: 'boolean', description: 'Fan out fine-pitch parts first with straight stubs (default true)' }, plane_gap_cost: { type: 'number', description: 'Cost per step over a gap in the pour on a neighbouring layer (default: rule planeGapCost, else 0 = off)' }, check: { type: 'boolean', description: 'Check the result with DRC (pours refilled) and leave out connections that cause errors (default true)' }, shove: { type: 'boolean', description: 'Push routes in the way aside before ripping them up (default true)' }, pairs: { type: 'boolean', description: 'Route differential pairs together (default true)' }, tune: { type: 'boolean', description: 'Tune pairs over their skew limit afterwards (default true)' } } },
+    run: (p, a, ctx) => {
+      const t0 = Date.now();
+      const say = ctx.onProgress;
+      const plan = planAutoroute(p.doc, p.engine, p.copper, { ...(say ? { onProgress: (q: { round: number; routed: number; total: number }) => say(`Routing: ${q.routed}/${q.total} connections, round ${q.round + 1} · ${Math.round((Date.now() - t0) / 1000)} s`) } : {}), ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(Array.isArray(a.layers) ? { layers: a.layers.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}), ...(a.rounds !== undefined ? { rounds: Math.max(1, Math.round(num(a.rounds, 'rounds'))) } : {}),
+        ...(a.directions && typeof a.directions === 'object' ? { directions: Object.fromEntries(Object.entries(a.directions as Record<string, unknown>).map(([k, v]) => [k, v === 'horizontal' || v === 'vertical' ? v : 'any'] as const)) } : {}),
+        ...(a.direction_cost !== undefined ? { directionCost: Math.max(1, num(a.direction_cost, 'direction_cost')) } : {}),
+        ...(a.proximity_cost !== undefined ? { proximityCost: Math.max(0, num(a.proximity_cost, 'proximity_cost')) } : {}),
+        ...(a.order === 'short' || a.order === 'difficulty' ? { order: a.order } : {}),
+        ...(a.fanout === false || a.fanout === 'false' ? { fanout: false } : {}),
+        ...(a.plane_gap_cost !== undefined ? { planeGapCost: Math.max(0, num(a.plane_gap_cost, 'plane_gap_cost')) } : {}),
+        ...(a.shove === false || a.shove === 'false' ? { shove: false } : {}),
+        ...(a.pairs === false || a.pairs === 'false' ? { pairs: false } : {}),
+      });
+      // P8g: the plan is checked with DRC (pours refilled) before it is applied; connections whose copper
+      // causes an error are left out and reported as not routed.
+      if (a.check !== false && a.check !== 'false') say?.('Checking the result with DRC…');
+      const checked = a.check === false || a.check === 'false' ? { ...plan, removed: 0, checkMs: 0 } : checkAutoroute(p.doc, p.engine, p.copper, plan);
+      const { ops, report } = checked;
       apply(p, 'Autoroute', ops);
-      return { routed: report.routed.length, failed: report.failed, grid: report.grid, ms: report.ms, totalLength: +report.routed.reduce((s, r) => s + r.length, 0).toFixed(2), vias: report.routed.reduce((s, r) => s + r.vias, 0) };
+      // P10: pairs over their skew limit are tuned afterwards (tune=false leaves them).
+      const tuned = a.tune === false || a.tune === 'false' ? [] : tunePairs(p).filter((x) => x.tuned);
+      // Pairs whose halves run apart for longer than diffUncoupledMax (mostly the breakouts at the pads).
+      const uncoupledOver = withCoupling(p.doc, p.engine, diffPairs(netLengths(p.doc, p.engine, stackupOf(p.doc, p.copper))))
+        .filter((d) => d.uncoupled !== undefined && d.uncoupledMax !== undefined && d.uncoupled > d.uncoupledMax + 1e-3)
+        .map((d) => ({ pair: d.name, uncoupled: d.uncoupled!, max: d.uncoupledMax!, hint: 'Halves run apart longer than diffUncoupledMax: move the pads closer to the pair, or route the breakout by hand.' }));
+      return { ...autorouteSummary(report), checked: checked.checkMs > 0, removedByDrc: checked.removed, checkMs: checked.checkMs, ...(tuned.length ? { tuned } : {}), ...(uncoupledOver.length ? { uncoupledOver } : {}) };
     },
   },
   {
@@ -1579,38 +1760,136 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'net_lengths',
-    description: 'Routed length per net, differential pairs found by name (X_P/X_N, X+/X-, DP/DM) with their skew, and length-match groups (net property lengthGroup) with their spread.',
+    description: 'Routed length and delay (ps, from each layer\'s propagation delay in the stackup) per net, differential pairs (partner set with set_pin_signal pair, or found by name: X_P/X_N, X+/X-, DP/DM) with their skew in length and time and, for pairs with a gap (diffGap), the length run side by side (coupled) and the longer half\'s length apart from its partner (uncoupled, against the rule diffUncoupledMax as uncoupledMax), and length-match groups (net property lengthGroup) with their spread in length and time.',
     mutates: false,
     input: { type: 'object', properties: { filter: { type: 'string' } } },
     run: (p, a) => {
-      const all = netLengths(p.doc, p.engine);
+      const all = netLengths(p.doc, p.engine, stackupOf(p.doc, p.copper));
       const f = typeof a.filter === 'string' ? a.filter.toLowerCase() : '';
-      return { nets: all.filter((l) => !f || l.net.toLowerCase().includes(f)).filter((l) => l.segments), pairs: diffPairs(all), groups: lengthGroups(all) };
+      const cls = new Map(netSignals(p.doc).map((s) => [s.net, s.signal]));
+      return { nets: all.filter((l) => !f || l.net.toLowerCase().includes(f)).filter((l) => l.segments).map((l) => ({ ...l, signal: cls.get(l.net) ?? 'general' })), pairs: withCoupling(p.doc, p.engine, diffPairs(all)), groups: lengthGroups(all) };
+    },
+  },
+  {
+    name: 'classify_nets',
+    description: `Signal class of every net (P16): ${SIGNAL_CLASSES.join(', ')}. A net takes the strictest class of its pins: a pin's \`signal\` property (set_pin_signal) or else a guess from pin, net and part names (CLK, XTAL, FB, SW/LX, RF/ANT, USB/ETH, X_P/X_N pairs, crystals, a converter's inductor). A class set by hand on the net wins. Lists each net with its class, source (net / pin / guess / default) and reason, for review. apply=true writes the classes onto the nets (property signal), so the default rulesets net[signal=…] set width, clearance, via cost, corner style and plane-gap cost for the autorouter; classes set by hand are kept. Where a current or voltage is given (set_pin_signal), it also writes the net's traceWidth from the current (IPC-2221, outer copper, 10 °C rise) and keepOut from the voltage (IPC-2221 spacing, uncoated outer layer); a traceWidth / keepOut set by hand on the net is kept and listed under "kept".`,
+    mutates: true,
+    input: { type: 'object', properties: { apply: { type: 'boolean', description: 'Write the classes onto the nets (default false: only list them)' }, filter: { type: 'string' } } },
+    run: (p, a) => {
+      const all = netSignals(p.doc);
+      const f = typeof a.filter === 'string' ? a.filter.toLowerCase() : '';
+      const list = all.filter((s) => !f || s.net.toLowerCase().includes(f));
+      let rules: unknown[] = [];
+      if (a.apply === true) {
+        const st = stackupOf(p.doc, p.copper);
+        const top = st.layers.find((l) => l.kind === 'copper');
+        const plan = planSignalClasses(p.doc, { stackup: st, engine: p.engine, ...(top ? { copperMm: top.thickness, layer: top.name } : {}), ...(f ? { nets: list.map((x) => x.net) } : {}) });
+        if (plan.ops.length) apply(p, 'Classify nets', plan.ops);
+        rules = plan.rules;
+      }
+      const counts: Record<string, number> = {};
+      for (const s of list) counts[s.signal] = (counts[s.signal] ?? 0) + 1;
+      return { applied: a.apply === true, counts, nets: list, ...(rules.length ? { rules } : {}) };
+    },
+  },
+  {
+    name: 'set_pin_signal',
+    description: `Set what a pin needs from the layout (P16): signal = ${SIGNAL_CLASSES.join(' | ')}, or "" to remove it; current (A) and voltage (V) the pin carries, impedance (Ω, single-ended target: classify_nets sets the width from the stackup's outer layer), frequency (MHz; from 50 MHz the net is at least high-speed) and interface (${Object.keys(SIGNAL_INTERFACES).join(', ')}: makes it a diff-pair with the preset's differential impedance, for P10). For a net (net=true) also pair (the other half of a differential pair, when the names do not show it) and length_group (length-match group) (0 or "" removes; from 1 A / 50 V the net is at least high-current / high-voltage, and classify_nets sizes width and clearance from them). target = a part ("U1", every pin), a pin ("U1.12"), or a net with net=true (the net's class, set by hand, overrides its pins). Sets the board pad and the schematic pin. Then run classify_nets with apply=true.`,
+    mutates: true,
+    input: { type: 'object', properties: { target: { type: 'string' }, signal: { type: 'string', enum: [...SIGNAL_CLASSES, ''] }, current: { type: 'number', description: 'Amps' }, voltage: { type: 'number', description: 'Volts' }, impedance: { type: 'number', description: 'Ohms, single-ended' }, frequency: { type: 'number', description: 'MHz' }, interface: { type: 'string', enum: [...Object.keys(SIGNAL_INTERFACES), ''] }, pair: { type: 'string', description: 'Net: the partner net of a differential pair' }, length_group: { type: 'string', description: 'Net: length-match group' }, net: { type: 'boolean', description: 'target is a net name' } }, required: ['target'] },
+    run: (p, a) => {
+      const target = str(a.target, 'target');
+      const hasSig = a.signal !== undefined;
+      const sig = String(a.signal ?? '');
+      if (sig && !isSignalClass(sig)) throw new ToolError(`Unknown signal class "${sig}"; use one of ${SIGNAL_CLASSES.join(', ')}`);
+      const current = optNum(a.current, 'current');
+      const voltage = optNum(a.voltage, 'voltage');
+      const imp = optNum(a.impedance, 'impedance');
+      const freq = optNum(a.frequency, 'frequency');
+      const iface = a.interface === undefined ? undefined : String(a.interface);
+      if (iface && !isSignalInterface(iface)) throw new ToolError(`Unknown interface "${iface}"; use one of ${Object.keys(SIGNAL_INTERFACES).join(', ')}`);
+      const pair = a.pair === undefined ? undefined : String(a.pair);
+      const group = a.length_group === undefined ? undefined : String(a.length_group);
+      if ((pair !== undefined || group !== undefined) && a.net !== true) throw new ToolError('`pair` and `length_group` belong to a net: give net=true.');
+      if (!hasSig && [current, voltage, imp, freq, iface, pair, group].every((v) => v === undefined)) throw new ToolError('Give `signal` or a parameter (current, voltage, impedance, frequency, interface, pair, length_group).');
+      const ops: Op[] = [];
+      const hit: string[] = [];
+      const params = (uid: string) => {
+        if (current !== undefined) ops.push({ op: 'setProp', uid, key: 'signalCurrent', value: current > 0 ? current : null });
+        if (voltage !== undefined) ops.push({ op: 'setProp', uid, key: 'signalVoltage', value: voltage > 0 ? voltage : null });
+        if (imp !== undefined) ops.push({ op: 'setProp', uid, key: 'signalImpedance', value: imp > 0 ? imp : null });
+        if (freq !== undefined) ops.push({ op: 'setProp', uid, key: 'signalFrequency', value: freq > 0 ? freq : null });
+        if (iface !== undefined) ops.push({ op: 'setProp', uid, key: 'signalInterface', value: iface || null });
+      };
+      if (a.net === true) {
+        const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === target);
+        if (!n) throw new ToolError(`No net ${target}`);
+        if (hasSig) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null }, { op: 'setProp', uid: n.uid, key: 'signalSource', value: sig ? 'net' : null });
+        params(n.uid);
+        if (pair !== undefined) {
+          const other = pair ? [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === pair) : undefined;
+          if (pair && !other) throw new ToolError(`No net ${pair}`);
+          ops.push({ op: 'setProp', uid: n.uid, key: 'pairWith', value: pair || null });
+          if (other) ops.push({ op: 'setProp', uid: other.uid, key: 'pairWith', value: n.name });
+          else for (const x of p.doc.nodes.values()) if (x.type === 'net' && x.props.pairWith === n.name) ops.push({ op: 'setProp', uid: x.uid, key: 'pairWith', value: null });
+        }
+        if (group !== undefined) ops.push({ op: 'setProp', uid: n.uid, key: 'lengthGroup', value: group || null });
+        hit.push(n.name);
+      } else {
+        const dot = target.lastIndexOf('.');
+        const [ref, pin] = dot > 0 ? [target.slice(0, dot), target.slice(dot + 1)] : [target, undefined];
+        for (const n of p.doc.nodes.values()) {
+          if (n.type !== 'pad' && n.type !== 'pin') continue;
+          const parent = n.parent ? p.doc.nodes.get(n.parent) : undefined;
+          if (!parent || parent.name !== ref || (parent.type !== 'element' && parent.type !== 'symbol')) continue;
+          const num = String(n.props.number ?? n.name);
+          if (pin !== undefined && num !== pin) continue;
+          if (hasSig) ops.push({ op: 'setProp', uid: n.uid, key: 'signal', value: sig || null });
+          params(n.uid);
+          hit.push(`${ref}.${num}${n.type === 'pin' ? ' (schematic)' : ''}`);
+        }
+        if (!hit.length) throw new ToolError(`No pin or pad matches "${target}"`);
+      }
+      apply(p, `Set signal ${target}`, ops);
+      return { updated: hit, ...(hasSig ? { signal: sig || null } : {}), ...(current !== undefined ? { current } : {}), ...(voltage !== undefined ? { voltage } : {}), ...(imp !== undefined ? { impedance: imp } : {}), ...(freq !== undefined ? { frequency: freq } : {}), ...(iface !== undefined ? { interface: iface || null } : {}), ...(pair !== undefined ? { pair: pair || null } : {}), ...(group !== undefined ? { length_group: group || null } : {}), next: 'Run classify_nets with apply=true to update the nets.' };
     },
   },
   {
     name: 'tune_length',
-    description: 'Lengthen a net with a serpentine on its longest straight trace: to `target` mm, or to match the net `match` (e.g. the other half of a differential pair). The change is undone automatically if it causes DRC errors.',
+    description: 'Lengthen a net with a serpentine: to `target` mm, or to match the net `match` (in time when the stackup gives delays, e.g. the other half of a differential pair; its bumps then go away from that net). Bumps are rectangles with 45° chamfered corners on the longest straight trace that can take them, next to the bend, at most `amplitude` high (rule tuneAmplitude, default 1.5 mm) with legs tuneSpacing apart (default 3 × width). A candidate that would cause DRC errors is undone and the next tried.',
     mutates: true,
-    input: { type: 'object', properties: { net: { type: 'string' }, target: { type: 'number' }, match: { type: 'string' }, amplitude: { type: 'number', description: 'Max bump height mm (default 1.5)' } }, required: ['net'] },
+    input: { type: 'object', properties: { net: { type: 'string' }, target: { type: 'number' }, match: { type: 'string' }, amplitude: { type: 'number', description: 'Max bump height mm (default rule tuneAmplitude, else 1.5)' } }, required: ['net'] },
     run: (p, a) => {
       const net = str(a.net, 'net');
-      const lens = netLengths(p.doc, p.engine);
+      const st = stackupOf(p.doc, p.copper);
+      const lens = netLengths(p.doc, p.engine, st);
       const cur = lens.find((l) => l.net === net);
       if (!cur) throw new ToolError(`No net ${net}`);
-      const target = optNum(a.target, 'target') ?? (typeof a.match === 'string' ? lens.find((l) => l.net === a.match)?.length : undefined);
-      if (target === undefined) throw new ToolError('Give `target` (mm) or `match` (a net name).');
-      const before = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
-      for (const side of [1, -1] as const) {
-        const plan = planMeander(p.doc, p.engine, net, target - cur.length, { side, ...(a.amplitude !== undefined ? { amplitude: num(a.amplitude, 'amplitude') } : {}) });
-        if (plan.error) throw new ToolError(plan.error);
-        apply(p, `Tune length ${net}`, plan.ops);
-        const after = runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
-        if (after <= before) return { net, before: cur.length, after: netLengths(p.doc, p.engine).find((l) => l.net === net)!.length, target };
-        p.history.undo();
-      }
-      throw new ToolError('A serpentine here would break clearance on both sides; move nearby copper or tune a different segment by hand.');
+      const m = typeof a.match === 'string' ? lens.find((l) => l.net === a.match) : undefined;
+      if (typeof a.match === 'string' && !m) throw new ToolError(`No net ${a.match}`);
+      const t = optNum(a.target, 'target');
+      if (t === undefined && !m) throw new ToolError('Give `target` (mm) or `match` (a net name).');
+      const k = psPerMm(cur);
+      const extra = t !== undefined ? t - cur.length : m!.delay !== undefined && cur.delay !== undefined && k ? (m!.delay - cur.delay) / k : m!.length - cur.length;
+      const r = tuneNet(p, net, extra, { ...(m ? { partner: m.net } : {}), ...(a.amplitude !== undefined ? { amplitude: num(a.amplitude, 'amplitude') } : {}) });
+      if ('error' in r) throw new ToolError(r.error);
+      const after = netLengths(p.doc, p.engine, st).find((l) => l.net === net)!;
+      return { net, before: cur.length, after: after.length, added: r.added, ...(t !== undefined ? { target: t } : { match: m!.net, matchLength: m!.length }), ...(after.delay !== undefined ? { delay: after.delay } : {}), ...(m?.delay !== undefined ? { matchDelay: m.delay } : {}) };
     },
+  },
+  {
+    name: 'tune_pairs',
+    description: 'Tune differential pairs whose intra-pair skew is over their limit (rule diffSkewMaxPs, else diffSkewMax; an interface preset sets it, USB 2.0 1.27 mm), compared in time with each layer\'s propagation delay: the shorter half gets a serpentine with 45° corners on the side away from its partner. all=true tunes every pair with a skew over 0.02 mm. Returns each pair with its skew before and after, or why it was left.',
+    mutates: true,
+    input: { type: 'object', properties: { all: { type: 'boolean' }, nets: { type: 'array', items: { type: 'string' } } } },
+    run: (p, a) => ({ pairs: tunePairs(p, { all: a.all === true || a.all === 'true', ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}) }) }),
+  },
+  {
+    name: 'tune_groups',
+    description: 'Tune length-match groups (net property lengthGroup, set with set_pin_signal length_group): every net that lags the group\'s slowest net by more than the tolerance (rule lengthMatchPs, else lengthMatch, compared in time with each layer\'s propagation delay) gets a serpentine with 45° corners up to it; halves of a differential pair keep their bumps away from their partner. all=true tunes groups with no rule to within 0.05 mm. Returns each group with its spread before and after and every net\'s result.',
+    mutates: true,
+    input: { type: 'object', properties: { all: { type: 'boolean' }, groups: { type: 'array', items: { type: 'string' } } } },
+    run: (p, a) => ({ groups: tuneGroups(p, { all: a.all === true || a.all === 'true', ...(Array.isArray(a.groups) ? { groups: a.groups.map(String) } : {}) }) }),
   },
   {
     name: 'delete',

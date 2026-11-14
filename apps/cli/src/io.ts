@@ -5,6 +5,8 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { ensureGeometry, Library, openProject, saveProject, type InputFile, type Project, type ToolContext } from '@hassassin/tools';
 import { kicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
 
+/** Tools that fill pours (the polygon engine must be loaded first): autoroute checks its result on refilled pours (P8g). */
+export const NEEDS_GEOMETRY = new Set(['refill_pours', 'autoroute']);
 export const loadGeometry = () => ensureGeometry(() => loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmOnly));
 
 export const isHpcb = (p: string) => extname(p).toLowerCase() === '.hpcb';
@@ -53,6 +55,7 @@ let ctx: ToolContext | null = null;
 export function toolContext(): ToolContext {
   if (ctx) return ctx;
   const kicad = kicadSystemLibrary();
-  ctx = { writeFile: writeAny, readFile: (p: string) => readFile(resolve(p), 'utf8'), library: new Library(kicad ? [kicad] : []) };
+  // Progress of long tools goes to stderr, so stdout stays the JSON result.
+  ctx = { writeFile: writeAny, readFile: (p: string) => readFile(resolve(p), 'utf8'), library: new Library(kicad ? [kicad] : []), onProgress: (line: string) => process.stderr.write(`${line}\n`) };
   return ctx;
 }

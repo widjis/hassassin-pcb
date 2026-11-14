@@ -10,7 +10,7 @@
  * Output is JSON on stdout. Exit codes: 0 ok, 1 error, 2 checks found errors (--fail-on-error).
  */
 import { newProject, ToolError, TOOL_MAP, TOOLS, runTool, saveProject, type ToolDef } from '@hassassin/tools';
-import { isHpcb, loadGeometry, readProject, toolContext, writeAny, writeProject } from './io.ts';
+import { isHpcb, loadGeometry, NEEDS_GEOMETRY, readProject, toolContext, writeAny, writeProject } from './io.ts';
 import { serveMcp } from './mcp.ts';
 import { openLive, parseLiveLink, runLive } from './live.ts';
 import { AgentSession, type AgentEvent } from '@hassassin/tools';
@@ -189,7 +189,7 @@ export async function main(argv: string[]): Promise<void> {
   const link = parseLiveLink(projectPath);
   if (link) {
     const s = await openLive(link);
-    if (tool.name === 'refill_pours') await loadGeometry();
+    if (NEEDS_GEOMETRY.has(tool.name)) await loadGeometry();
     try {
       print(await runLive(s, () => runTool(s.project, tool.name, args, toolContext()), tool.mutates));
     } finally {
@@ -198,7 +198,7 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   const p = await readProject([projectPath]);
-  if (tool.name === 'refill_pours') await loadGeometry();
+  if (NEEDS_GEOMETRY.has(tool.name)) await loadGeometry();
   const result = await runTool(p, tool.name, args, toolContext());
   if (tool.mutates && p.dirty) {
     const target = typeof flags.out === 'string' && tool.name !== 'export_fab' && tool.name !== 'export_schematic' && tool.name !== 'export_netlist' && tool.name !== 'export_kicad_schematic' ? flags.out : projectPath;
