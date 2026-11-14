@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
 | Version | 0.4 |
-| Status | **Approved on 2026-11-12 (0.4) — in progress** |
+| Status | **Approved on 2026-11-12 (0.4) — PM2 done (`v0.2.0`, 2026-11-14); PM1 and PM3 to do** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |

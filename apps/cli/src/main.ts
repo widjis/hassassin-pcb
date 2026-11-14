@@ -15,7 +15,7 @@ import { serveMcp } from './mcp.ts';
 import { openLive, parseLiveLink, runLive } from './live.ts';
 import { AgentSession, type AgentEvent } from '@hassassin/tools';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 /** Positional arguments after the project, per tool. */
 const POSITIONAL: Record<string, string[]> = {

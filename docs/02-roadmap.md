@@ -407,6 +407,47 @@ Known limitations:
 - Next: the PCB layout work agreement ([05-pcb-improvements.md](05-pcb-improvements.md)), milestone PM2
   first.
 
+## PCB layout improvements, milestone PM2 (v0.2.0)
+
+Done under the work agreement [docs/05-pcb-improvements.md](05-pcb-improvements.md) (P8a–P8g, P9–P11,
+P16), so automatic placement and routing finish real boards. Measured on copies of the two benchmark
+boards, against v0.0.3 and against their hand routing:
+
+| Board | v0.0.3 router | Now | Hand routing (same nets) |
+|---|---|---|---|
+| Solar MPPT (r4, 0.4 mm VQFN-29) | 45 / 76 routed, 15 vias, 266 mm | **76 / 76**, 39 vias, 484 mm, 0 DRC errors, ~5 s | 76 / 76, 32 vias, 568 mm |
+| RGB sleep lamp | 33 / 59 routed (30 s time limit) | **59 / 59**, 35 vias, 882 mm, ~26 s | 59 / 59, 38 vias, 901 mm |
+
+- **Autorouter (P8):** a benchmark and fixtures harness; clearance per net; each net routed to any copper
+  it already has; rip-up and retry by negotiated congestion; clean traces with 45° or arc corners only and
+  human-like pad entry; layer directions, fanout of fine-pitch parts and BGA dog-bones, bus lanes; every
+  result checked with DRC (a route that causes an error is left out and reported); progress and Cancel,
+  routing in a Web Worker.
+- **Shove (P9):** routes of other nets in the way are pushed aside (vias too, their traces follow) before
+  anything is ripped up.
+- **Differential pairs and length tuning (P10):** pair width and gap from the differential impedance,
+  pairs routed together with symmetric vias and breakouts, skew in time, chamfered serpentines, length
+  groups.
+- **Autoplacer (P11):** simulated-annealing improvement on top of the greedy placer, schematic blocks kept
+  together, decoupling capacitors next to their IC's supply pins, edge connectors at the edge: ratsnest
+  27–32 % shorter on the solar board and 15–30 % on the RGB lamp, both routed fully afterwards.
+- **Signal classes (P16):** twelve classes (power, ground, switching, high-speed, diff-pair, clock, rf,
+  analog, sensitive …) from the pins (set by hand, in the symbol editor, the footprint generator, or
+  guessed from names), with current, voltage, impedance, frequency and interface presets; each class has
+  default rules (width, clearance, via cost, corner style, spacing between classes) that the router reads.
+  Reviewed by the owner on both benchmark boards.
+
+| Solar MPPT board autorouted by Hassassin (76/76, signal classes from the owner's review) | The same board routed by hand in KiCad, for comparison |
+|---|---|
+| ![The solar MPPT r4 board in Hassassin's layout view after the autorouter: every connection routed on F.Cu and B.Cu with vias, the power nets wider, zero unrouted](media/pm2-solar-autorouted.jpg) | ![The same solar MPPT r4 board with its original hand routing from KiCad, shown in Hassassin's layout view](media/pm2-solar-hand.jpg) |
+
+Known limitations:
+- The RGB lamp keeps 4 DRC errors of pour against pour on F.Cu, the same with no routing at all (pour
+  priority is item P6 of PM1).
+- On the solar board the router takes more vias than the hand routing (39 against 32).
+- Hand routing does not shove or route pairs yet; those parts of P9 / P10 moved to PM1 (P4).
+- Next: milestone PM1 (the layout editor by hand), then PM3 (manufacturing).
+
 ## Out of scope (for now)
 
 SPICE simulation, mechanical / enclosure design, firmware, wire harnesses, ordering from fabricators.
