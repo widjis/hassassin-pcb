@@ -2,10 +2,10 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
-import { SchematicView } from './sch/view.ts';
+import { isTrackpadScroll, SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
 import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
-import type { DocNode, Vec2 } from '@hassassin/core';
+import { BOX_KINDS, type BoxKind, type DocNode, type Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
@@ -673,6 +673,46 @@ $('netExportBtn').addEventListener('click', () => {
   if (r.unresolved.length) notes.push(`no KiCad footprint for ${r.unresolved.map((u) => u.ref).join(', ')}`);
   app.say(`Exported ${base}.net — ${notes.join(' · ')}`);
 });
+// Selection box filter (P1): a small menu under the Pick button.
+const pickBtn = $<HTMLButtonElement>('pickBtn');
+let pickMenu: HTMLElement | null = null;
+const closePick = () => {
+  pickMenu?.remove();
+  pickMenu = null;
+};
+pickBtn.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  if (pickMenu) return closePick();
+  const f = app.boxFilter;
+  const r = pickBtn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.className = 'pick-menu';
+  Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 4}px`, zIndex: '60', background: 'var(--panel, #15171c)', border: '1px solid var(--line, #2a2e37)', borderRadius: '8px', padding: '8px 10px', fontSize: '12px', display: 'grid', gap: '4px', minWidth: '170px', boxShadow: '0 6px 24px rgba(0,0,0,.4)' });
+  const row = (label: string, checked: boolean, on: (v: boolean) => void) => {
+    const l = document.createElement('label');
+    Object.assign(l.style, { display: 'flex', gap: '6px', alignItems: 'center', cursor: 'pointer' });
+    const c = document.createElement('input');
+    c.type = 'checkbox';
+    c.checked = checked;
+    c.addEventListener('change', () => on(c.checked));
+    l.append(c, label);
+    return l;
+  };
+  const title = document.createElement('div');
+  title.textContent = 'A selection box picks';
+  title.style.opacity = '0.7';
+  menu.append(title);
+  const names: Record<BoxKind, string> = { parts: 'Parts', traces: 'Traces', vias: 'Vias', pours: 'Pours', graphics: 'Graphics and text' };
+  for (const k of BOX_KINDS) menu.append(row(names[k], f.kinds.has(k), (v) => (v ? f.kinds.add(k) : f.kinds.delete(k))));
+  const sep = document.createElement('div');
+  sep.style.borderTop = '1px solid var(--line, #2a2e37)';
+  menu.append(sep, row('Active layer side only', f.activeOnly, (v) => (f.activeOnly = v)));
+  menu.addEventListener('click', (e) => e.stopPropagation());
+  document.body.append(menu);
+  pickMenu = menu;
+});
+window.addEventListener('click', closePick);
+
 $('fitBtn').addEventListener('click', () => app.fit());
 $('flipBtn').addEventListener('click', () => app.flip());
 const syncToolbar = () => {
@@ -693,8 +733,25 @@ syncToolbar();
 
 // ---- canvas interaction ----
 const canvas = app.glCanvas;
-type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' | 'segment' };
+type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' | 'segment' | 'box'; sx: number; sy: number };
 let drag: Drag | null = null;
+// Space held over the board: dragging pans (P1, as in the schematic).
+let spaceDown = false;
+const typingIn = (t: EventTarget | null) => !!(t as HTMLElement | null)?.closest?.('input, select, textarea, [contenteditable]');
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || app.space !== 'layout' || typingIn(e.target)) return;
+  e.preventDefault();
+  if (!spaceDown) {
+    spaceDown = true;
+    if (!drag) app.glCanvas.style.cursor = 'grab';
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code !== 'Space') return;
+  spaceDown = false;
+  if (!drag) app.glCanvas.style.cursor = '';
+});
+window.addEventListener('blur', () => (spaceDown = false));
 const local = (e: PointerEvent | WheelEvent | MouseEvent) => {
   const r = canvas.getBoundingClientRect();
   return { sx: e.clientX - r.left, sy: e.clientY - r.top };
@@ -702,11 +759,14 @@ const local = (e: PointerEvent | WheelEvent | MouseEvent) => {
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 2) return;
+  if (e.button === 1) e.preventDefault(); // no auto-scroll on middle click
   canvas.setPointerCapture(e.pointerId);
   const { sx, sy } = local(e);
-  const middle = e.button === 1;
+  // Pan: middle button or Space + drag. In select mode a left drag on empty board draws a selection box.
+  const panning = e.button === 1 || spaceDown;
   let kind: Drag['kind'] = 'pan';
-  if (app.mode === 'select' && !middle) {
+  if (app.mode === 'select' && !panning) {
+    kind = 'box';
     const uid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
     // One straight trace (P4): drag that segment sideways, its neighbours following.
     const alone = uid && !e.shiftKey && (!app.selection.size || (app.selection.size === 1 && app.selection.has(uid)));
@@ -717,9 +777,10 @@ canvas.addEventListener('pointerdown', (e) => {
       if (!app.selection.has(uid)) app.select([uid], e.shiftKey);
       kind = 'move';
       app.beginMove(app.toWorld(sx, sy));
-    }
+    } else if (uid) kind = 'pan';
   }
-  drag = { x: e.clientX, y: e.clientY, moved: false, kind };
+  drag = { x: e.clientX, y: e.clientY, moved: false, kind, sx, sy };
+  if (kind === 'pan' && panning) canvas.style.cursor = 'grabbing';
 });
 
 canvas.addEventListener('pointermove', (e) => {
@@ -737,6 +798,9 @@ canvas.addEventListener('pointermove', (e) => {
         app.panBy(dx, dy);
         drag.x = e.clientX;
         drag.y = e.clientY;
+      } else if (drag.kind === 'box') {
+        app.selBox = { a: { x: drag.sx, y: drag.sy }, b: { x: sx, y: sy } };
+        app.requestRender();
       } else if (drag.kind === 'segment') app.route.dragTo(world);
       else app.dragMove(world, !e.altKey);
     }
@@ -752,6 +816,19 @@ canvas.addEventListener('pointerup', (e) => {
   const { sx, sy } = local(e);
   if (drag?.kind === 'move') app.endMove();
   if (drag?.kind === 'segment') app.route.endDrag();
+  canvas.style.cursor = spaceDown ? 'grab' : '';
+  if (drag?.kind === 'box') {
+    app.selBox = null;
+    if (drag.moved) {
+      app.boxSelect({ x: drag.sx, y: drag.sy }, { x: sx, y: sy }, e.shiftKey);
+      drag = null;
+      return app.requestRender();
+    }
+  }
+  if (drag?.kind === 'pan' && drag.moved) {
+    drag = null;
+    return;
+  }
   if (drag && !drag.moved && e.button === 0 && app.commentMode) {
     drag = null;
     return placeComment('layout', app.toWorld(sx, sy));
@@ -785,6 +862,11 @@ canvas.addEventListener(
   (e) => {
     e.preventDefault();
     const { sx, sy } = local(e);
+    // Two-finger trackpad scroll pans; a mouse wheel or a pinch (ctrlKey) zooms (P1, as in the schematic).
+    if (!e.ctrlKey && isTrackpadScroll(e)) {
+      app.panBy(-e.deltaX, -e.deltaY);
+      return updateStatus();
+    }
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
     const dy = Math.max(-120, Math.min(120, e.deltaY * unit));
     app.zoomAt(sx, sy, Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.002)));

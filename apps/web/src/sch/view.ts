@@ -106,7 +106,7 @@ interface View {
  * Best guess whether a wheel event comes from a trackpad (two-finger scroll) rather than a mouse
  * wheel: trackpads send pixel deltas, often sideways, in steps that are not multiples of a notch.
  */
-function isTrackpadScroll(e: WheelEvent): boolean {
+export function isTrackpadScroll(e: WheelEvent): boolean {
   if (e.deltaMode !== 0) return false;
   if (Math.abs(e.deltaX) > 0) return true;
   const legacy = (e as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY;

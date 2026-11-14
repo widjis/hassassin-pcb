@@ -14,6 +14,13 @@ import { type WaivedViolation,
   runErc,
   systemDefaults,
   applyOps,
+  boardItemsInRect,
+  BOX_KINDS,
+  isBoardMovable,
+  mapFills,
+  movablePoints,
+  rotateSelectionOps,
+  type BoxKind,
   arcPoints,
   type ErcViolation,
   type Netlist,
@@ -59,14 +66,13 @@ const DEFAULT_LAYERS: LayerInfo[] = [
   ['F.Mask', 'mask', 'front'], ['B.Mask', 'mask', 'back'], ['F.Paste', 'paste', 'front'], ['B.Paste', 'paste', 'back'],
   ['F.CrtYd', 'courtyard', 'front'], ['F.Fab', 'fab', 'front'], ['Edge.Cuts', 'edge', 'none'],
 ].map(([name, kind, side], index) => ({ name: name!, kind: kind as LayerInfo['kind'], side: side as LayerInfo['side'], index }));
-const MOVABLE = new Set(['element', 'via', 'trace']);
 const DELETABLE = new Set(['element', 'via', 'trace', 'line', 'arc', 'circle', 'polygon', 'rectangle', 'text', 'fill', 'zone']);
 
 interface MoveState {
   start: Vec2;
   key: string;
   last: Vec2;
-  items: { uid: string; rules: Record<string, Vec2> }[];
+  items: { uid: string; rules: Record<string, Vec2 | Vec2[]>; fills?: unknown }[];
 }
 
 export class App {
@@ -508,7 +514,7 @@ export class App {
 
   movable(uid: string): boolean {
     const n = this.node(uid);
-    return !!n && MOVABLE.has(n.type);
+    return !!n && !!this.doc && isBoardMovable(this.doc, n);
   }
 
   beginMove(world: Vec2): void {
@@ -516,14 +522,9 @@ export class App {
     const items: MoveState['items'] = [];
     for (const uid of this.selection) {
       const n = this.doc.nodes.get(uid);
-      if (!n || !MOVABLE.has(n.type)) continue;
-      const rules: Record<string, Vec2> = {};
-      const keys = n.type === 'trace' ? ['start', 'end', 'mid'] : ['position'];
-      for (const k of keys) {
-        const v = this.engine!.get(uid, k)?.value;
-        if (v && typeof v === 'object' && 'x' in v) rules[k] = { ...(v as Vec2) };
-      }
-      if (Object.keys(rules).length) items.push({ uid, rules });
+      if (!n || !isBoardMovable(this.doc, n) || n.props.locked) continue;
+      const rules = movablePoints(this.engine!, n);
+      if (Object.keys(rules).length) items.push({ uid, rules, ...(n.type === 'fill' && n.data?.fills ? { fills: structuredClone(n.data.fills) } : {}) });
     }
     if (!items.length) return;
     this.move = { start: world, last: { x: 0, y: 0 }, key: newUid('mv'), items };
@@ -541,10 +542,10 @@ export class App {
     if (d.x === m.last.x && d.y === m.last.y) return;
     m.last = d;
     const ops: Op[] = [];
+    const by = (v: Vec2) => ({ x: v.x + d.x, y: v.y + d.y });
     for (const it of m.items) {
-      for (const [k, v] of Object.entries(it.rules)) {
-        ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: { x: v.x + d.x, y: v.y + d.y } } });
-      }
+      for (const [k, v] of Object.entries(it.rules)) ops.push({ op: 'setRule', uid: it.uid, name: k, decl: { name: k, value: Array.isArray(v) ? v.map(by) : by(v) } });
+      if (it.fills) ops.push({ op: 'setData', uid: it.uid, key: 'fills', value: mapFills(it.fills, by) });
     }
     this.apply('Move', ops, m.key);
     this.say(`Δ ${d.x.toFixed(3)}, ${d.y.toFixed(3)} mm`);
@@ -555,17 +556,47 @@ export class App {
     this.move = null;
   }
 
+  /**
+   * R / Shift+R: one part turns in place; a selection of several items (parts, traces, vias, pours,
+   * graphics) turns as a group about its centre (P1). One undo step either way.
+   */
   rotateSelection(deg: number): void {
-    if (!this.engine) return;
+    if (!this.engine || !this.doc) return;
+    const sel = [...this.selection];
     const ops: Op[] = [];
-    for (const uid of this.selection) {
-      if (this.node(uid)?.type !== 'element') continue;
+    if (sel.length === 1 && this.node(sel[0]!)?.type === 'element') {
+      const uid = sel[0]!;
       const cur = Number(this.engine.get(uid, 'rotation')?.value ?? 0);
-      const next = (((cur + deg) % 360) + 360) % 360;
-      ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: next } });
-    }
-    if (!ops.length) return this.say('Select a component to rotate it.');
+      ops.push({ op: 'setRule', uid, name: 'rotation', decl: { name: 'rotation', value: (((cur + deg) % 360) + 360) % 360 } });
+    } else ops.push(...rotateSelectionOps(this.doc, this.engine, this.copper, sel, deg));
+    if (!ops.length) return this.say('Select a component (or a group of items) to rotate it.');
     this.apply('Rotate', ops);
+  }
+
+  /** The selection box being drawn, in screen pixels (P1). */
+  selBox: { a: { x: number; y: number }; b: { x: number; y: number } } | null = null;
+
+  /** What a box selection picks (P1): kinds of item, and the active copper layer only or every layer. */
+  boxFilter: { kinds: Set<BoxKind>; activeOnly: boolean } = { kinds: new Set(BOX_KINDS), activeOnly: false };
+
+  /** Select what a box between two screen points picks: left to right fully inside, right to left touching. */
+  boxSelect(a: { x: number; y: number }, b: { x: number; y: number }, additive: boolean): void {
+    if (!this.doc || !this.engine) return;
+    const p = this.toWorld(a.x, a.y);
+    const q = this.toWorld(b.x, b.y);
+    const r = { minX: Math.min(p.x, q.x), minY: Math.min(p.y, q.y), maxX: Math.max(p.x, q.x), maxY: Math.max(p.y, q.y) };
+    // On screen, left to right; a board seen from the bottom is mirrored, so compare screen x.
+    const mode = b.x >= a.x ? 'inside' : 'touch';
+    const f = this.boxFilter;
+    const side = (l: string) => {
+      if (!f.activeOnly) return true;
+      const pre = this.activeLayer.split('.')[0];
+      return l === this.activeLayer || (!l.endsWith('.Cu') && l.startsWith(`${pre}.`));
+    };
+    const picked = boardItemsInRect(this.doc, this.engine, this.copper, r, mode, { kinds: [...f.kinds], layer: (l) => this.visible.has(l) && side(l) });
+    if (additive) this.select(picked.filter((u) => !this.selection.has(u)), true);
+    else this.select(picked);
+    this.say(picked.length ? `${picked.length} item${picked.length > 1 ? 's' : ''} selected · drag to move · R rotate · Del delete` : 'Nothing in the box.');
   }
 
   deleteSelection(): void {
@@ -919,6 +950,19 @@ export class App {
 
     // Routing cursor
     this.route.drawOverlay(ctx, S);
+    // Selection box (P1): blue and solid left to right (inside), green and dashed right to left (touching).
+    if (this.selBox) {
+      const { a, b } = this.selBox;
+      const touch = b.x < a.x;
+      ctx.save();
+      ctx.fillStyle = touch ? 'rgba(120,200,140,0.10)' : 'rgba(110,160,255,0.10)';
+      ctx.strokeStyle = touch ? 'rgba(120,200,140,0.9)' : 'rgba(110,160,255,0.9)';
+      ctx.lineWidth = 1;
+      if (touch) ctx.setLineDash([5, 4]);
+      ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.strokeRect(Math.min(a.x, b.x) + 0.5, Math.min(a.y, b.y) + 0.5, Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.restore();
+    }
   }
 }
 

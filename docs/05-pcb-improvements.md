@@ -65,7 +65,7 @@ document before work on a measured item starts.
 
 ### Milestone PM1 — layout editor comfortable for manual work
 
-- [ ] **P1. Box selection and panning on the board.**
+- [x] **P1. Box selection and panning on the board.**
   - Dragging on an empty part of the board draws a selection box: left-to-right selects items fully
     inside, right-to-left also items it touches (the same rule as the schematic, S2); Shift adds.
   - Panning moves to the middle mouse button, Space + drag and trackpad two-finger scroll, as in the
@@ -73,6 +73,24 @@ document before work on a measured item starts.
   - A layer filter decides what the box picks (parts, traces, vias, pours, graphics; active layer only
     or all layers).
   - A selection moves, rotates and deletes as one undo step.
+  - *Done (2026-11-14):*
+    - Core module `boardSelect.ts`: `boardItemsInRect(doc, engine, copper, rect, 'inside' | 'touch',
+      { kinds, layer })` picks parts (pads and courtyard), traces, vias, pours (zones and fills) and
+      graphics and text that are not inside a part; a box from inside a filled shape (a part, a pour)
+      touches it, an outline (the board edge) only by its edges. `rotateSelectionOps` turns a selection
+      about its centre (parts turn and move round it; trace, via, pour and graphic points turn, a pour's
+      filled copper too); `movablePoints` / `isBoardMovable` let a drag move pours and graphics as well.
+    - Editor: a left drag on empty board in select mode draws the box (blue and solid left to right,
+      green and dashed right to left; Shift adds); a drag on an item still moves it. Panning moved to the
+      middle button, Space + drag and two-finger trackpad scroll; a mouse wheel or a pinch zooms (as in
+      the schematic). `Pick ▾` in the layout toolbar sets the kinds a box picks and "active layer side
+      only"; hidden layers are never picked. R turns one part in place and a group about its centre;
+      move, rotate and delete are one undo step each. Help text updated.
+    - Tests: `boardSelect.test.ts` (inside / touching, kinds and layer filter, the board outline picked
+      only when inside the box, a group turned in one step keeping connections and DRC, one undo puts it
+      back). In the browser on a copy of the solar board: both box directions, a group of a connector and
+      its traces moved by (2, 1) mm and back in one undo, R and Delete one step each, middle drag, Space +
+      drag, trackpad scroll pan, wheel and pinch zoom.
 - [ ] **P2. Rubber-banding: traces follow moved parts.**
   - Moving or rotating a part (or a group) keeps every trace that ends on one of its pads attached: the
     end moves with the pad and the last segments are adjusted, keeping 45° angles where possible.
