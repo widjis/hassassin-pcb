@@ -14,7 +14,8 @@
  *   pushed back): when it would, those pieces join the hull and the way round is found again;
  * - the new pieces of the pushed trace push in their turn, up to a step limit;
  * - nothing locked is moved (`locked` on the trace or on its net), a joint at a pad or via is never moved,
- *   arcs are not pushed, and vias of other nets are not moved (they are reported as in the way);
+ *   arcs are not pushed; a via of another net in the way steps aside along one of the 8 directions (along
+ *   one of its own traces where it can), its trace ends follow, and those pieces push in turn;
  * - at the end the result is checked on the board for a moment: DRC may not report any new error and the
  *   connectivity of every net must be the same; otherwise the shove is refused.
  * The result is one list of operations (one undo step); the board is left as it was.
@@ -185,24 +186,70 @@ export function planShove(doc: Doc, engine: StyleEngine, copper: string[], input
 
   // The pushers: the new copper first, then every piece a pushed trace gets.
   const queue: ShovePusher[] = [];
+  const movedVias: string[] = [];
   for (const t of input.traces ?? []) queue.push({ net: input.net, layers: [t.layer], a: t.a, b: t.b, half: t.width / 2 });
   for (const v of input.vias ?? []) queue.push({ net: input.net, layers: [...copper], a: v.at, b: v.at, half: v.diameter / 2 });
-  // Vias of other nets in the way are not moved.
-  for (const p of queue) {
-    for (const v of viaAt) {
-      if (v.net === p.net || !v.areas[0]) continue;
-      const r = Math.max(...v.areas[0][0]!.map((q) => Math.hypot(q.x - (v.box.minX + v.box.maxX) / 2, q.y - (v.box.minY + v.box.maxY) / 2)));
-      const c = { x: (v.box.minX + v.box.maxX) / 2, y: (v.box.minY + v.box.maxY) / 2 };
-      if (distToSegment(c, p.a, p.b) - r - p.half < Math.max(netClear(p.net), netClear(v.net ?? '')) - 1e-6) return fail(`a via of ${v.net ?? 'no net'} is in the way (vias are not shoved)`);
+  // Vias of other nets in the way move (P9): the shortest step along one of the 8 directions (along one of
+  // its own traces preferred, so their angle stays) that clears every pusher of the new copper; the trace
+  // ends on it follow, and those pieces push in turn. A locked via, or one with nowhere to go within
+  // 3 mm, refuses the shove.
+  const viaOps: Op[] = [];
+  const preRemoved = new Set<string>();
+  const firstPushers = queue.slice();
+  const viaNodes = [...doc.nodes.values()].filter((n) => n.type === 'via' && n.parent && doc.nodes.get(n.parent)?.type === 'net');
+  for (const vn of viaNodes) {
+    const vnet = doc.nodes.get(vn.parent!)!;
+    const c = engine.get(vn.uid, 'position')?.value as Vec2 | undefined;
+    if (!c) continue;
+    const r = Number(engine.get(vn.uid, 'viaDiameter')?.value ?? 0.6) / 2;
+    const need = (q: Vec2) => firstPushers.filter((p) => p.net !== vnet.name).map((p) => ({ p, gap: distToSegment(q, p.a, p.b) - r - p.half - Math.max(netClear(p.net), netClear(vnet.name)) }));
+    if (!need(c).some((x) => x.gap < -1e-6)) continue;
+    if (vn.props.locked || vnet.props.locked) return fail(`a locked via of ${vnet.name} is in the way`);
+    // Traces of the via's net that end on it (any layer).
+    const onVia = segs.filter((sg) => sg.net === vnet.name && (Math.hypot(sg.a.x - c.x, sg.a.y - c.y) < r || Math.hypot(sg.b.x - c.x, sg.b.y - c.y) < r));
+    if (onVia.some((sg) => sg.locked || sg.arc)) return fail(`a via of ${vnet.name} cannot move: a locked trace or an arc ends on it`);
+    let best: { d: Vec2; cost: number } | undefined;
+    for (let k = 0; k < 8; k++) {
+      const u = { x: Math.cos((k * Math.PI) / 4), y: Math.sin((k * Math.PI) / 4) };
+      const clear = (t: number) => need({ x: c.x + u.x * t, y: c.y + u.y * t }).every((x) => x.gap >= 0.005);
+      if (!clear(3)) continue;
+      let lo = 0, hi = 3;
+      for (let it = 0; it < 30; it++) {
+        const mid = (lo + hi) / 2;
+        if (clear(mid)) hi = mid;
+        else lo = mid;
+      }
+      // A step along a trace of the via keeps that trace's angle; across, the trace turns.
+      const across = onVia.filter((sg) => {
+        const o = Math.hypot(sg.a.x - c.x, sg.a.y - c.y) < r ? sg.b : sg.a;
+        const ex = o.x - c.x, ey = o.y - c.y, L = Math.hypot(ex, ey);
+        return L > 1e-9 && Math.abs(u.x * ey - u.y * ex) / L > 1e-3;
+      }).length;
+      const cost = hi + 0.5 * across;
+      if (!best || cost < best.cost) best = { d: { x: +(u.x * hi).toFixed(4), y: +(u.y * hi).toFixed(4) }, cost };
     }
+    if (!best) return fail(`a via of ${vnet.name} is in the way and has no room to move`);
+    const at = { x: +(c.x + best.d.x).toFixed(4), y: +(c.y + best.d.y).toFixed(4) };
+    viaOps.push({ op: 'setRule', uid: vn.uid, name: 'position', decl: { name: 'position', value: at } });
+    queue.push({ net: vnet.name, layers: [...copper], a: at, b: at, half: r });
+    for (const sg of onVia) {
+      const moveEnd = (q: Vec2) => (Math.hypot(q.x - c.x, q.y - c.y) < r ? { x: +(q.x + best!.d.x).toFixed(4), y: +(q.y + best!.d.y).toFixed(4) } : q);
+      const moved: ShoveSeg = { ...sg, uid: newUid('tr'), a: moveEnd(sg.a), b: moveEnd(sg.b), old: false };
+      segs.splice(segs.indexOf(sg), 1, moved);
+      preRemoved.add(sg.uid);
+      queue.push({ net: moved.net, layers: [moved.layer], a: moved.a, b: moved.b, half: moved.w / 2 });
+    }
+    movedVias.push(vn.uid);
   }
   const res = shoveChains(segs, queue, { clearance: (x, y) => Math.max(netClear(x), netClear(y)), fixed, ...(opts.maxSteps !== undefined ? { maxSteps: opts.maxSteps } : {}) });
   if ('error' in res) return fail(res.error);
-  const { live, removed } = res;
+  const { live } = res;
+  const removed = new Set([...preRemoved, ...res.removed]);
   const movedNets = res.nets;
-  if (!removed.size && !live.some((s) => !s.old)) return { ops: [], moved: [], nets: [] };
-  // Operations: remove the moved traces, add their new pieces (same net, layer, width and properties).
-  const ops: Op[] = [];
+  for (const uid of movedVias) movedNets.add(doc.nodes.get(doc.nodes.get(uid)!.parent!)!.name);
+  if (!removed.size && !live.some((s) => !s.old) && !viaOps.length) return { ops: [], moved: [], nets: [] };
+  // Operations: move the vias, remove the moved traces, add their new pieces (same net, layer, width and properties).
+  const ops: Op[] = [...viaOps];
   for (const uid of removed) ops.push({ op: 'remove', uid });
   const index = new Map<string, number>();
   for (const s of live) {
@@ -243,7 +290,7 @@ export function planShove(doc: Doc, engine: StyleEngine, copper: string[], input
     engine.recompute();
   }
   if (problem) return fail(problem);
-  return { ops, moved: [...removed, ...live.filter((s) => !s.old).map((s) => s.uid)], nets: [...movedNets] };
+  return { ops, moved: [...movedVias, ...removed, ...live.filter((s) => !s.old).map((s) => s.uid)], nets: [...movedNets] };
 }
 
 /**

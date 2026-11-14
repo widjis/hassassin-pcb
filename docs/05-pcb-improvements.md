@@ -639,7 +639,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
       14 vias, 320.57 mm). The panel's status lines no longer shrink in its flex column.
   - Still open in P8g: the acceptance run on the solar MPPT board (needs the owner's permission) and a
     progress report from the tool / CLI (they wait for the result as before).
-- [ ] **P9. Shove engine (core).**
+- [x] **P9. Shove engine (core).**
   - A core function that, given a new trace or via, moves traces and vias of other nets in its way aside
     (walk-around first, then push), keeping their clearance and connections, and refuses when they cannot
     move. Written from published descriptions of shove routing, not from another tool's source.
@@ -685,8 +685,20 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     connection with `shove=false` and routes all with the shove; mcu is back in the 90-corner style test.
     A first try that shoved only after the rip-up rounds, for connections still open, never succeeded
     (the same pad-bound chains).
-  - Still open in P9: moving vias; pushing a trace whose pad end lies inside the hull (it would need its
-    pad entry re-laid, not walked round).
+  - *Progress (2026-11-14), third part:* vias move. In `planShove` a via of another net in the way of the
+    new copper steps aside: the shortest step along one of the 8 directions (up to 3 mm) that clears the
+    new copper by its clearance, a step along one of its own traces preferred (that trace keeps its
+    angle). The ends of its traces on it follow; the via and those pieces then push in turn like any
+    pushed trace, and the board check (no new DRC error, every other net's islands unchanged) decides as
+    before. A locked via (on the via or its net), or a via with a locked trace or an arc on it, refuses
+    the shove. The via keeps its uid (one `position` change), so undo puts it back. Tests: on the routed
+    mcu fixture a 3 mm trace of another net laid 0.15 mm too close to each via in turn: where the shove
+    goes through (2 of the 16 vias; the others are refused with the reason, mostly because the via's own
+    trace crosses the new copper or the trace runs into a pad), the via has moved, DRC is clean, every
+    other net keeps its islands, and undo puts the via back; a locked via is refused.
+  - Left for later (not required above): pushing a trace whose pad end lies inside the hull (it would
+    need its pad entry re-laid, not walked round); vias moved by the autorouter's own shove (`tryShove`
+    walks routes round, its vias stay).
 - [x] **P10. Differential pairs and length tuning (automatic).**
   - Pairs are found by name (as today) or set by the `diff-pair` class with a partner (P16).
   - **Width and gap from the impedance.** The pair's target differential impedance (rule `diffImpedance`,

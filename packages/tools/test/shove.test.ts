@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { computeRatsnest, newUid, planShove, runDrc, type Op, type Vec2 } from '@hassassin/core';
-import { fixtureBus, runTool, type Project } from '@hassassin/tools';
+import { fixtureBus, fixtureMcu, runTool, type Project } from '@hassassin/tools';
 
 const traces = (p: Project, net: string) =>
   [...p.doc.nodes.values()]
@@ -55,6 +55,48 @@ describe('shove engine (P9)', () => {
     expect(r.nets.length).toBeGreaterThanOrEqual(2);
     p.history.apply('Shove', [addTrace(p, 'B3', wide), ...r.ops]);
     expect(errors(p)).toEqual([]);
+  });
+
+  it('moves a via of another net out of the way; its traces follow, clearance and connections kept', async () => {
+    const p = await fixtureMcu();
+    await runTool(p, 'autoroute', {});
+    const vs = [...p.doc.nodes.values()].filter((n) => n.type === 'via');
+    expect(vs.length).toBeGreaterThan(0);
+    let done = 0;
+    for (const v of vs) {
+      const net = p.doc.nodes.get(v.parent!)!.name;
+      const c = p.engine.get(v.uid, 'position')!.value as Vec2;
+      const r = (p.engine.get(v.uid, 'viaDiameter')!.value as number) / 2;
+      const other = [...p.doc.nodes.values()].find((n) => n.type === 'net' && n.name !== net && n.children.some((c) => p.doc.nodes.get(c)?.type === 'trace'))!.name;
+      // A 3 mm trace of another net passing 0.15 mm closer to the via than its clearance allows.
+      const t = { layer: 'F.Cu', a: { x: c.x - 1.5, y: c.y + r + 0.2 }, b: { x: c.x + 1.5, y: c.y + r + 0.2 }, width: 0.25 };
+      const islands = computeRatsnest(p.doc, p.engine, p.copper).nets.map((n) => [n.net, n.islands]);
+      const plan = planShove(p.doc, p.engine, p.copper, { net: other, traces: [t] });
+      if (plan.error) continue;
+      expect(plan.moved).toContain(v.uid);
+      expect(plan.nets).toContain(net);
+      p.history.apply('Shove', [addTrace(p, other, t), ...plan.ops]);
+      expect(errors(p)).toEqual([]);
+      const moved = p.engine.get(v.uid, 'position')!.value as Vec2;
+      expect(Math.hypot(moved.x - c.x, moved.y - c.y)).toBeGreaterThan(0.1);
+      const after = new Map(computeRatsnest(p.doc, p.engine, p.copper).nets.map((n) => [n.net, n.islands]));
+      for (const [n, k] of islands) if (n !== other) expect([n, after.get(n as string)]).toEqual([n, k]);
+      p.history.undo();
+      expect(p.engine.get(v.uid, 'position')!.value).toEqual(c);
+      done++;
+    }
+    expect(done).toBeGreaterThan(0);
+  });
+
+  it('refuses to move a locked via', async () => {
+    const p = await fixtureMcu();
+    await runTool(p, 'autoroute', {});
+    const v = [...p.doc.nodes.values()].find((n) => n.type === 'via')!;
+    p.history.apply('Lock', [{ op: 'setProp', uid: v.uid, key: 'locked', value: true }]);
+    const c = p.engine.get(v.uid, 'position')!.value as Vec2;
+    const net = p.doc.nodes.get(v.parent!)!.name;
+    const r = planShove(p.doc, p.engine, p.copper, { net: [...p.doc.nodes.values()].find((n) => n.type === 'net' && n.name !== net && n.children.length)!.name, traces: [{ layer: 'F.Cu', a: { x: c.x - 1.5, y: c.y + 0.4 }, b: { x: c.x + 1.5, y: c.y + 0.4 }, width: 0.25 }] });
+    expect(r.error).toMatch(/locked via/);
   });
 
   it('leaves the board as it was while planning', async () => {
