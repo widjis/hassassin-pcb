@@ -143,6 +143,8 @@ document before work on a measured item starts.
       routing.
     - Live autorouter preview: `onSnapshot` in `planAutoroute` (every 400 ms and at the end), sent by the
       worker and drawn per layer at 45 % opacity; removed on Cancel and when the result is applied.
+      After the result is applied the pours are filled again in the same undo step (owner's request,
+      2026-11-15), so no pour-against-trace errors show in between and one undo takes both back.
     - Agents: `route` takes `mode` (`none` default, `walkaround`, `shove`) and returns the points;
       new tool `drag_trace` (trace, offset, mode).
     - Tests: `interactive.test.ts` (walkaround legal and DRC-clean, stop at the last legal point, via

@@ -4,6 +4,7 @@
  */
 import {
   defaultStackup,
+  newUid,
   diffImpedance,
   diffPairs,
   withCoupling,
@@ -62,11 +63,18 @@ export function mountBoard(app: App, root: HTMLElement): void {
       if (m.type === 'error') return void (setMsg(`Autoroute failed: ${m.message}`), render());
       if (changed) return void (setMsg('The board changed while routing, so nothing was applied. Run Autoroute again.'), render());
       const r = m.summary;
-      if (m.ops.length) app.apply('Autoroute', m.ops as Op[]);
+      // The pours are filled again around the new copper in the same undo step, so the board shows no
+      // pour-against-trace errors in between.
+      const key = newUid('ar');
+      let pours = 0;
+      if (m.ops.length) {
+        app.apply('Autoroute', m.ops as Op[], key);
+        pours = app.refillPours({ mergeKey: key, quiet: true });
+      }
       const reasons = Object.entries(r.reasons).map(([k, n]) => `${n} × ${k}`).join('; ');
       setMsg(
         `Routed ${r.routed} connection(s), ${r.vias} via(s), ${r.totalLength} mm in ${((performance.now() - t0) / 1000).toFixed(1)} s` +
-          `${m.removed ? `; ${m.removed} left out after the DRC check` : ''}${r.failed.length ? `; ${r.failed.length} not routed (${reasons}, see Review)` : ''}. Refill pours (B) next.`,
+          `${m.removed ? `; ${m.removed} left out after the DRC check` : ''}${r.failed.length ? `; ${r.failed.length} not routed (${reasons}, see Review)` : ''}${pours ? `; ${pours} pour${pours > 1 ? 's' : ''} refilled` : ''}.`,
       );
       app.runDrcSoon(0);
       render();

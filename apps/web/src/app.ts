@@ -464,20 +464,27 @@ export class App {
   }
 
   /** Create pours requested by net rules, then refill every pour — one undo step. */
-  refillPours(): void {
-    if (!this.doc || !this.engine) return;
-    if (!hasClipper()) return this.say('The geometry engine is still loading; try again in a moment.');
-    const key = newUid('pour');
+  /**
+   * Fill the copper pours again. With `mergeKey` the refill joins the undo step that key belongs to (the
+   * autorouter refills in its own step); `quiet` leaves the status line to the caller. Returns the number
+   * of pours.
+   */
+  refillPours(opts: { mergeKey?: string; quiet?: boolean } = {}): number {
+    if (!this.doc || !this.engine) return 0;
+    if (!hasClipper()) return (this.say('The geometry engine is still loading; try again in a moment.'), 0);
+    const key = opts.mergeKey ?? newUid('pour');
     const plan = planPours(this.doc, this.engine, this.copper);
     if (plan.length) this.apply('Refill pours', plan, key);
     const { ops, ms, pours } = refillOps(this.doc, this.engine, this.copper);
     if (!pours) {
       this.history?.seal();
-      return this.say('No pours yet. Select a net and set its “Pour layers” rule (e.g. F.Cu B.Cu), then refill.');
+      if (!opts.quiet) this.say('No pours yet. Select a net and set its “Pour layers” rule (e.g. F.Cu B.Cu), then refill.');
+      return 0;
     }
     this.apply('Refill pours', ops, key);
     this.history?.seal();
-    this.say(`Refilled ${pours} pour${pours > 1 ? 's' : ''} in ${Math.round(ms)} ms.`);
+    if (!opts.quiet) this.say(`Refilled ${pours} pour${pours > 1 ? 's' : ''} in ${Math.round(ms)} ms.`);
+    return pours;
   }
 
   exportFab(): { blob: Blob; name: string; notes: string[] } | null {
