@@ -5,6 +5,7 @@
  * Coordinates are footprint-local millimetres, Y down.
  */
 import type { DocNode, RuleDecl, Vec2 } from './model.ts';
+import { generateFootprint } from './footprintGen.ts';
 import { newUid } from './model.ts';
 
 export type PadShape = 'rect' | 'roundrect' | 'circle' | 'oval' | 'trapezoid' | 'custom';
@@ -278,6 +279,13 @@ export function genericFootprint(name: string): FootprintSpec | null {
   if ((m = /^header-([12])x(\d+)-p([\d.]+)$/.exec(s))) return header(Number(m[1]), Number(m[2]), Number(m[3]));
   if ((m = /^terminal-1x(\d+)-p([\d.]+)$/.exec(s))) return terminal(Number(m[1]), Number(m[2]));
   if ((m = /^hole-m([\d.]+)(-pad)?$/.exec(s))) return hole(Number(m[1]), !!m[2]);
+  // A ball grid, pads numbered 1 … rows × cols row by row (a stand-in; the generator names them A1, B2 …).
+  if ((m = /^bga-(\d+)x(\d+)-p([\d.]+)$/.exec(s))) {
+    const rows = Number(m[1]), cols = Number(m[2]), pitch = Number(m[3]);
+    const fp = generateFootprint({ family: 'grid', rows, cols, pitch, ball: Math.round(pitch * 0.5 * 100) / 100, name: s, description: `BGA ${rows}×${cols}, ${pitch} mm pitch` });
+    fp.pads.forEach((pd, i) => (pd.number = String(i + 1)));
+    return fp;
+  }
   return null;
 }
 

@@ -47,6 +47,8 @@ export interface AutorouteOptions {
   planeGapCost?: number;
   /** Fan out dense parts first (P8f; default true): straight stubs out of fine-pitch pad rows, where routing starts. */
   fanout?: boolean;
+  /** Dog-bones for the inner rings of a ball grid (P8f; default true, with `fanout`). */
+  dogbones?: boolean;
   /** Layers to route on (default: all copper layers). */
   layers?: string[];
   /**
@@ -74,6 +76,12 @@ export interface AutorouteReport {
   ms: number;
   /** Pads fanned out before routing (P8f). */
   fanouts?: number;
+  /** BGA balls fanned out with a dog-bone (stub and via, P8f), counted in `fanouts` too. */
+  dogbones?: number;
+  /** Dog-bones of a first run that left connections open; the board was routed again without them. */
+  dogbonesDropped?: number;
+  /** Dog-bones written (each a stub and a via; their vias are not in `routed[].vias`). */
+  dogboneVias?: number;
   /** Connections that belong to a bundle (P8f): their pads neighbour another connection's at both ends. */
   bundled?: number;
   /** Connections routed by shoving the routes in their way aside instead of ripping them up (P9). */
@@ -129,6 +137,17 @@ class Heap {
 }
 
 export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], opts: AutorouteOptions = {}): { ops: Op[]; report: AutorouteReport } {
+  const first = planAutorouteOnce(doc, engine, copper, opts);
+  // Dog-bones are fixed before routing and cannot be ripped up: when a run with them leaves connections
+  // open, the board is routed again without them and the better result kept (more routed, then fewer vias).
+  if (opts.dogbones === false || !first.report.dogbones || !first.report.failed.length) return first;
+  const second = planAutorouteOnce(doc, engine, copper, { ...opts, dogbones: false });
+  const vias = (r: AutorouteReport) => r.routed.reduce((t, x) => t + x.vias, 0) + (r.dogboneVias ?? 0);
+  const better = second.report.routed.length > first.report.routed.length || (second.report.routed.length === first.report.routed.length && vias(second.report) < vias(first.report));
+  return better ? { ops: second.ops, report: { ...second.report, ms: first.report.ms + second.report.ms, dogbonesDropped: first.report.dogbones } } : first;
+}
+
+function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts: AutorouteOptions = {}): { ops: Op[]; report: AutorouteReport } {
   const t0 = performance.now();
   const layers = (opts.layers ?? copper).filter((l) => copper.includes(l));
   const report: AutorouteReport = { routed: [], failed: [], grid: 0, ms: 0 };
@@ -297,7 +316,7 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   // The stubs are laid as fixed copper of their nets before routing, and a connection at such a pad starts
   // (or ends) at the stub's outer end, never from the side of the pad. Pads whose connections all stay at
   // the part (a link between two of its pins) and stubs without room are left out. Vias stay outside pads.
-  interface Fan { pad: (typeof shapes)[number]; stub: (typeof shapes)[number]; li: number; a: Vec2; e: Vec2; half: number; out: [number, number]; off: boolean }
+  interface Fan { pad: (typeof shapes)[number]; stub: (typeof shapes)[number]; li: number; a: Vec2; e: Vec2; half: number; out: [number, number]; off: boolean; via?: { shapes: (typeof shapes)[number][]; r: number } }
   const fans: Fan[] = [];
   if (opts.fanout !== false) {
     const byPart = new Map<string, typeof shapes>();
@@ -314,11 +333,20 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const ms = pads.map(mid);
       let pitch = Infinity;
       for (let x = 0; x < ms.length; x++) for (let y = x + 1; y < ms.length; y++) pitch = Math.min(pitch, Math.hypot(ms[x]!.x - ms[y]!.x, ms[x]!.y - ms[y]!.y));
-      if (pitch >= 0.85) continue;
+      // A ball grid (BGA / LGA): 16 or more square pads in at least 4 rows and 4 columns, pitch up to 1.27 mm.
+      const square = (sh: (typeof shapes)[number]) => {
+        const bw = sh.box.maxX - sh.box.minX, bh = sh.box.maxY - sh.box.minY;
+        return Math.max(bw, bh) < 1.4 * Math.min(bw, bh);
+      };
+      const distinct = (v: number[]) => new Set(v.map((x) => Math.round(x * 100))).size;
+      const isGrid = pads.length >= 16 && pads.every(square) && pitch <= 1.27 + 1e-6 && distinct(ms.map((q) => q.x)) >= 4 && distinct(ms.map((q) => q.y)) >= 4;
+      if (pitch >= 0.85 && !isGrid) continue;
       let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
       for (const s of pads) (px0 = Math.min(px0, s.box.minX)), (py0 = Math.min(py0, s.box.minY)), (px1 = Math.max(px1, s.box.maxX)), (py1 = Math.max(py1, s.box.maxY));
       const pc = { x: (px0 + px1) / 2, y: (py0 + py1) / 2 };
       const inPart = (q: Vec2) => q.x >= px0 - 0.5 && q.x <= px1 + 0.5 && q.y >= py0 - 0.5 && q.y <= py1 + 0.5;
+      let cx0 = Infinity, cy0 = Infinity, cx1 = -Infinity, cy1 = -Infinity;
+      for (const q of ms) (cx0 = Math.min(cx0, q.x)), (cy0 = Math.min(cy0, q.y)), (cx1 = Math.max(cx1, q.x)), (cy1 = Math.max(cy1, q.y));
       for (const [k, pad] of pads.entries()) {
         if (!pad.net || !routedNets.includes(pad.net)) continue;
         const onPad = (q: Vec2) => q.x >= pad.box.minX - 1e-6 && q.x <= pad.box.maxX + 1e-6 && q.y >= pad.box.minY - 1e-6 && q.y <= pad.box.maxY + 1e-6;
@@ -326,7 +354,43 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         if (!mine.length || mine.every((r) => inPart(onPad(r.a) ? r.b : r.a))) continue;
         const bw = pad.box.maxX - pad.box.minX;
         const bh = pad.box.maxY - pad.box.minY;
-        if (Math.max(bw, bh) < 1.4 * Math.min(bw, bh)) continue; // square pads (BGA balls, thermal pads): no straight escape
+        if (isGrid) {
+          if (opts.dogbones === false) continue;
+          // Dog-bone: a ball of an inner ring gets a short 45° stub to the middle of the gap between four
+          // balls, away from the part's centre, and a via there; the connection leaves from the via on
+          // another layer. The outer rings escape on their own layer, from the ball.
+          const a = ms[k]!;
+          const w = Math.min(netRule(pad.net, 'traceWidth', 0.25), Math.min(bw, bh));
+          const half = w / 2;
+          const r = netRule(pad.net, 'viaDiameter', 0.6) / 2;
+          const cn = netClear(pad.net);
+          // Rings that escape on the ball's layer: the outer one, and the second one too when a trace fits
+          // between two balls (the usual escape: one trace per gap, deeper rings go down through vias).
+          const ring = Math.round(Math.min(a.x - cx0, cx1 - a.x, a.y - cy0, cy1 - a.y) / pitch);
+          const topRings = pitch - Math.max(bw, bh) >= w + 2 * cn - 1e-6 ? 2 : 1;
+          if (ring < topRings) continue;
+          const dx = a.x >= pc.x ? 1 : -1, dy = a.y >= pc.y ? 1 : -1;
+          const e = { x: a.x + (dx * pitch) / 2, y: a.y + (dy * pitch) / 2 };
+          const edgeCl = netRule(pad.net, 'boardEdgeClearance', 0.3);
+          let ok = pointInPolygon(e, outline) && board.segments.every(([p, q]) => segSegDist(e, e, p, q) >= r + edgeCl - 1e-6);
+          for (const sh of [...shapes, ...fans.flatMap((f) => [f.stub, ...(f.via?.shapes ?? [])])]) {
+            if (!ok) break;
+            if (sh.net === pad.net || sh.kind === 'fill' || !layers.includes(sh.layer)) continue;
+            const cl = Math.max(cn, clearanceFor(sh.keepOut, 'trace'));
+            // The via on every layer, the stub on the ball's layer.
+            const hit = (p0: Vec2, p1: Vec2, rr: number) => sh.edges.some(([p, q, r2]) => segSegDist(p0, p1, p, q) - r2 < rr + cl - 1e-6) || (sh.kind === 'pad' && !!sh.areas[0] && inArea(p1, sh.areas[0]));
+            if (hit(e, e, r) || (sh.layer === pad.layer && hit(a, e, half))) ok = false;
+          }
+          if (!ok) continue;
+          const keepOut = (netNode.get(pad.net) && (engine.get(netNode.get(pad.net)!.uid, 'keepOut')?.value as KeepOut | undefined)) || pad.keepOut;
+          const box = { minX: Math.min(a.x, e.x) - half, minY: Math.min(a.y, e.y) - half, maxX: Math.max(a.x, e.x) + half, maxY: Math.max(a.y, e.y) + half };
+          const stub = { uid: `fan:${pad.uid}`, kind: 'trace' as const, net: pad.net, layer: pad.layer, edges: [[a, e, half]] as [Vec2, Vec2, number][], areas: [], box, keepOut, edgeClearance: edgeCl, probe: a };
+          const vbox = { minX: e.x - r, minY: e.y - r, maxX: e.x + r, maxY: e.y + r };
+          const vias = layers.map((layer) => ({ uid: `fanv:${pad.uid}`, kind: 'via' as const, net: pad.net, layer, edges: [[e, e, r]] as [Vec2, Vec2, number][], areas: [], box: vbox, keepOut, edgeClearance: edgeCl, probe: e }));
+          fans.push({ pad, stub, li: layers.indexOf(pad.layer), a, e, half, out: [dx, dy], off: false, via: { shapes: vias, r } });
+          continue;
+        }
+        if (Math.max(bw, bh) < 1.4 * Math.min(bw, bh)) continue; // square pads (thermal pads): no straight escape
         const a = ms[k]!;
         const alongX = bw > bh;
         const sgn = Math.sign(alongX ? a.x - pc.x : a.y - pc.y);
@@ -356,9 +420,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
         fans.push({ pad, stub, li: layers.indexOf(pad.layer), a, e, half, out: alongX ? [sgn, 0] : [0, sgn], off: false });
       }
     }
-    for (const f of fans) shapes.push(f.stub);
+    for (const f of fans) shapes.push(f.stub, ...(f.via?.shapes ?? []));
   }
   report.fanouts = fans.length;
+  if (fans.some((f) => f.via)) report.dogbones = fans.filter((f) => f.via).length;
   // How far the distance field must reach: the widest half-width plus the largest clearance that
   // any routed net or any copper asks for, plus one cell for the step between cell centres.
   let reachW = 0;
@@ -872,9 +937,10 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
     const viaOk = (c: number) => {
       const m = viaMemo[c]!;
       if (m >> 1 === call) return (m & 1) === 1;
-      let ok = true;
       const i = c % W;
       const j = (c - i) / W;
+      // Not on a dog-bone via of the net (BGA fanout): that one is the way down already.
+      let ok = !fans.some((f) => f.via && f.pad.net === r.net && Math.hypot(cx(i) - f.e.x, cy(j) - f.e.y) < viaD / 2 + f.via.r);
       for (let li = 0; li < L && ok; li++) {
         const k = core[li]![c]!;
         if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) ok = false;
@@ -1204,12 +1270,14 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
       const li = Math.floor(st / N);
       const c = st % N;
       const p = { x: cx(c % W), y: cy(Math.floor(c / W)) };
-      return myFans.some((f) => !freed.has(f) && f.li === li && ((f.pad.areas[0] && inArea(p, f.pad.areas[0])) || distToSegment(p, f.a, f.e) <= f.half + 1e-6));
+      return myFans.some((f) => !freed.has(f) && f.li === li && ((f.pad.areas[0] && inArea(p, f.pad.areas[0])) || distToSegment(p, f.a, f.e) <= f.half + 1e-6 || (!!f.via && Math.hypot(p.x - f.e.x, p.y - f.e.y) <= f.via.r + 1e-6)));
     };
     for (const st of groupA) if (!groupB.has(st) && !fanned(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
     for (const st of groupB) if (!fanned(st) && onOwn(st, islB)) goals.set(st, { cost: 0, pts: [] });
-    entries(fa ? fa.e : r.a, seeds, fa?.out, islA);
-    entries(fb ? fb.e : r.b, goals, fb?.out, islB);
+    // A dog-bone (BGA) end: the via's cells on the other layers are already starts (they belong to the island
+    // and are not fanned); no entry at the via on the ball's layer, so the route leaves through the via.
+    if (!fa?.via) entries(fa ? fa.e : r.a, seeds, fa?.out, islA);
+    if (!fb?.via) entries(fb ? fb.e : r.b, goals, fb?.out, islB);
     // No way out of a stub's end: start from the pad after all.
     if (fa && !seeds.size) {
       for (const st of groupA) if (!groupB.has(st) && onOwn(st, islA)) seeds.set(st, { cost: 0, pts: [] });
@@ -2262,7 +2330,26 @@ export function planAutoroute(doc: Doc, engine: StyleEngine, copper: string[], o
   // taking it in (its ratsnest point lay on the stub, or the pad's own connection went inwards to the
   // exposed pad): then the stub is written here, so the copper reaches the pad.
   for (const f of fans) {
-    if (f.off) continue;
+    if (f.off || !f.via) continue;
+    // A dog-bone is written (stub and via) when a route of its net ends on the via, on any layer.
+    const mine = emitted.filter((rt) => rt.net === f.pad.net);
+    const nearVia = (q: Vec2) => Math.hypot(q.x - f.e.x, q.y - f.e.y) <= f.via!.r + 1e-6;
+    const users = emitted.map((rt, k) => ({ rt, k })).filter(({ rt }) => rt.net === f.pad.net && (rt.segs.some((sg) => nearVia(sg.a) || nearVia(sg.b)) || rt.vias.some(nearVia)));
+    const node = netNode.get(f.pad.net!);
+    if (!users.length || !mine.length || !node) continue;
+    const width = netRule(f.pad.net!, 'traceWidth', 0.25);
+    let idx = nextIndex.get(node.uid) ?? node.children.length;
+    const rules: RuleDecl[] = [{ name: 'start', value: f.a }, { name: 'end', value: f.e }, { name: 'layer', value: layers[f.li]! }];
+    if (2 * f.half < width - 1e-9) rules.push({ name: 'traceWidth', value: Math.round(2 * f.half * 1000) / 1000 });
+    const tu = newUid('tr'), vu = newUid('via');
+    ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: tu, type: 'trace', name: '', props: { autorouted: true }, rules, parent: node.uid, children: [] }] } });
+    ops.push({ op: 'add', parent: node.uid, index: idx++, tree: { nodes: [{ uid: vu, type: 'via', name: '', props: { autorouted: true }, rules: [{ name: 'position', value: f.e }, { name: 'layers', value: [...copper] }], parent: node.uid, children: [] }] } });
+    for (const { k } of users) report.routed[emittedAt[k]!]!.uids!.push(tu, vu);
+    report.dogboneVias = (report.dogboneVias ?? 0) + 1;
+    nextIndex.set(node.uid, idx);
+  }
+  for (const f of fans) {
+    if (f.off || f.via) continue;
     const mine = emitted.filter((rt) => rt.net === f.pad.net);
     const onStub = (q: Vec2) => distToSegment(q, f.a, f.e) <= f.half + 1e-6 && !(f.pad.areas[0] && inArea(q, f.pad.areas[0]));
     const touched = mine.some((rt) => rt.segs.some((sg) => sg.li === f.li && (onStub(sg.a) || onStub(sg.b))) || rt.vias.some(onStub));

@@ -460,4 +460,32 @@ export async function fixturePairs(): Promise<Project> {
 
 export const FIXTURE_ARGS: Record<string, Record<string, unknown>> = { channel: { layers: ['F.Cu'] } };
 
-export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot, bus: fixtureBus, mcu: fixtureMcu, pairs: fixturePairs } as const;
+/**
+ * A 1.0 mm pitch BGA (8 × 8 balls, pads numbered row by row) on a two-layer board, each half wired to the
+ * header on its side: four balls of the outer ring, four of the second and two of the third. The two outer
+ * rings leave on the top layer (one 0.15 mm trace fits between two balls); the third ring cannot, so it is
+ * fanned out with dog-bones (a short 45° stub to a via in the gap between four balls) and leaves on the
+ * bottom (P8f). 0.15 mm traces and clearances, 0.5 / 0.25 mm vias, as such a part needs.
+ */
+export async function fixtureBga(): Promise<Project> {
+  const p = newProject('fixture-bga');
+  await runTool(p, 'add_part', { kind: 'ic', pins: 64, x: 60, y: 0, package: 'bga-8x8-p1.0' });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 10, x: 0, y: 0 });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 10, x: 120, y: 0 });
+  // Ball (row, col) is pad row × 8 + col + 1.
+  const ball = (r: number, c: number) => `U1.${r * 8 + c + 1}`;
+  const left = [[2, 0], [3, 0], [4, 0], [5, 0], [2, 1], [3, 1], [4, 1], [5, 1], [3, 2], [4, 2]];
+  for (const [i, [r, c]] of left.entries()) {
+    await wire(p, `L${i + 1}`, ball(r!, c!), `J1.${i + 1}`);
+    await wire(p, `R${i + 1}`, ball(r!, 7 - c!), `J2.${i + 1}`);
+  }
+  await finish(p, { x: 100, y: 100, width: 40, height: 30 }, [['U1', 120, 115], ['J1', 104, 115], ['J2', 136, 115]]);
+  for (const target of ['net', 'pad', 'trace', 'via']) await runTool(p, 'set_rule', { target, rule: 'keepOut', value: '0.15mm' });
+  await runTool(p, 'set_rule', { target: 'net', rule: 'traceWidth', value: '0.15mm' });
+  await runTool(p, 'set_rule', { target: 'net', rule: 'traceWidthMin', value: '0.1mm' });
+  await runTool(p, 'set_rule', { target: 'net', rule: 'viaDiameter', value: '0.5mm' });
+  await runTool(p, 'set_rule', { target: 'net', rule: 'viaHole', value: '0.25mm' });
+  return p;
+}
+
+export const ROUTE_FIXTURES = { 'qfn-escape': fixtureQfnEscape, 'qfn-fine': fixtureQfnFine, 'reversed-bus': fixtureReversedBus, 'off-grid': fixtureOffGrid, tee: fixtureTee, channel: fixtureChannel, graze: fixtureGraze, 'plane-slot': fixturePlaneSlot, bus: fixtureBus, mcu: fixtureMcu, pairs: fixturePairs, bga: fixtureBga } as const;

@@ -398,7 +398,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     with a hint to review and apply them. One more test.
   - Still open in P16: the owner's review of the benchmark boards' classes (in the Board panel's
     "Signal classes" section).
-- [ ] **P8f. Layer directions, fanout and cost tuning.**
+- [x] **P8f. Layer directions, fanout and cost tuning.**
   - *Owner's reference (2026-11-12): perpendicular (orthogonal) routing* — on a two-layer board the top
     layer runs horizontal and the bottom layer vertical, joined by vias where a net changes direction; on
     more layers the signal layers alternate. New rule `routeDirection` per copper layer (`horizontal`,
@@ -594,8 +594,35 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
       two vias until the present cost is far above the cap that keeps the search from spreading.
     A negotiation that works here likely needs costs on resources rather than on cells (a pad gap, a
     channel between two pins has a capacity), or routing without the free-room first try.
-    Still open in P8f: arc / 90 corners on the mcu bus (above); lanes for a bus that turns (the front row is
-    taken along the straight line between the two parts' pins) and for parts with pins on several sides.
+  - *Progress (2026-11-14), BGA dog-bones:* a ball grid (16 or more square pads in at least 4 rows and 4
+    columns, pitch up to 1.27 mm) is fanned out too. The outer ring escapes on the balls' layer, and the
+    second ring as well when one trace fits between two balls (the usual one-trace-per-gap escape); a ball
+    of a deeper ring with a connection leaving the part gets a dog-bone: a 45° stub from its centre to the
+    middle of the gap between four balls, away from the part's centre, and a via there (the net's via
+    size), if both keep their clearance to every other net on every layer. Stub and via are laid as fixed
+    copper of the net before routing; the connection starts from the via on another layer (not from the
+    ball, the stub or the via on the ball's layer), the router puts no via of its own on a dog-bone, and
+    both are written when a route ends on the via. Since they cannot be ripped up, a run whose dog-bones
+    leave connections open is routed again without them (option `dogbones`) and the better result is
+    kept (more routed, then fewer vias); `dogbones` / `dogbonesDropped` are reported and the via count
+    includes them. New generic footprint `bga-<rows>x<cols>-p<pitch>` (pads numbered row by row, from the
+    footprint generator's grid family) and fixture `bga`: an 8 × 8, 1.0 mm BGA, two headers, ten balls a
+    side from the outer three rings, 0.15 mm traces, 0.5 mm vias.
+    Measured on `bga`: without fanout 20 / 20, 10 vias, 349 mm. With dog-bones and the default layer
+    directions the dog-boned routes run down the vertical bottom layer and shut in two second-ring balls
+    (18 / 20), so the second run without them is kept (20 / 20). With `direction_cost` 1 the dog-bones stay:
+    20 / 20, 12 vias (4 of them dog-bones), 339 mm, 0 DRC errors, but 12.8 s instead of 1.2 s (rip-up
+    rounds). So on this board they give the regular pattern a person draws, not fewer vias. Tests
+    (`bga.test.ts`): with direction cost 1, the four third-ring balls each have a via half a pitch away on
+    both axes, away from the part's centre, joined by a stub, every connection routed with 0 DRC errors;
+    with the defaults the dog-bones are dropped and every connection is routed. The RGB lamp is unchanged
+    (59 / 59, 35 vias, 882.2 mm).
+  - Left for later (not required above): arc / 90 corners on the mcu bus (with those styles one or two of
+    its connections stay open; a fix wants the reworked negotiation described above); lanes for a bus that
+    turns and for parts with pins on several sides; regular fan patterns (alternating stub lengths, vias
+    in a ring); dog-bones that help the layer directions (a dog-boned route that wants to run along the
+    bottom layer's direction); a run on a real board with a QFN / QFP or BGA (the solar MPPT board waits
+    for the owner's leave).
 - [ ] **P8g. Verification, reporting and responsiveness.**
   - Every result is checked with DRC on the new copper (plus a pour refill where pours exist); a route that
     causes an error is removed and reported as unrouted, never left behind.

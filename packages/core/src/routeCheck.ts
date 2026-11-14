@@ -83,6 +83,9 @@ export interface AutorouteSummary {
   ms: number;
   grid: number;
   fanouts: number;
+  /** BGA dog-bones written (P8f), and dog-bones dropped because the board routed better without them. */
+  dogbones?: number;
+  dogbonesDropped?: number;
   bundled: number;
   /** Connections routed by shoving routes aside instead of ripping them up (P9). */
   shoved: number;
@@ -101,11 +104,14 @@ export function autorouteSummary(report: AutorouteReport): AutorouteSummary {
     routed: report.routed.length,
     failed: report.failed,
     reasons,
-    vias: report.routed.reduce((s, r) => s + r.vias, 0),
+    // Dog-bone vias (BGA fanout) belong to no single route's count.
+    vias: report.routed.reduce((s, r) => s + r.vias, 0) + (report.dogboneVias ?? 0),
     totalLength: +report.routed.reduce((s, r) => s + r.length, 0).toFixed(2),
     ms: report.ms,
     grid: report.grid,
     fanouts: report.fanouts ?? 0,
+    ...(report.dogboneVias ? { dogbones: report.dogboneVias } : {}),
+    ...(report.dogbonesDropped ? { dogbonesDropped: report.dogbonesDropped } : {}),
     bundled: report.bundled ?? 0,
     shoved: report.shoved ?? 0,
     pairs: report.pairs ?? 0,
