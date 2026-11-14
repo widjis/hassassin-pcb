@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
-| Version | 0.4 |
-| Status | **Approved on 2026-11-12 (0.4) — PM2 done (`v0.2.0`, 2026-11-14); PM1 and PM3 to do** |
+| Version | 0.5 |
+| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-14 (0.5) — PM2 done (`v0.2.0`, 2026-11-14); PM1 and PM3 to do** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |
@@ -98,6 +98,10 @@ document before work on a measured item starts.
   - *Moved here from PM2 in 0.3:* shoving other nets aside while routing or dragging a trace, using the
     P9 shove engine; routing a differential pair together by hand with its skew shown while routing,
     using the P10 pair routing.
+  - *Added in 0.5:* live preview of the autorouter. While it routes, the worker sends its current traces
+    and vias from time to time and the editor draws them as a faint overlay above the board, so the
+    routing can be watched; the board itself changes only when the checked result is applied, and
+    Cancel removes the overlay.
 - [ ] **P5. Bottom side, locking and grid.**
   - A selected part can be flipped to the other side (key and inspector): pads, silkscreen, courtyard and
     fabrication layers are mirrored to the bottom; the 3D view, Gerbers and pick-and-place follow.
@@ -1142,6 +1146,7 @@ that completes it, and adds the commit id after the item name.
 | 0.2 | 2026-11-12 | Approved as written, with milestone PM2 (automatic placement and routing) done before PM1. Reason: the autorouter was the first request and does not touch files of the schematic work running at the same time. | Owner (widjis), in chat: "Setuju, PM2 dulu" |
 | 0.3 | 2026-11-12 | PM2 detailed after a study of the v0.0.3 code: P8 split into P8a–P8g (harness, per-net clearance, per-net routing, negotiated congestion, smoothing, cost tuning, verification and Web Worker); P9 and P10 limited to the core and the autorouter, their hand-routing parts moved to P4; dependencies on P5 / P6 resolved; RGB lamp baseline recorded; study notes added; working rule 4 for parallel work with the schematic agreement. Owner's findings added: soft corners only (no 90° or acute corners, 45° or arc, human-like pad entry and bundles) in P8e / P8f; new item P16, signal classes from pin metadata driving the layout rules. Owner's revision: perpendicular routing (top horizontal, bottom vertical) with `routeDirection`, fanout first and reference-plane cost in P8f; P10 rewritten with differential-pair rules (impedance width / gap, coupled routing, symmetric vias and breakout, skew as delay per layer, tuning rules, 3W spacing, interface presets); tabbed routing and field solvers out of scope. | Owner (widjis), in chat: "Setuju, commit" |
 | 0.4 | 2026-11-12 | P8e: the corner style becomes a choice, rule `cornerStyle` = `45` (default) / `arc` / `90`, with acute corners never made in any style; acceptance per style. | Owner (widjis), in chat: "harusnya itu optional … pilihan belokan melengkung, 90 degree atau 45 degree", then "ok, lanjut P8e" |
+| 0.5 | 2026-11-14 | P4 (PM1): live preview of the autorouter added, its traces drawn as an overlay while it routes. | Owner (widjis), in chat: "ya, masukkan live preview ke PM1 bareng P4" |
 
 ## Approval
 
