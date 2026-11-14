@@ -196,7 +196,8 @@ window.addEventListener('beforeunload', (e) => {
 const tools = $('tools');
 tools.addEventListener('click', (e) => {
   const m = (e.target as HTMLElement).closest('button')?.dataset.mode as Mode | undefined;
-  if (m) app.setMode(m);
+  if (m === 'measure') app.measure.start();
+  else if (m) app.setMode(m);
 });
 // ---- layout / schematic spaces ----
 const spaces = $('spaces');
@@ -870,7 +871,8 @@ canvas.addEventListener('pointermove', (e) => {
   if (app.mode === 'route') {
     app.route.hover(world, e.shiftKey);
     app.requestRender();
-  } else if (app.mode === 'draw') app.drawing.hover(world); else if (!drag?.moved) app.hoverUid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
+  } else if (app.mode === 'draw') app.drawing.hover(world);
+  else if (app.mode === 'measure') app.measure.hover(world); else if (!drag?.moved) app.hoverUid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
   updateStatus();
 });
 
@@ -909,6 +911,7 @@ canvas.addEventListener('pointerup', (e) => {
   }
   if (drag && !drag.moved && e.button === 0) {
     if (app.mode === 'route') app.route.click(app.toWorld(sx, sy), e.shiftKey);
+    else if (app.mode === 'measure') app.measure.click(app.toWorld(sx, sy));
     else {
       const uid = app.pickAt(sx, sy, e.metaKey || e.ctrlKey);
       if (uid) {
@@ -1064,6 +1067,7 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'Escape':
       if (app.pasting) app.endPaste(true);
+      else if (app.mode === 'measure') app.setMode('select');
       else if (app.mode === 'route' && app.route.active) app.route.cancel();
       else if (app.mode === 'route') app.setMode('select');
       else app.select([]);
@@ -1120,6 +1124,11 @@ window.addEventListener('keydown', (e) => {
     case 'k':
     case 'K':
       app.toggleLock();
+      break;
+    case 'q':
+    case 'Q':
+      if (app.mode === 'measure') app.setMode('select');
+      else app.measure.start();
       break;
     case 'Home':
     case '0':

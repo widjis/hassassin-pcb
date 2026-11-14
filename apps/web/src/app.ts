@@ -68,11 +68,12 @@ import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl
 import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
 import { RouteTool } from './tools/route.ts';
 import { DrawTool } from './tools/draw.ts';
+import { MeasureTool } from './tools/measure.ts';
 import { circle, polyline } from './render/geometry.ts';
 import { library } from './library.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
-export type Mode = 'select' | 'route' | 'draw';
+export type Mode = 'select' | 'route' | 'draw' | 'measure';
 type Event = 'parts' | 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet' | 'collab' | 'presence' | 'comments';
 export type Space = 'layout' | 'schematic';
 
@@ -132,6 +133,8 @@ export class App {
   readonly route: RouteTool;
   /** Drawing tools on the board (P6). */
   readonly drawing: DrawTool;
+  /** The measure tool, and the clearance readout of two selected objects (P7). */
+  readonly measure: MeasureTool;
 
   private listeners = new Map<Event, Set<() => void>>();
   private frame = 0;
@@ -151,6 +154,7 @@ export class App {
     this.renderer = new GLRenderer(glCanvas);
     this.route = new RouteTool(this);
     this.drawing = new DrawTool(this);
+    this.measure = new MeasureTool(this);
     new ResizeObserver(() => this.requestRender()).observe(glCanvas);
   }
 
@@ -818,6 +822,7 @@ export class App {
     if (this.mode === mode) return;
     if (mode !== 'route') this.route.cancel();
     if (mode !== 'draw') this.drawing.cancel();
+    if (mode !== 'measure') this.measure.cancel();
     this.mode = mode;
     this.say(mode === 'route' ? `Route (${this.route.mode}): click a pad, via or trace to start. M = mode, W = width, V = via, / = corner style, Esc = stop.` : '');
     this.emit('mode');
@@ -1147,6 +1152,7 @@ export class App {
     // Routing cursor
     this.route.drawOverlay(ctx, S);
     this.drawing.drawOverlay(ctx, S);
+    this.measure.drawOverlay(ctx, S);
     // Selection box (P1): blue and solid left to right (inside), green and dashed right to left (touching).
     if (this.selBox) {
       const { a, b } = this.selBox;

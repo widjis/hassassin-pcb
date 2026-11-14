@@ -4,6 +4,7 @@
  * project is live, shared with collaborators).
  */
 import {
+  clearanceBetween,
   alignPartsMoves,
   flipPartOps,
   layoutGrid,
@@ -2050,6 +2051,34 @@ export const TOOLS: ToolDef[] = [
       for (const n of top) byType[n.type] = (byType[n.type] ?? 0) + 1;
       apply(p, `Delete ${top.length} object(s)`, top.map((n) => ({ op: 'remove', uid: n.uid }) as Op));
       return { deleted: top.length, byType, ...(refused.length ? { notDeleted: [...new Set(refused.map((n) => n.type))].map((t) => `${t} (structural or part of a symbol)`) } : {}) };
+    },
+  },
+  {
+    name: 'measure',
+    description: 'Measure on the board (P7): the distance and Δx / Δy between two points (from / to as {x, y} in mm), or the clearance between two objects (a, b: pads like "R1.2", parts, trace or via uids): the edge-to-edge gap, where it is and the clearance they need.',
+    mutates: false,
+    input: { type: 'object', properties: { from: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } }, to: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } } }, a: { type: 'string' }, b: { type: 'string' } } },
+    run: (p, a) => {
+      if (typeof a.a === 'string' && typeof a.b === 'string') {
+        // A board object: a pad first ("R1.2" is also a schematic pin), then a part, a trace or a via.
+        const board = (t: string) => {
+          const hits = resolveTargets(p, t);
+          const n = hits.find((x) => x.type === 'pad') ?? hits.find((x) => ['element', 'trace', 'via', 'fill'].includes(x.type));
+          if (!n) throw new ToolError(`No pad, part, trace, via or pour matches "${t}"`);
+          return n.uid;
+        };
+        const ua = board(a.a);
+        const ub = board(a.b);
+        const c = clearanceBetween(p.doc, p.engine, p.copper, ua, ub);
+        if (!c) throw new ToolError(`${a.a} and ${a.b} share no copper layer`);
+        return { clearance: c.gap, required: c.required, ok: c.gap + 1e-6 >= c.required, layer: c.layer, between: [c.a, c.b].map((q) => ({ x: +q.x.toFixed(4), y: +q.y.toFixed(4) })) };
+      }
+      const f = a.from as { x?: unknown; y?: unknown } | undefined;
+      const t = a.to as { x?: unknown; y?: unknown } | undefined;
+      if (!f || !t) throw new ToolError('Give from and to points, or a and b objects.');
+      const P = { x: num(f.x, 'from.x'), y: num(f.y, 'from.y') };
+      const Q = { x: num(t.x, 'to.x'), y: num(t.y, 'to.y') };
+      return { distance: +Math.hypot(Q.x - P.x, Q.y - P.y).toFixed(4), dx: +(Q.x - P.x).toFixed(4), dy: +(Q.y - P.y).toFixed(4) };
     },
   },
   {

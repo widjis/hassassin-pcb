@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
 | Version | 0.5 |
-| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-14 (0.5) — PM2 done (`v0.2.0`, 2026-11-14); PM1 and PM3 to do** |
+| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-14 (0.5) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (2026-11-15, not released yet); PM3 to do** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |
@@ -245,9 +245,19 @@ document before work on a measured item starts.
       round the mounting holes now cut the pours (the saved fills were reported until refilled, then 0
       DRC errors); every Draw tool used with the mouse; corner drag and undo; an outline with an arc.
       Solar benchmark unchanged (76 / 76, 39 vias, 0 DRC errors with the keep-out check).
-- [ ] **P7. Measure tool.**
+- [x] **P7. Measure tool.**
   - A measure tool shows distance and Δx / Δy between two points, snapping to pad centres, pad edges and
     trace centres; a clearance readout between two selected objects.
+  - *Done (2026-11-15):* core module `measure.ts`: `measureSnap` (pad and via centres first, then the
+    nearest pad edge, then a trace centre line), `closestOnSegments` and `clearanceBetween` (edge-to-edge
+    gap of two pads, traces, vias, pours or parts by their pads, on the layer where they come closest, with
+    the closest points and the clearance they demand). Editor: Measure in the layout toolbar (Q): two
+    clicks show the distance and Δx / Δy with their legs, snapping as above; in select mode two selected
+    objects show a line between their closest edges with the gap and the clearance needed (red when too
+    close). Tool `measure` (points, or two objects such as "R1.2"; a pad wins over a schematic pin of the
+    same name). Tests: `measure.test.ts`. In the browser on a copy of the solar board: two clicks near
+    U1's pads snap to their centres, 0.400 mm (the 0.4 mm pitch); two selected pads read 0.225 mm,
+    0.200 mm needed.
 
 **PM1 done when:** every item above is checked.
 
