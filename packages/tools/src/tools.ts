@@ -350,6 +350,62 @@ function tunePairs(p: Project, opts: { all?: boolean; nets?: string[] } = {}) {
   return out;
 }
 
+/**
+ * Tune length-match groups (net property lengthGroup): every net slower than the group's slowest net by
+ * more than the tolerance (rule lengthMatchPs, else lengthMatch compared in time with the net's delay per
+ * mm; with `all` and no rule, 0.05 mm) gets a serpentine up to it. The halves of a pair in the group get
+ * their bumps away from their partner.
+ */
+function tuneGroups(p: Project, opts: { all?: boolean; groups?: string[] } = {}) {
+  const ruleOf = (net: string, name: string) => {
+    const n = [...p.doc.nodes.values()].find((x) => x.type === 'net' && x.name === net);
+    const v = n ? p.engine.get(n.uid, name)?.value : undefined;
+    return typeof v === 'number' && v > 0 ? v : undefined;
+  };
+  const st = stackupOf(p.doc, p.copper);
+  const partnerOf = new Map<string, string>();
+  for (const d of diffPairs(netLengths(p.doc, p.engine, st))) partnerOf.set(d.p, d.n).set(d.n, d.p);
+  const out: { group: string; spread: number; spreadPs?: number; limit?: string; target: string; nets: { net: string; before: number; after?: number; added?: number; status: string }[]; afterSpread?: number; afterSpreadPs?: number; status: string }[] = [];
+  for (const g0 of lengthGroups(netLengths(p.doc, p.engine, st).filter((l) => l.segments))) {
+    if (opts.groups && !opts.groups.includes(g0.group)) continue;
+    const lens = () => netLengths(p.doc, p.engine, st).filter((l) => l.group === g0.group && l.segments);
+    const ls = lens();
+    const inTime = ls.every((l) => psPerMm(l) !== undefined);
+    const time = (l: { length: number; delay?: number }) => (inTime ? l.delay! : l.length);
+    const slowest = ls.reduce((a, b) => (time(b) > time(a) ? b : a));
+    const minOf = (name: string) => ls.map((l) => ruleOf(l.net, name)).filter((v): v is number => v !== undefined).reduce((a, b) => Math.min(a, b), Infinity);
+    const limPs = Number.isFinite(minOf('lengthMatchPs')) ? minOf('lengthMatchPs') : undefined;
+    const limMm = Number.isFinite(minOf('lengthMatch')) ? minOf('lengthMatch') : undefined;
+    const limit = limPs !== undefined ? `${limPs} ps` : limMm !== undefined ? `${limMm} mm` : undefined;
+    const row = { group: g0.group, spread: g0.spread, ...(g0.spreadPs !== undefined ? { spreadPs: g0.spreadPs } : {}), ...(limit ? { limit } : {}), target: slowest.net };
+    if (!limit && !opts.all) {
+      out.push({ ...row, nets: [], status: 'no limit set (rule lengthMatch or lengthMatchPs, or all=true)' });
+      continue;
+    }
+    // Allowed lag of a net behind the slowest one, in the group's unit (ps or mm).
+    const lag = (l: { length: number; delay?: number }) =>
+      limPs !== undefined && inTime ? limPs : (limMm ?? 0.05) * (inTime ? psPerMm(l)! : 1);
+    const nets: { net: string; before: number; after?: number; added?: number; status: string }[] = [];
+    for (const l of ls) {
+      if (l.net === slowest.net) continue;
+      const behind = time(slowest) - time(l);
+      if (behind <= lag(l)) {
+        nets.push({ net: l.net, before: l.length, status: 'within the limit' });
+        continue;
+      }
+      const extra = inTime ? behind / psPerMm(l)! : behind;
+      const partner = partnerOf.get(l.net);
+      const r = tuneNet(p, l.net, extra, partner ? { partner } : {});
+      const now = lens().find((x) => x.net === l.net);
+      nets.push('error' in r ? { net: l.net, before: l.length, status: r.error } : { net: l.net, before: l.length, after: now?.length, added: r.added, status: 'tuned' });
+    }
+    const g1 = lengthGroups(lens()).find((x) => x.group === g0.group)!;
+    const left = nets.filter((n) => n.status !== 'tuned' && n.status !== 'within the limit').length;
+    out.push({ ...row, nets, afterSpread: g1.spread, ...(g1.spreadPs !== undefined ? { afterSpreadPs: g1.spreadPs } : {}), status: left ? `${left} net(s) could not be tuned` : nets.some((n) => n.status === 'tuned') ? 'tuned' : 'within the limit' });
+  }
+  return out;
+}
+
 function applyKeepingConnections(p: Project, label: string, ops: Op[]): void {
   if (!ops.length) return;
   const before = groupsOf(p);
@@ -1541,7 +1597,7 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'autoroute',
-    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, each net\'s width and clearance kept, rip-up and retry when connections block each other). `nets` limits it to some nets, `layers` to some copper layers, `rounds` sets the rip-up rounds (1 = no rip-up). Layers have a preferred direction (rule routeDirection: top horizontal, next vertical; runs against it cost direction_cost times more, default 1.5), traces keep some air from other nets where there is room (proximity_cost), and connections are routed shortest first (rule autoPlacePriority first; order=difficulty puts fine-pitch pads and long connections first). A connection that runs into routes of other nets first tries to shove them aside (walked round it, clearance and connections kept) before they are ripped up (shove=false turns it off). Differential pairs (nets with a diffGap, from classify_nets) are routed together first: one path split into two traces at the pair width and gap, 45° turns, vias side by side, mirrored 45° breakouts (pairs=false routes them one by one); afterwards a pair over its skew limit (diffSkewMax) is tuned with a serpentine on its shorter half (tune=false leaves it). Dense fine-pitch parts (QFN, QFP, TSSOP) are fanned out first: each pin leaves its pad row with a straight stub and routing starts at the stub\'s end (fanout=false turns it off). With plane_gap_cost (or rule planeGapCost on a net, e.g. high-speed) traces prefer to run over a pour on the neighbouring layer, not over gaps in it or over traces that cut it. Connections it cannot finish are listed with the reason; it never forces a route and never moves copper that was on the board before. Before applying, the result is checked with DRC (pours refilled for the check): a connection whose new copper causes an error is left out and listed with reason "DRC: …" (check=false skips this). Run refill_pours afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
+    description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, each net\'s width and clearance kept, rip-up and retry when connections block each other). `nets` limits it to some nets, `layers` to some copper layers, `rounds` sets the rip-up rounds (1 = no rip-up). Layers have a preferred direction (rule routeDirection: top horizontal, next vertical; runs against it cost direction_cost times more, default 1.5), traces keep some air from other nets where there is room (proximity_cost), and connections are routed shortest first (rule autoPlacePriority first; order=difficulty puts fine-pitch pads and long connections first). A connection that runs into routes of other nets first tries to shove them aside (walked round it, clearance and connections kept) before they are ripped up (shove=false turns it off). Differential pairs (nets with a diffGap, from classify_nets) are routed together first: one path split into two traces at the pair width and gap, 45° turns, vias side by side, mirrored 45° breakouts (pairs=false routes them one by one); afterwards a pair over its skew limit (diffSkewMax) is tuned with a serpentine on its shorter half (tune=false leaves it), and pairs whose halves run apart longer than diffUncoupledMax are listed as uncoupledOver. Dense fine-pitch parts (QFN, QFP, TSSOP) are fanned out first: each pin leaves its pad row with a straight stub and routing starts at the stub\'s end (fanout=false turns it off). With plane_gap_cost (or rule planeGapCost on a net, e.g. high-speed) traces prefer to run over a pour on the neighbouring layer, not over gaps in it or over traces that cut it. Connections it cannot finish are listed with the reason; it never forces a route and never moves copper that was on the board before. Before applying, the result is checked with DRC (pours refilled for the check): a connection whose new copper causes an error is left out and listed with reason "DRC: …" (check=false skips this). Run refill_pours afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
     mutates: true,
     input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, layers: { type: 'array', items: { type: 'string' }, description: 'Copper layers to route on (default: all)' }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number', description: 'Via cost in grid steps for every net (default: rule viaCost, else 4 mm of trace)' }, rounds: { type: 'number', description: 'Rip-up and retry rounds (default 30; 1 = route once)' }, directions: { type: 'object', description: 'Preferred direction per copper layer, e.g. {"F.Cu":"horizontal","B.Cu":"vertical"} (default: rule routeDirection)' }, direction_cost: { type: 'number', description: 'Cost factor of a step against a layer direction (default 1.5; 1 = off)' }, proximity_cost: { type: 'number', description: 'Cost per step next to other nets (default 0.3; 0 = off)' }, order: { type: 'string', enum: ['difficulty', 'short'] }, fanout: { type: 'boolean', description: 'Fan out fine-pitch parts first with straight stubs (default true)' }, plane_gap_cost: { type: 'number', description: 'Cost per step over a gap in the pour on a neighbouring layer (default: rule planeGapCost, else 0 = off)' }, check: { type: 'boolean', description: 'Check the result with DRC (pours refilled) and leave out connections that cause errors (default true)' }, shove: { type: 'boolean', description: 'Push routes in the way aside before ripping them up (default true)' }, pairs: { type: 'boolean', description: 'Route differential pairs together (default true)' }, tune: { type: 'boolean', description: 'Tune pairs over their skew limit afterwards (default true)' } } },
     run: (p, a) => {
@@ -1562,7 +1618,11 @@ export const TOOLS: ToolDef[] = [
       apply(p, 'Autoroute', ops);
       // P10: pairs over their skew limit are tuned afterwards (tune=false leaves them).
       const tuned = a.tune === false || a.tune === 'false' ? [] : tunePairs(p).filter((x) => x.tuned);
-      return { ...autorouteSummary(report), checked: checked.checkMs > 0, removedByDrc: checked.removed, checkMs: checked.checkMs, ...(tuned.length ? { tuned } : {}) };
+      // Pairs whose halves run apart for longer than diffUncoupledMax (mostly the breakouts at the pads).
+      const uncoupledOver = withCoupling(p.doc, p.engine, diffPairs(netLengths(p.doc, p.engine, stackupOf(p.doc, p.copper))))
+        .filter((d) => d.uncoupled !== undefined && d.uncoupledMax !== undefined && d.uncoupled > d.uncoupledMax + 1e-3)
+        .map((d) => ({ pair: d.name, uncoupled: d.uncoupled!, max: d.uncoupledMax!, hint: 'Halves run apart longer than diffUncoupledMax: move the pads closer to the pair, or route the breakout by hand.' }));
+      return { ...autorouteSummary(report), checked: checked.checkMs > 0, removedByDrc: checked.removed, checkMs: checked.checkMs, ...(tuned.length ? { tuned } : {}), ...(uncoupledOver.length ? { uncoupledOver } : {}) };
     },
   },
   {
@@ -1737,6 +1797,13 @@ export const TOOLS: ToolDef[] = [
     mutates: true,
     input: { type: 'object', properties: { all: { type: 'boolean' }, nets: { type: 'array', items: { type: 'string' } } } },
     run: (p, a) => ({ pairs: tunePairs(p, { all: a.all === true || a.all === 'true', ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}) }) }),
+  },
+  {
+    name: 'tune_groups',
+    description: 'Tune length-match groups (net property lengthGroup, set with set_pin_signal length_group): every net that lags the group\'s slowest net by more than the tolerance (rule lengthMatchPs, else lengthMatch, compared in time with each layer\'s propagation delay) gets a serpentine with 45° corners up to it; halves of a differential pair keep their bumps away from their partner. all=true tunes groups with no rule to within 0.05 mm. Returns each group with its spread before and after and every net\'s result.',
+    mutates: true,
+    input: { type: 'object', properties: { all: { type: 'boolean' }, groups: { type: 'array', items: { type: 'string' } } } },
+    run: (p, a) => ({ groups: tuneGroups(p, { all: a.all === true || a.all === 'true', ...(Array.isArray(a.groups) ? { groups: a.groups.map(String) } : {}) }) }),
   },
   {
     name: 'delete',

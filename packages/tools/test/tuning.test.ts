@@ -72,6 +72,28 @@ async function handPair(): Promise<Project> {
   return p;
 }
 
+/** Three nets of one length group, 30 / 28 / 26 mm long, 4 mm apart; B1 in two straight pieces. */
+async function handBus(): Promise<Project> {
+  const p = newProject('bus');
+  await runTool(p, 'add_part', { kind: 'connector', pins: 3, x: 0, y: 0 });
+  await runTool(p, 'add_part', { kind: 'connector', pins: 3, x: 30, y: 0 });
+  for (const [net, pins] of [['B0', ['J1.1', 'J2.1']], ['B1', ['J1.2', 'J2.2']], ['B2', ['J1.3', 'J2.3']]] as const) for (const pin of pins) await runTool(p, 'add_label', { pin, name: net, global: true });
+  await runTool(p, 'update_pcb', {});
+  await runTool(p, 'set_board_outline', { x: 140, y: 140, width: 50, height: 30 });
+  await runTool(p, 'move_part', { ref: 'J1', x: 143, y: 165 });
+  await runTool(p, 'move_part', { ref: 'J2', x: 187, y: 165 });
+  const add = (net: string, a: Vec2, b: Vec2) => {
+    const n = netNode(p, net);
+    p.history.apply('t', [{ op: 'add', parent: n.uid, index: n.children.length, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: {}, rules: [{ name: 'start', value: a }, { name: 'end', value: b }, { name: 'layer', value: 'F.Cu' }, { name: 'traceWidth', value: 0.25 }], parent: n.uid, children: [] }] } }]);
+  };
+  add('B0', { x: 150, y: 145 }, { x: 180, y: 145 });
+  add('B1', { x: 150, y: 149 }, { x: 164, y: 149 });
+  add('B1', { x: 164, y: 149 }, { x: 178, y: 149 });
+  add('B2', { x: 150, y: 153 }, { x: 176, y: 153 });
+  for (const net of ['B0', 'B1', 'B2']) await runTool(p, 'set_pin_signal', { target: net, net: true, length_group: 'bus' });
+  return p;
+}
+
 describe('length tuning (P10)', () => {
   it('tunes the shorter half of a pair in time, away from its partner, with 45° corners and legs 3 W apart', async () => {
     const p = await handPair();
@@ -103,6 +125,61 @@ describe('length tuning (P10)', () => {
     for (const t of traces(p, 'D_N')) expect(Math.max(t.a.y, t.b.y)).toBeLessThan(150.9 + 0.6 + 1e-6);
     expect(traces(p, 'D_N').filter((t) => t.tuned).length).toBeGreaterThan(16);
     expect(sharpest(p, 'D_N')).toBeLessThan(45.1);
+  });
+
+  it('tunes a length group to its slowest net within the tolerance (tune_groups)', async () => {
+    const p = await handBus();
+    const none = (await runTool(p, 'tune_groups', {})) as { groups: { status: string }[] };
+    expect(none.groups[0]!.status).toMatch(/no limit set/);
+    for (const net of ['B0', 'B1', 'B2']) await runTool(p, 'set_rule', { target: `net#"${net}"`, rule: 'lengthMatch', value: '0.2mm' });
+    const errs = errors(p).length;
+    const r = (await runTool(p, 'tune_groups', {})) as { groups: { group: string; target: string; spread: number; afterSpread: number; status: string; nets: { net: string; status: string }[] }[] };
+    expect(r.groups[0]).toMatchObject({ group: 'bus', target: 'B0', spread: 4, status: 'tuned' });
+    expect(r.groups[0]!.afterSpread).toBeLessThan(0.2);
+    expect(r.groups[0]!.nets.map((n) => n.status)).toEqual(['tuned', 'tuned']);
+    for (const net of ['B1', 'B2']) {
+      expect(sharpest(p, net)).toBeLessThan(45.1);
+      expect(legSpacing(p, net)).toBeGreaterThan(0.75 - 1e-3);
+    }
+    expect(errors(p).length).toBeLessThanOrEqual(errs);
+    const again = (await runTool(p, 'tune_groups', {})) as { groups: { status: string }[] };
+    expect(again.groups[0]!.status).toBe('within the limit');
+  });
+
+  it('spreads the length over several traces when one section may not take it all (tuneSectionMax)', async () => {
+    const p = await handBus();
+    await runTool(p, 'set_rule', { target: 'net#"B1"', rule: 'tuneSectionMax', value: '6mm' });
+    const r = (await runTool(p, 'tune_length', { net: 'B1', target: 38 })) as { after: number };
+    expect(Math.abs(r.after - 38)).toBeLessThan(0.02);
+    const tuned = traces(p, 'B1').filter((t) => t.tuned);
+    // Bumps on both pieces, each section within 6 mm along the trace.
+    const left = tuned.filter((t) => Math.max(t.a.x, t.b.x) <= 164 + 1e-6), right = tuned.filter((t) => Math.min(t.a.x, t.b.x) >= 164 - 1e-6);
+    expect(left.some((t) => t.a.y !== t.b.y)).toBe(true);
+    expect(right.some((t) => t.a.y !== t.b.y)).toBe(true);
+    for (const side of [left, right]) {
+      const bumpX = side.filter((t) => t.a.y !== 149 || t.b.y !== 149).flatMap((t) => [t.a.x, t.b.x]);
+      expect(Math.max(...bumpX) - Math.min(...bumpX)).toBeLessThan(6 + 1e-6);
+    }
+    expect(sharpest(p, 'B1')).toBeLessThan(45.1);
+    expect(legSpacing(p, 'B1')).toBeGreaterThan(0.75 - 1e-3);
+    // Without the limit one piece cannot take 10 mm either at 1.5 mm high; the message says why when asked for too much.
+    await expect(runTool(p, 'tune_length', { net: 'B2', target: 80 })).rejects.toThrow(/bump/);
+  });
+
+  it('puts the bumps next to the sharper bend when both ends of the trace meet the net', async () => {
+    const p = await handBus();
+    await runTool(p, 'delete', { target: 'net#"B2" > trace' });
+    const n = netNode(p, 'B2');
+    const add = (a: Vec2, b: Vec2) => p.history.apply('t', [{ op: 'add', parent: n.uid, index: n.children.length, tree: { nodes: [{ uid: newUid('tr'), type: 'trace', name: '', props: {}, rules: [{ name: 'start', value: a }, { name: 'end', value: b }, { name: 'layer', value: 'F.Cu' }, { name: 'traceWidth', value: 0.25 }], parent: n.uid, children: [] }] } }]);
+    // A 45° turn at x = 155, a 90° turn at x = 175.
+    add({ x: 152, y: 156 }, { x: 155, y: 153 });
+    add({ x: 155, y: 153 }, { x: 175, y: 153 });
+    add({ x: 175, y: 153 }, { x: 175, y: 160 });
+    const len = traces(p, 'B2').reduce((t, x) => t + Math.hypot(x.b.x - x.a.x, x.b.y - x.a.y), 0);
+    await runTool(p, 'tune_length', { net: 'B2', target: len + 2 });
+    const bumps = traces(p, 'B2').filter((t) => t.tuned && t.a.y !== t.b.y).flatMap((t) => [t.a.x, t.b.x]);
+    expect(Math.min(...bumps)).toBeGreaterThan(165);
+    expect(sharpest(p, 'B2')).toBeLessThan(90.1);
   });
 
   it('a routed pair: the USB 2.0 preset sets the skew limit; tuning one half keeps DRC clean', { timeout: 60_000 }, async () => {

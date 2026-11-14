@@ -687,7 +687,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     (the same pad-bound chains).
   - Still open in P9: moving vias; pushing a trace whose pad end lies inside the hull (it would need its
     pad entry re-laid, not walked round).
-- [ ] **P10. Differential pairs and length tuning (automatic).**
+- [x] **P10. Differential pairs and length tuning (automatic).**
   - Pairs are found by name (as today) or set by the `diff-pair` class with a partner (P16).
   - **Width and gap from the impedance.** The pair's target differential impedance (rule `diffImpedance`,
     from an interface preset or set by hand) gives the width and gap per layer from the stackup with the
@@ -810,13 +810,34 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     routed `pairs` fixture the USB 2.0 limit is set, autoroute has nothing to tune (skew 0.03 mm), and
     +2 mm on USB_N keeps DRC clean, corners ≤ 45°, legs 3 W apart and the gap to USB_P. Picture:
     `samples/tune.html`.
-  - Still open in P10: arc corners for a pair and for serpentines (with `cornerStyle: arc` a pair keeps 45°
-    corners, so the arc style test leaves the fixture out); the router keeping `diffUncoupledMax`;
-    tuning a pair close to the bend that caused the skew when both ends of the trace meet other traces
-    (the bumps go in the middle then), and with small bumps on both halves; serpentines over more than one
-    trace when no single one is long enough; length groups tuned by a tool (the Board panel shows their
-    spread only); a pair whose halves swap sides between its ends (routed one by one today); ground return
-    vias.
+  - *Progress (2026-11-14), sixth part:* length groups, longer tuning and the uncoupled limit.
+    - **Length groups.** Rules `lengthMatch` (length) and `lengthMatchPs` (time, wins). New tool
+      `tune_groups`: in every group (net property `lengthGroup`) the nets that lag its slowest net by more
+      than the tolerance (in time when every net has a delay) get a serpentine up to it; a pair's half in
+      a group keeps its bumps away from its partner; `all=true` tunes a group with no rule to 0.05 mm. The
+      Board panel shows a group's spread in time too and has a Match button for it.
+    - **Tuning sections and several traces.** Rule `tuneSectionMax` limits the run of bumps on one trace
+      (no limit by default). When no single trace can take the length, `planTune` spreads it over the
+      fewest traces that can, each in proportion to what it can take at full height.
+    - **Next to the sharper bend.** When both ends of a trace meet the net, the bumps go next to the
+      sharper of the two bends (before: in the middle).
+    - **Uncoupled limit.** The pair router already keeps the breakouts short (pairs leave and enter
+      their pads square to them, starting and ending away from the middle costs extra). `autoroute` now
+      lists every pair whose halves still run apart longer than `diffUncoupledMax` as `uncoupledOver`,
+      with a hint.
+    Tests: a group 30 / 28 / 26 mm with a 0.2 mm tolerance is tuned to its slowest net (spread < 0.2 mm,
+    corners ≤ 45°, legs ≥ 3 W), and a second run leaves it; with no rule the tool says so. With a 6 mm
+    section limit, 10 mm goes onto both pieces of a net, each section under 6 mm. A trace with a 45° turn
+    at one end and a 90° turn at the other gets its bumps at the 90° end (this test fails with the old
+    middle placement). On the `pairs` fixture nothing is over the default 6 mm, and with 0.1 mm the USB
+    pair is listed. The layer-change test now also checks the P10 acceptance in full: USB 2.0 and the
+    100 Ω LV pair cross to the other layer coupled (over 20 mm at the gap), with vias side by side, skew
+    within 1.27 mm and no corner of 90° or sharper. 224 tests pass. Not checked in the browser: the
+    group Match button (the pair Match button and the picture were).
+  - Left out of P10 (optional in the text above, or for later): arc corners for a pair and for serpentines
+    (45° chosen; with `cornerStyle: arc` a pair keeps 45° corners); ground return vias next to a pair's
+    vias; small bumps on both halves at once; a pair whose halves swap sides between its ends (routed
+    one by one today); DRC reporting pairs outside their rules is PM3 (P12).
 - [ ] **P11. Autoplacer that uses the schematic.**
   - The greedy placement of today stays as the start; an improvement pass follows (simulated annealing or
     pairwise swaps, written from textbook descriptions) that minimises total ratsnest length (half-perimeter

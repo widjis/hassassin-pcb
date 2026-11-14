@@ -227,12 +227,12 @@ export function mountBoard(app: App, root: HTMLElement): void {
     root.append(h('div', { class: 'section-title', style: 'margin-top:12px' }, h('span', {}, `Lengths · ${pairs.length} pair(s)`)));
     // Tune `net` with a serpentine to match `other` (in time when the stackup gives delays), bumps away
     // from it; the first candidate without a new DRC error is kept (P10).
-    const tune = (net: string, other: string) => {
+    const tune = (net: string, other: string, partner: string | undefined = other) => {
       const before = runDrc(doc, engine, app.copper).violations.filter((v) => v.severity === 'error' && v.kind !== 'unrouted').length;
       const cur = lens.find((l) => l.net === net)!;
       const m = lens.find((l) => l.net === other)!;
       const extra = cur.delay !== undefined && m.delay !== undefined && cur.length > 0 ? (m.delay - cur.delay) / (cur.delay / cur.length) : m.length - cur.length;
-      const plan = planTune(doc, engine, net, extra, { partner: other });
+      const plan = planTune(doc, engine, net, extra, partner ? { partner } : {});
       if (!plan.candidates.length) return app.say(plan.error ?? `Nothing to tune on ${net}`);
       for (const c of plan.candidates) {
         app.apply(`Tune length ${net}`, c.ops);
@@ -256,7 +256,24 @@ export function mountBoard(app: App, root: HTMLElement): void {
         ),
       );
     }
-    for (const g of groups) root.append(h('div', { class: 'len-row' }, h('strong', {}, g.group), h('span', { class: 'dim' }, `${g.nets.length} nets`), h('span', { class: g.spread > 0.5 ? 'err-text' : 'dim' }, `spread ${g.spread.toFixed(2)} mm`)));
+    for (const g of groups) {
+      // Match: every net of the group that lags its slowest net (in time when delays are known) is tuned up to it.
+      const t = (n: { length: number; delay?: number }) => (g.spreadPs !== undefined ? n.delay! : n.length);
+      const slow = g.nets.reduce((a, b) => (t(b) > t(a) ? b : a));
+      const matchAll = () => {
+        for (const n of g.nets) if (n.net !== slow.net && slow.length - n.length > 0.05) tune(n.net, slow.net, pairs.find((q) => q.p === n.net)?.n ?? pairs.find((q) => q.n === n.net)?.p);
+      };
+      root.append(
+        h(
+          'div',
+          { class: 'len-row' },
+          h('strong', {}, g.group),
+          h('span', { class: 'dim' }, `${g.nets.length} nets`),
+          h('span', { class: g.spread > 0.5 ? 'err-text' : 'dim' }, `spread ${g.spread.toFixed(2)} mm${g.spreadPs !== undefined ? ` · ${g.spreadPs.toFixed(1)} ps` : ''}`),
+          g.spread > 0.05 ? h('button', { onclick: matchAll, title: `Add serpentines to the shorter nets to match ${slow.net}` }, 'Match') : null,
+        ),
+      );
+    }
     const list = h('div', { class: 'len-list', style: 'flex-shrink:0' });
     for (const l of lens.sort((a, b) => b.length - a.length).slice(0, 60)) list.append(h('div', { class: 'len-row' }, h('span', { class: 'ellipsis' }, l.net), h('span', { class: 'dim' }, `${l.length.toFixed(2)} mm${l.vias ? ` · ${l.vias} via` : ''}`)));
     root.append(list);

@@ -3,7 +3,7 @@
  * and lengths compared in time with each layer's propagation delay.
  */
 import { describe, expect, it } from 'vitest';
-import { defaultStackup, diffImpedance, diffPairs, lineGeometry, netLengths, netSignals, newUid, pairGeometry, propagationDelay, segSegDist, stackupOf, type Stackup, type Vec2 } from '@hassassin/core';
+import { defaultStackup, diffImpedance, diffPairs, withCoupling, lineGeometry, netLengths, netSignals, newUid, pairGeometry, propagationDelay, segSegDist, stackupOf, type Stackup, type Vec2 } from '@hassassin/core';
 import { fixturePairs, measureAutoroute, newProject, runTool, type Project } from '@hassassin/tools';
 
 async function board(): Promise<Project> {
@@ -130,6 +130,19 @@ describe('differential pairs (P10, first part)', () => {
     expect(after.uncoupled!).toBeGreaterThan(before.uncoupled! + 1);
   });
 
+  it('autoroute lists pairs whose halves run apart longer than diffUncoupledMax', { timeout: 60_000 }, async () => {
+    const p = await fixturePairs();
+    const ok = (await runTool(p, 'autoroute', {})) as { uncoupledOver?: unknown[] };
+    // Within the default 6 mm: nothing listed.
+    expect(ok.uncoupledOver).toBeUndefined();
+    const q = await fixturePairs();
+    for (const net of ['USB_P', 'USB_N']) await runTool(q, 'set_rule', { target: `net#"${net}"`, rule: 'diffUncoupledMax', value: '0.1mm' });
+    const r = (await runTool(q, 'autoroute', {})) as { uncoupledOver?: { pair: string; uncoupled: number; max: number }[] };
+    expect(r.uncoupledOver?.map((x) => x.pair)).toEqual(['USB']);
+    expect(r.uncoupledOver![0]!.uncoupled).toBeGreaterThan(0.1);
+    expect(r.uncoupledOver![0]!.max).toBeCloseTo(0.1, 6);
+  });
+
   it('other nets keep the pair clearance (3 W) from a pair; its partner keeps only the gap', { timeout: 60_000 }, async () => {
     const p = await fixturePairs();
     const dpc = rule(p, 'USB_P', 'diffPairClearance') as number;
@@ -169,6 +182,13 @@ describe('differential pairs (P10, first part)', () => {
       expect(d).toBeGreaterThan(0.6);
       expect(d).toBeLessThan(1.2);
       for (const v of [...va, ...vb]) expect(v.x > 115 && v.x < 125).toBe(true);
+    }
+    // P10 acceptance: coupled at the computed gap across the layer change, skew within the USB 2.0 preset.
+    const pairs = withCoupling(p.doc, p.engine, diffPairs(netLengths(p.doc, p.engine, stackupOf(p.doc, p.copper))));
+    expect(pairs).toHaveLength(2);
+    for (const d of pairs) {
+      expect(d.coupled!).toBeGreaterThan(20);
+      expect(d.skew).toBeLessThan(1.27);
     }
   });
 });
