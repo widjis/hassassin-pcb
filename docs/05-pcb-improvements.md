@@ -637,8 +637,17 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
       routing, nothing is applied and the panel says so; a finished run is one undo step. Checked in
       the browser on the mcu fixture: progress, Cancel, and the same result as the CLI (30 connections,
       14 vias, 320.57 mm). The panel's status lines no longer shrink in its flex column.
-  - Still open in P8g: the acceptance run on the solar MPPT board (needs the owner's permission) and a
-    progress report from the tool / CLI (they wait for the result as before).
+  - *Progress (2026-11-14):* progress from the tool and the CLI. `ToolContext.onProgress` (a line now and
+    then): `autoroute` sends "Routing: 27/32 connections, round 2 · 1 s" and "Checking the result with
+    DRC…", `auto_place` "Placing: run 1/3, 40 %". The CLI (and the MCP server) print it on stderr, so
+    stdout stays the JSON result. Found on the way and fixed: `hassassin autoroute` on a board with pours
+    failed with "The geometry engine is not loaded yet" since the DRC check above (it refills the pours);
+    the CLI and the MCP server now load it for `autoroute` as for `refill_pours`. Checked on a copy of the
+    RGB lamp with its traces deleted: progress lines on stderr, 81 / 81 routed, 24 vias. Tests check the
+    lines of both tools.
+  - Still open in P8g: the acceptance run on the solar MPPT board (needs the owner's permission). On the
+    RGB lamp copy the targets are met except "DRC errors after refill: 0": the 4 errors left are pour
+    against pour on F.Cu, present on the hand-routed board after a refill too (pour priority, P6).
 - [x] **P9. Shove engine (core).**
   - A core function that, given a new trace or via, moves traces and vias of other nets in its way aside
     (walk-around first, then push), keeping their clearance and connections, and refuses when they cannot

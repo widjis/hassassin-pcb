@@ -34,6 +34,8 @@ export interface AutoplaceOptions {
   rotate?: boolean;
   /** Annealing runs from the greedy start, each with its own seed, made legal; the best is kept (default 3). */
   restarts?: number;
+  /** Progress of the improvement pass, now and then (run, share of its moves done). */
+  onProgress?: (p: { run: number; runs: number; done: number }) => void;
 }
 
 export interface AutoplaceReport {
@@ -649,7 +651,10 @@ function improvePlacement(
     // The overlap weight grows in steps, so parts may pass each other early on and end apart.
     const stages = 40;
     for (let it = 0; it < iters; it++, T *= alpha) {
-      if (it % Math.ceil(iters / stages) === 0) W_OV = OV0 + (60 - OV0) * Math.pow(it / iters, OVP);
+      if (it % Math.ceil(iters / stages) === 0) {
+        W_OV = OV0 + (60 - OV0) * Math.pow(it / iters, OVP);
+        tell(it / iters);
+      }
       if (it === iters - Math.ceil(iters / 10)) W_OV = 60;
       const r = rand();
       let ks: number[];
@@ -736,7 +741,9 @@ function improvePlacement(
   // the one that places the most parts with the shortest ratsnest wins.
   const runs = Math.max(1, opts.restarts ?? 3);
   let bestRun: { unplaced: string[]; hpwl: number; snap: Snap } | undefined;
+  let tell = (_done: number) => {};
   for (let k = 0; k < runs; k++) {
+    tell = (done) => opts.onProgress?.({ run: k + 1, runs, done });
     restore(start);
     anneal(rng((opts.seed ?? 1) + 7919 * k), iters);
     const un = legalize();

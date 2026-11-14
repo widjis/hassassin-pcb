@@ -158,6 +158,8 @@ export interface ToolContext {
   readFile?: (path: string) => Promise<string>;
   /** Extra part/footprint sources (installed KiCad libraries, team library…). */
   library?: Library;
+  /** Progress of a long tool (autoroute): one line now and then, e.g. "Routing: 27/32 connections, round 2 · 1 s". */
+  onProgress?: (line: string) => void;
 }
 
 const DEFAULT_LIBRARY = new Library();
@@ -1589,8 +1591,11 @@ export const TOOLS: ToolDef[] = [
     description: 'Move parts onto the board automatically: a greedy start (connected parts near each other), then an improvement pass (simulated annealing: moves, swaps, 90° turns) that shortens the total ratsnest (half-perimeter per net), keeps courtyards apart and on the board, keeps the parts of a schematic block (group box, or sheet when there are several) together, puts each decoupling capacitor (a C on a supply and ground shared with one IC) next to that IC\'s supply pin and moves it with the IC, and puts connectors with the part property placeAtEdge against the board edge, facing out. Locked parts stay. By default only parts that are not on the board yet (e.g. new parts parked beside it); `refs` to choose, `all` to re-place everything not locked. improve=false keeps the greedy start only; `seed`, `iterations` (moves per run) and `restarts` (runs, default 3) tune the pass. Reports the ratsnest before and after, the decoupling pairs, the blocks and the edge connectors. A starting point to refine.',
     mutates: true,
     input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, spacing: { type: 'number', description: 'mm between parts (default 0.5)' }, improve: { type: 'boolean' }, seed: { type: 'number' }, iterations: { type: 'number' }, restarts: { type: 'number' } } },
-    run: (p, a) => {
+    run: (p, a, ctx) => {
+      const say = ctx.onProgress;
+      let last = -1;
       const { ops, report } = planAutoplace(p.doc, p.engine, p.copper, {
+        ...(say ? { onProgress: (q: { run: number; runs: number; done: number }) => { const pct = Math.floor(q.done * 10) * 10; if (pct !== last) (last = pct), say(`Placing: run ${q.run}/${q.runs}, ${pct} %`); } } : {}),
         ...(Array.isArray(a.refs) ? { refs: a.refs.map(String) } : {}),
         ...(a.all ? { all: true } : {}),
         ...(a.spacing !== undefined ? { spacing: num(a.spacing, 'spacing') } : {}),
@@ -1608,8 +1613,10 @@ export const TOOLS: ToolDef[] = [
     description: 'Route unrouted connections automatically (grid maze router, 45° traces, through vias, each net\'s width and clearance kept, rip-up and retry when connections block each other). `nets` limits it to some nets, `layers` to some copper layers, `rounds` sets the rip-up rounds (1 = no rip-up). Layers have a preferred direction (rule routeDirection: top horizontal, next vertical; runs against it cost direction_cost times more, default 1.5), traces keep some air from other nets where there is room (proximity_cost), and connections are routed shortest first (rule autoPlacePriority first; order=difficulty puts fine-pitch pads and long connections first). A connection that runs into routes of other nets first tries to shove them aside (walked round it, clearance and connections kept) before they are ripped up (shove=false turns it off). Differential pairs (nets with a diffGap, from classify_nets) are routed together first: one path split into two traces at the pair width and gap, 45° turns, vias side by side, mirrored 45° breakouts (pairs=false routes them one by one); afterwards a pair over its skew limit (diffSkewMax) is tuned with a serpentine on its shorter half (tune=false leaves it), and pairs whose halves run apart longer than diffUncoupledMax are listed as uncoupledOver. Dense fine-pitch parts (QFN, QFP, TSSOP) are fanned out first: each pin leaves its pad row with a straight stub and routing starts at the stub\'s end (fanout=false turns it off). With plane_gap_cost (or rule planeGapCost on a net, e.g. high-speed) traces prefer to run over a pour on the neighbouring layer, not over gaps in it or over traces that cut it. Connections it cannot finish are listed with the reason; it never forces a route and never moves copper that was on the board before. Before applying, the result is checked with DRC (pours refilled for the check): a connection whose new copper causes an error is left out and listed with reason "DRC: …" (check=false skips this). Run refill_pours afterwards. Tip: route GND/power with pours (pourLayers) and autoroute the rest.',
     mutates: true,
     input: { type: 'object', properties: { nets: { type: 'array', items: { type: 'string' } }, layers: { type: 'array', items: { type: 'string' }, description: 'Copper layers to route on (default: all)' }, grid: { type: 'number', description: 'Grid pitch mm (default from board size)' }, via_cost: { type: 'number', description: 'Via cost in grid steps for every net (default: rule viaCost, else 4 mm of trace)' }, rounds: { type: 'number', description: 'Rip-up and retry rounds (default 30; 1 = route once)' }, directions: { type: 'object', description: 'Preferred direction per copper layer, e.g. {"F.Cu":"horizontal","B.Cu":"vertical"} (default: rule routeDirection)' }, direction_cost: { type: 'number', description: 'Cost factor of a step against a layer direction (default 1.5; 1 = off)' }, proximity_cost: { type: 'number', description: 'Cost per step next to other nets (default 0.3; 0 = off)' }, order: { type: 'string', enum: ['difficulty', 'short'] }, fanout: { type: 'boolean', description: 'Fan out fine-pitch parts first with straight stubs (default true)' }, plane_gap_cost: { type: 'number', description: 'Cost per step over a gap in the pour on a neighbouring layer (default: rule planeGapCost, else 0 = off)' }, check: { type: 'boolean', description: 'Check the result with DRC (pours refilled) and leave out connections that cause errors (default true)' }, shove: { type: 'boolean', description: 'Push routes in the way aside before ripping them up (default true)' }, pairs: { type: 'boolean', description: 'Route differential pairs together (default true)' }, tune: { type: 'boolean', description: 'Tune pairs over their skew limit afterwards (default true)' } } },
-    run: (p, a) => {
-      const plan = planAutoroute(p.doc, p.engine, p.copper, { ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(Array.isArray(a.layers) ? { layers: a.layers.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}), ...(a.rounds !== undefined ? { rounds: Math.max(1, Math.round(num(a.rounds, 'rounds'))) } : {}),
+    run: (p, a, ctx) => {
+      const t0 = Date.now();
+      const say = ctx.onProgress;
+      const plan = planAutoroute(p.doc, p.engine, p.copper, { ...(say ? { onProgress: (q: { round: number; routed: number; total: number }) => say(`Routing: ${q.routed}/${q.total} connections, round ${q.round + 1} · ${Math.round((Date.now() - t0) / 1000)} s`) } : {}), ...(Array.isArray(a.nets) ? { nets: a.nets.map(String) } : {}), ...(Array.isArray(a.layers) ? { layers: a.layers.map(String) } : {}), ...(a.grid !== undefined ? { grid: num(a.grid, 'grid') } : {}), ...(a.via_cost !== undefined ? { viaCost: num(a.via_cost, 'via_cost') } : {}), ...(a.rounds !== undefined ? { rounds: Math.max(1, Math.round(num(a.rounds, 'rounds'))) } : {}),
         ...(a.directions && typeof a.directions === 'object' ? { directions: Object.fromEntries(Object.entries(a.directions as Record<string, unknown>).map(([k, v]) => [k, v === 'horizontal' || v === 'vertical' ? v : 'any'] as const)) } : {}),
         ...(a.direction_cost !== undefined ? { directionCost: Math.max(1, num(a.direction_cost, 'direction_cost')) } : {}),
         ...(a.proximity_cost !== undefined ? { proximityCost: Math.max(0, num(a.proximity_cost, 'proximity_cost')) } : {}),
@@ -1621,6 +1628,7 @@ export const TOOLS: ToolDef[] = [
       });
       // P8g: the plan is checked with DRC (pours refilled) before it is applied; connections whose copper
       // causes an error are left out and reported as not routed.
+      if (a.check !== false && a.check !== 'false') say?.('Checking the result with DRC…');
       const checked = a.check === false || a.check === 'false' ? { ...plan, removed: 0, checkMs: 0 } : checkAutoroute(p.doc, p.engine, p.copper, plan);
       const { ops, report } = checked;
       apply(p, 'Autoroute', ops);
