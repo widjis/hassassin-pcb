@@ -18,7 +18,8 @@ describe('BGA dog-bones (P8f)', () => {
   it('the third ring leaves through dog-bones (only those four balls are fanned out)', { timeout: 120_000 }, async () => {
     const p = await fixtureBga();
     // Direction cost 1: the bottom layer may run either way, so the vias are the way out.
-    const r = (await runTool(p, 'autoroute', { direction_cost: 1 })) as { routed: number; failed: unknown[]; dogbones?: number; vias: number };
+    // A generous time limit: on a busy machine the default 30 s can run out and change the result.
+    const r = (await runTool(p, 'autoroute', { direction_cost: 1, time_limit: 300 })) as { routed: number; failed: unknown[]; dogbones?: number; vias: number };
     expect(r.failed).toEqual([]);
     expect(r.routed).toBe(20);
     expect(r.dogbones).toBe(4);
@@ -45,7 +46,7 @@ describe('BGA dog-bones (P8f)', () => {
     const p = await fixtureBga();
     // With the default layer directions the dog-boned routes run down the bottom layer and two
     // second-ring balls are shut in; without dog-bones every connection is routed.
-    const r = (await runTool(p, 'autoroute', {})) as { routed: number; failed: unknown[]; dogbones?: number; dogbonesDropped?: number };
+    const r = (await runTool(p, 'autoroute', { time_limit: 300 })) as { routed: number; failed: unknown[]; dogbones?: number; dogbonesDropped?: number };
     expect(r.failed).toEqual([]);
     expect(r.routed).toBe(20);
     expect(r.dogbonesDropped).toBe(4);

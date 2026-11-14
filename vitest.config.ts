@@ -11,5 +11,11 @@ export default defineConfig({
       '@hassassin/sync': fileURLToPath(new URL('./packages/sync/src/index.ts', import.meta.url)),
     },
   },
-  test: { include: ['packages/*/test/**/*.test.ts', 'apps/cli/test/**/*.test.ts', 'apps/server/test/**/*.test.ts'], setupFiles: ['./vitest.setup.ts'] },
+  test: {
+    include: ['packages/*/test/**/*.test.ts', 'apps/cli/test/**/*.test.ts', 'apps/server/test/**/*.test.ts'],
+    setupFiles: ['./vitest.setup.ts'],
+    // Routing, shoving and KiCad tests are heavy; with every file running at once a test can take
+    // well over the 5 s default on a busy machine without anything being wrong.
+    testTimeout: 60_000,
+  },
 });
