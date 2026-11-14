@@ -766,6 +766,7 @@ type Drag = { x: number; y: number; moved: boolean; kind: 'pan' | 'move' | 'segm
 let drag: Drag | null = null;
 // Space held over the board: dragging pans (P1, as in the schematic).
 let spaceDown = false;
+let swallowUp = false;
 const typingIn = (t: EventTarget | null) => !!(t as HTMLElement | null)?.closest?.('input, select, textarea, [contenteditable]');
 window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' || app.space !== 'layout' || typingIn(e.target)) return;
@@ -788,6 +789,13 @@ const local = (e: PointerEvent | WheelEvent | MouseEvent) => {
 
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button === 2) return;
+  // A paste following the mouse: a click puts it down (P3).
+  if (app.pasting && e.button === 0) {
+    app.endPaste();
+    drag = null;
+    swallowUp = true;
+    return;
+  }
   if (e.button === 1) e.preventDefault(); // no auto-scroll on middle click
   canvas.setPointerCapture(e.pointerId);
   const { sx, sy } = local(e);
@@ -823,6 +831,7 @@ canvas.addEventListener('pointermove', (e) => {
   app.cursor = world;
   lastCursor = { space: 'layout', x: world.x, y: world.y };
   collab.presence(lastCursor);
+  if (app.pasting && !drag) app.dragMove(world, !e.altKey);
   if (drag) {
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
@@ -849,6 +858,7 @@ canvas.addEventListener('pointermove', (e) => {
 });
 
 canvas.addEventListener('pointerup', (e) => {
+  if (swallowUp) return void (swallowUp = false);
   const { sx, sy } = local(e);
   if (drag?.kind === 'move') app.endMove();
   if (drag?.kind === 'segment') app.route.endDrag();
@@ -933,6 +943,12 @@ window.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 'y') {
     e.preventDefault();
     return app.redo();
+  }
+  if (mod && app.space === 'layout') {
+    const k = e.key.toLowerCase();
+    if (k === 'c') return void (e.preventDefault(), app.copyBoard());
+    if (k === 'v') return void (e.preventDefault(), app.pasteBoard());
+    if (k === 'd') return void (e.preventDefault(), app.duplicateBoard());
   }
   if (mod && app.space === 'schematic') {
     const k = e.key.toLowerCase();
@@ -1030,7 +1046,8 @@ window.addEventListener('keydown', (e) => {
       app.setSpace('schematic');
       break;
     case 'Escape':
-      if (app.mode === 'route' && app.route.active) app.route.cancel();
+      if (app.pasting) app.endPaste(true);
+      else if (app.mode === 'route' && app.route.active) app.route.cancel();
       else if (app.mode === 'route') app.setMode('select');
       else app.select([]);
       break;

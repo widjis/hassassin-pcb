@@ -4,6 +4,10 @@
  * project is live, shared with collaborators).
  */
 import {
+  copyBoardItems,
+  matchingBlocks,
+  pasteBoardOps,
+  replicateLayoutOps,
   partTransform,
   rubberbandOps,
   rubberbandPlan,
@@ -2038,6 +2042,48 @@ export const TOOLS: ToolDef[] = [
       for (const n of top) byType[n.type] = (byType[n.type] ?? 0) + 1;
       apply(p, `Delete ${top.length} object(s)`, top.map((n) => ({ op: 'remove', uid: n.uid }) as Op));
       return { deleted: top.length, byType, ...(refused.length ? { notDeleted: [...new Set(refused.map((n) => n.type))].map((t) => `${t} (structural or part of a symbol)`) } : {}) };
+    },
+  },
+  {
+    name: 'duplicate_board_items',
+    description: 'Copy board items (parts, traces, vias, pours, graphics; by reference, uid or selector) and paste the copy dx, dy mm away (P3). Each pasted part takes a schematic part not yet on the board with the same footprint and value (and its nets), else a new reference with no nets; traces are copied only when both ends rest on copied copper unless all_traces, and follow the nets of the pasted pads.',
+    mutates: true,
+    input: { type: 'object', properties: { targets: { type: 'array', items: { type: 'string' } }, dx: { type: 'number' }, dy: { type: 'number' }, all_traces: { type: 'boolean' } }, required: ['targets'] },
+    run: (p, a) => {
+      const list = Array.isArray(a.targets) ? a.targets.map(String) : [];
+      const uids = list.flatMap((t) => resolveTargets(p, t).map((n) => n.uid));
+      const clip = copyBoardItems(p.doc, p.engine, p.copper, uids, { allTraces: a.all_traces === true });
+      if (!clip) throw new ToolError('Nothing to copy: give parts, traces, vias, pours or board graphics.');
+      const at = { x: clip.anchor.x + (optNum(a.dx, 'dx') ?? 10), y: clip.anchor.y + (optNum(a.dy, 'dy') ?? 0) };
+      const r = pasteBoardOps(p.doc, p.engine, p.copper, clip, at);
+      apply(p, 'Duplicate', r.ops);
+      return { items: r.uids.length, refs: Object.fromEntries(r.refs), fromSchematic: r.matched, copperLeftOut: r.skipped };
+    },
+  },
+  {
+    name: 'replicate_layout',
+    description: 'Lay out other blocks like this one (P3): from = the references of a laid-out block (e.g. one channel); to = the references of a block made of the same parts (same footprints and values), or "all" for every such block found in the schematic (group boxes, or sheets), or omitted when there is exactly one. Parts are paired by their place in the schematic; the target keeps the place of its first part, the rest follow the source arrangement, and the source copper between its parts is copied onto the target nets.',
+    mutates: true,
+    input: { type: 'object', properties: { from: { type: 'array', items: { type: 'string' } }, to: { type: 'array', items: { type: 'string' }, description: 'References of the target block; or the string "all"' } }, required: ['from'] },
+    run: (p, a) => {
+      const from = (Array.isArray(a.from) ? a.from : []).map(String);
+      if (!from.length) throw new ToolError('from: the references of the block to copy');
+      let targets: string[][];
+      if (Array.isArray(a.to)) targets = [a.to.map(String)];
+      else {
+        const m = matchingBlocks(p.doc, p.engine, from);
+        if (!m.length) throw new ToolError('No other block with the same parts was found; give `to` with the references.');
+        if (m.length > 1 && a.to !== 'all') throw new ToolError(`Several blocks match: ${m.map((b) => `${b.block} (${b.refs.join(' ')})`).join('; ')}. Give \`to\`, or "all".`);
+        targets = m.map((b) => b.refs);
+      }
+      const out: { pairs: Record<string, string>; traces: number }[] = [];
+      for (const t of targets) {
+        const r = replicateLayoutOps(p.doc, p.engine, p.copper, from, t);
+        if (r.error) throw new ToolError(`Cannot replicate onto ${t.join(' ')}: ${r.error}`);
+        apply(p, 'Replicate layout', r.ops);
+        out.push({ pairs: Object.fromEntries(r.pairs), traces: r.traces });
+      }
+      return { blocks: out };
     },
   },
   {

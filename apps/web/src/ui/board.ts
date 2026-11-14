@@ -117,6 +117,7 @@ export function mountBoard(app: App, root: HTMLElement): void {
             setMsg(`Placed ${report.placed.length} part(s)${r ? `; ratsnest ${r.greedy} → ${r.improved} mm` : ''}${report.decoupling?.length ? `; ${report.decoupling.length} decoupling cap(s) at their IC` : ''}${report.failed.length ? `; no room for ${report.failed.join(', ')}` : ''}.`);
           },
         }, 'Auto-place'),
+        h('button', { title: 'Select the parts of a laid-out block (e.g. one channel), then lay out every other block of the schematic made of the same parts like it, with its routing', onclick: () => app.replicateSelection() }, 'Replicate layout'),
         job
           ? h('button', { title: 'Stop routing; the board stays as it is', onclick: () => (stopJob(), setMsg('Autoroute cancelled; nothing changed.'), render()) }, 'Cancel')
           : h('button', { title: 'Route the unrouted connections (45°, vias, clearances kept), checked with DRC before it is applied. Runs in the background; undo removes it in one step.', onclick: startRoute }, 'Autoroute'),

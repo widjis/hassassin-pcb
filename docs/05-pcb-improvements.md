@@ -111,13 +111,32 @@ document before work on a measured item starts.
     keep_traces false; a part turned in one undo step). In the browser on a copy of the solar board: NTC
     connector dragged by (2, 1.5) mm, connections unchanged, no new off-angle piece, one undo; a move
     onto other copper shows red and DRC reports the short.
-- [ ] **P3. Copy, paste and duplicate on the board.**
+- [x] **P3. Copy, paste and duplicate on the board.**
   - Cmd/Ctrl+C / V / D on parts, traces, vias, graphics and pours; traces and vias are copied only when
     both their ends are inside the copy (or with an option, all of them).
   - Pasted parts are matched to existing schematic parts that are not on the board yet, or get new
     references; the paste follows the mouse and is one undo step.
   - *Layout replication:* the placement and routing of one block (for example one channel) can be
     applied to another block made of the same schematic parts.
+  - *Done (2026-11-15):* core module `boardClipboard.ts`. `copyBoardItems` takes parts (with pads and
+    graphics), vias, pours, keep-outs and board graphics, and traces whose ends both rest on copied copper
+    (a copied pad, via or another such trace; `allTraces` for all). `pasteBoardOps` gives each part the
+    reference of a schematic part not yet on the board with the same footprint and value, with that
+    part's nets on its pads, else the next free reference with no nets; copied copper follows the pasted
+    pads' nets (renamed, or left out for a pad with no net; shared nets such as a ground pour stay).
+    Editor: Cmd/Ctrl+C / V / D on the board; the paste follows the mouse until a click (Esc takes it
+    back), and the paste, the move and the pour refill are one undo step. Replication:
+    `replicateLayoutOps` pairs the parts of two blocks (group box, else sheet) by footprint, value and
+    place in the schematic; the target's first part keeps its place, the others take the source
+    arrangement and rotation, and the source copper between its parts (nets wholly inside the block, or
+    shared nets lying in its area) replaces the target's copper on the matching nets; `matchingBlocks`
+    finds the blocks made of the same parts. "Replicate layout" in the Board panel (selection = source,
+    every matching block); tools `duplicate_board_items` and `replicate_layout` (to: references,
+    "all", or the only match). Tests: `boardClipboard.test.ts` (trace rule, paste onto free schematic
+    parts with their nets and no DRC error, one undo; duplicate with new references and copper left out;
+    a two-part channel replicated with placement, rotation and routing). In the browser on a copy of the
+    solar board: copy, paste following the mouse, click, undo, Esc; Replicate with no matching block
+    explains so.
 - [x] **P4. Interactive router that respects clearance.**
   - While routing, the preview never passes through other nets' copper or their clearance: it walks
     around obstacles (or stops at the last legal point, shown in red), using the net's width and

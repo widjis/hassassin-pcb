@@ -20,6 +20,11 @@ import { type WaivedViolation,
   mapFills,
   movablePoints,
   rotateSelectionOps,
+  copyBoardItems,
+  matchingBlocks,
+  pasteBoardOps,
+  replicateLayoutOps,
+  type BoardClip,
   rotationAbout,
   rubberbandOps,
   rubberbandPlan,
@@ -538,7 +543,7 @@ export class App {
     return !!n && !!this.doc && isBoardMovable(this.doc, n);
   }
 
-  beginMove(world: Vec2): void {
+  beginMove(world: Vec2, key?: string): void {
     if (!this.doc) return;
     const items: MoveState['items'] = [];
     for (const uid of this.selection) {
@@ -555,7 +560,7 @@ export class App {
     const rubber = rubberbandPlan(this.doc, this.engine!, this.copper, moved, skip);
     const watch = new Set([...items.map((it) => it.uid), ...rubber.items.map((r) => r.uid)]);
     for (const it of items) for (const c of this.node(it.uid)!.children) watch.add(c);
-    this.move = { start: world, last: { x: 0, y: 0 }, key: newUid('mv'), items, rubber, watch, checked: 0 };
+    this.move = { start: world, last: { x: 0, y: 0 }, key: key ?? newUid('mv'), items, rubber, watch, checked: 0 };
     this.moveClash = false;
   }
 
@@ -606,6 +611,68 @@ export class App {
 
   /** The part being dragged touches other copper (P2). */
   moveClash = false;
+
+  // ---------- copy / paste / duplicate on the board (P3) ----------
+  /** The last board copy (this window). */
+  boardClip: BoardClip | null = null;
+  /** A paste following the mouse until a click places it. */
+  pasting = false;
+
+  copyBoard(): boolean {
+    if (!this.doc || !this.engine) return false;
+    const clip = copyBoardItems(this.doc, this.engine, this.copper, this.selection);
+    if (!clip) return (this.say('Select parts, traces, vias, pours or graphics to copy.'), false);
+    this.boardClip = clip;
+    const parts = clip.items.filter((i) => i.place === 'part').length;
+    this.say(`Copied ${clip.items.length} item${clip.items.length > 1 ? 's' : ''}${parts ? ` (${parts} part${parts > 1 ? 's' : ''})` : ''}. Cmd/Ctrl+V pastes at the cursor.`);
+    return true;
+  }
+
+  /** Paste the board copy at the cursor; it follows the mouse until a click (Esc takes it back). */
+  pasteBoard(): void {
+    if (!this.doc || !this.engine || !this.boardClip) return this.say('Nothing copied yet (Cmd/Ctrl+C on the board).');
+    if (this.pasting) this.endPaste();
+    const at = snapToGrid(this.cursor, this.gridStep());
+    const r = pasteBoardOps(this.doc, this.engine, this.copper, this.boardClip, at);
+    const key = newUid('paste');
+    if (!this.apply('Paste', r.ops, key)) return;
+    this.select(r.uids);
+    this.beginMove(at, key);
+    this.pasting = true;
+    const named = r.refs.map(([a, b]) => `${a}→${b}`).join(' ');
+    this.say(`Pasted${named ? ` ${named}` : ''}${r.matched.length ? ` (${r.matched.join(', ')} from the schematic)` : ''}${r.skipped ? `; ${r.skipped} copper item(s) left out (their parts have no nets)` : ''}. Move and click to place; Esc takes it back.`);
+  }
+
+  endPaste(cancel = false): void {
+    if (!this.pasting) return;
+    this.pasting = false;
+    this.endMove();
+    if (cancel) this.undo();
+  }
+
+  duplicateBoard(): void {
+    if (this.copyBoard()) this.pasteBoard();
+  }
+
+  /** Lay out the other blocks of the schematic made of the selected parts like them (P3). */
+  replicateSelection(): void {
+    if (!this.doc || !this.engine) return;
+    const refs = [...this.selection].map((u) => this.node(u)).filter((n) => n?.type === 'element').map((n) => n!.name);
+    if (refs.length < 2) return this.say('Select the parts of a laid-out block (at least two) to replicate it.');
+    const blocks = matchingBlocks(this.doc, this.engine, refs);
+    if (!blocks.length) return this.say('No other block in the schematic is made of the same parts.');
+    const key = newUid('rep');
+    const done: string[] = [];
+    for (const b of blocks) {
+      const r = replicateLayoutOps(this.doc, this.engine, this.copper, refs, b.refs);
+      if (r.error) return this.say(`Cannot replicate onto ${b.block}: ${r.error}`);
+      this.apply('Replicate layout', r.ops, key);
+      done.push(`${b.block} (${r.pairs.map((x) => x[1]).join(' ')})`);
+    }
+    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    this.history?.seal();
+    this.say(`Replicated onto ${done.join('; ')}.`);
+  }
 
   /**
    * R / Shift+R: one part turns in place; a selection of several items (parts, traces, vias, pours,
