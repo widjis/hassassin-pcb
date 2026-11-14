@@ -98,10 +98,13 @@ export function mountBoard(app: App, root: HTMLElement): void {
         h('button', {
           title: 'Move parts that are not on the board yet onto it, connected parts close together',
           onclick: () => {
-            const { ops, report } = planAutoplace(doc, engine, app.copper);
+            // On the main thread: one shorter improvement run (the tool and the CLI do three full ones).
+            const n = [...doc.nodes.values()].filter((x) => x.type === 'element').length;
+            const { ops, report } = planAutoplace(doc, engine, app.copper, { restarts: 1, iterations: Math.min(300000, 5000 * n) });
             if (!ops.length) return setMsg(report.failed.length ? `No room for: ${report.failed.join(', ')}` : 'Every part is already on the board.');
             app.apply('Auto-place parts', ops);
-            setMsg(`Placed ${report.placed.length} part(s)${report.failed.length ? `; no room for ${report.failed.join(', ')}` : ''}.`);
+            const r = report.ratsnest;
+            setMsg(`Placed ${report.placed.length} part(s)${r ? `; ratsnest ${r.greedy} → ${r.improved} mm` : ''}${report.decoupling?.length ? `; ${report.decoupling.length} decoupling cap(s) at their IC` : ''}${report.failed.length ? `; no room for ${report.failed.join(', ')}` : ''}.`);
           },
         }, 'Auto-place'),
         job

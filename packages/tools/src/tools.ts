@@ -1586,11 +1586,19 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'auto_place',
-    description: 'Move parts onto the board automatically: connected parts end up near each other, courtyards do not overlap. By default only parts that are not on the board yet (e.g. new parts parked beside it); `refs` to choose, `all` to re-place everything not locked. A starting point to refine.',
+    description: 'Move parts onto the board automatically: a greedy start (connected parts near each other), then an improvement pass (simulated annealing: moves, swaps, 90° turns) that shortens the total ratsnest (half-perimeter per net), keeps courtyards apart and on the board, keeps the parts of a schematic block (group box, or sheet when there are several) together, puts each decoupling capacitor (a C on a supply and ground shared with one IC) next to that IC\'s supply pin and moves it with the IC, and puts connectors with the part property placeAtEdge against the board edge, facing out. Locked parts stay. By default only parts that are not on the board yet (e.g. new parts parked beside it); `refs` to choose, `all` to re-place everything not locked. improve=false keeps the greedy start only; `seed`, `iterations` (moves per run) and `restarts` (runs, default 3) tune the pass. Reports the ratsnest before and after, the decoupling pairs, the blocks and the edge connectors. A starting point to refine.',
     mutates: true,
-    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, spacing: { type: 'number', description: 'mm between parts (default 0.5)' } } },
+    input: { type: 'object', properties: { refs: { type: 'array', items: { type: 'string' } }, all: { type: 'boolean' }, spacing: { type: 'number', description: 'mm between parts (default 0.5)' }, improve: { type: 'boolean' }, seed: { type: 'number' }, iterations: { type: 'number' }, restarts: { type: 'number' } } },
     run: (p, a) => {
-      const { ops, report } = planAutoplace(p.doc, p.engine, p.copper, { ...(Array.isArray(a.refs) ? { refs: a.refs.map(String) } : {}), ...(a.all ? { all: true } : {}), ...(a.spacing !== undefined ? { spacing: num(a.spacing, 'spacing') } : {}) });
+      const { ops, report } = planAutoplace(p.doc, p.engine, p.copper, {
+        ...(Array.isArray(a.refs) ? { refs: a.refs.map(String) } : {}),
+        ...(a.all ? { all: true } : {}),
+        ...(a.spacing !== undefined ? { spacing: num(a.spacing, 'spacing') } : {}),
+        ...(a.improve === false || a.improve === 'false' ? { improve: false } : {}),
+        ...(a.seed !== undefined ? { seed: num(a.seed, 'seed') } : {}),
+        ...(a.iterations !== undefined ? { iterations: num(a.iterations, 'iterations') } : {}),
+        ...(a.restarts !== undefined ? { restarts: num(a.restarts, 'restarts') } : {}),
+      });
       apply(p, 'Auto-place parts', ops);
       return report;
     },

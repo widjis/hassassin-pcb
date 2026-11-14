@@ -863,6 +863,53 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
   - Acceptance on the benchmark boards (parts cleared from the board, then autoplaced): total ratsnest
     length at least 20 % shorter than with the v0.0.3 autoplacer, courtyards not overlapping, and the P8
     router reaching its targets on the result.
+  - *Progress (2026-11-14):* the improvement pass, in `autoplace.ts` (`improvePlacement`).
+    - **Greedy start** as before, now faster on an outline of many points (a distance grid of the board,
+      0.25 mm cells, rejects most places before the exact test; the RGB lamp's round outline has 1160
+      points and took 32 s, now 0.7 s), and a part that does not fit is tried turned by 90° steps.
+    - **Simulated annealing** (from the textbook description): moves (range shrinking as it cools),
+      swaps and 90° turns of the parts that are not locked. Cost: half-perimeter of every net, courtyard
+      overlap (its weight grows from 0.5 to 60 with the cube of the progress, so parts may pass each
+      other early and end apart; a higher start packs worse, a lower one leaves overlaps), reaching past
+      the board edge (on the distance grid), and the terms below. Seeded pseudo-random moves (`seed`), so
+      a run can be repeated; 20 000 moves per part (at most 1.5 million) per run, 3 runs from the greedy
+      start (`restarts`), each made legal, the one that places the most parts with the shortest
+      ratsnest wins. Then every part is put on its nearest legal place (spiral search, also turned);
+      the result is kept only when it places more parts than the greedy start, or as many with a
+      shorter ratsnest.
+    - **Room for the traces:** each part's box grows by about one 0.5 mm track per connected pad spread
+      round its outline, twice that for fine pitch (≤ 0.65 mm). Without it the mcu fixture's QFN could
+      not be routed out (28 / 32); twice as much everywhere cost the RGB lamp most of its gain.
+    - **Blocks:** parts whose symbols lie in one schematic group box, or on one sheet when the design has
+      several, are a cluster; the half-perimeter of each cluster's part origins is added (weight 0.5).
+    - **Decoupling:** a two-pad capacitor (reference C…) on a supply net and ground is tied to an IC on
+      the same two nets (several ICs on one supply share the capacitors: each goes to the IC with the
+      fewest per supply pin); the distance from its supply pad to the IC's supply pin costs 3 per mm, it
+      moves and turns with its IC, and only small moves of its own are tried.
+    - **Edge connectors:** a part with the property `placeAtEdge` (on the part or its symbol) pays 20 per
+      mm from the nearest board edge and, when its pads lie off its origin, for not facing that edge
+      with the side away from its pads.
+    - `auto_place` takes `improve` (false = greedy only), `seed`, `iterations`, `restarts` and reports
+      the ratsnest before and after, the decoupling pairs, the blocks and the edge connectors. The Board
+      panel runs one shorter run (5000 moves per part) on the main thread and shows the figures.
+    - Benchmark: new `apps/cli/bench/autoplace.ts` (board loading shared with the autoroute bench in
+      `bench/boards.ts`): rips up every trace and via, places every part twice from scratch (greedy
+      only = the v0.0.3 placer, and improved), refills the pours and autoroutes each.
+      | Board | Ratsnest greedy → improved | Overlaps | Routed | Vias | Length | DRC errors | Time (place / route) |
+      |---|---|---|---|---|---|---|---|
+      | mcu fixture | 251.8 → 168.3 mm (−33 %) | 0 | 32 / 32 (greedy 26 / 32) | 5 (23) | 166 mm | 0 | 1.5 s / 0.9 s |
+      | RGB lamp (copy), seed 1 | 945.3 → 662.9 mm (−30 %) | 0 (greedy 1, J4 not placed) | 88 / 88 (greedy 90 / 90) | 30 (44) | 603 mm (911) | 4 (greedy 8) | 17.3 s / 11.9 s |
+      Every other fixture is 6–74 % shorter and routes fully with 0 DRC errors. The RGB lamp's DRC errors
+      are all pour against pour on F.Cu (the pour priority of P8a / P6), none from parts or traces. The
+      RGB figure depends on the seed: seeds 2 and 3 give −24 % and −15 % (both routed fully).
+    Tests (`autoplace.test.ts`, mcu fixture cleared): at least 20 % shorter than the greedy start,
+    courtyards apart and on the board, some parts turned, and the router finishes it with 0 DRC errors;
+    C1 and C2 within 4 mm of a supply pin of U1 and U2 (one each); a group box keeps its parts at most
+    as spread as without it, and is reported; a connector marked `placeAtEdge` ends under 1.5 mm from the
+    edge; a locked part stays and the same seed gives the same operations. 231 tests pass.
+  - Still open in P11: the acceptance on the solar MPPT board (needs the owner's permission); the RGB
+    lamp meets it with the default seed but not with every seed; "facing out" is not covered by a test
+    (the fixtures' connectors have their pads round their origin); keep-out areas wait for P6.
 
 **PM2 done when:** every item above is checked.
 
