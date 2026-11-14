@@ -308,7 +308,7 @@ P9 and P10 (shoving and pair routing while routing by hand) move to PM1 next to 
     style. Bends per connection vs P8d: qfn-escape 3.75 → 2.5, qfn-fine 3 → 2.38, reversed-bus 6 → 4.5,
     off-grid 2.5 → 1.75, tee 2.33 → 1.67, channel 3 → 3 (equal). The benchmark boards are still to be
     measured.
-- [x] **P16. Signal classes from pins (pin metadata that drives the layout rules).** — `P16_COMMIT`
+- [x] **P16. Signal classes from pins (pin metadata that drives the layout rules).** — `0b003f2`
   - *Owner's request (2026-11-12):* a part should carry, per pin, what that pin needs (for example high
     frequency, so the high-frequency routing rules apply; a signal, so the signal rules apply), and the
     layout should follow it.
