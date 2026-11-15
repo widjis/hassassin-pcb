@@ -79,6 +79,7 @@ export class DrawTool {
     this.cancel();
     this.kind = kind;
     this.app.setMode('draw');
+    this.app.emit('mode');
     this.app.say(`${DRAW_KINDS.find((d) => d.kind === kind)?.label}: ${this.hint()}`);
   }
 

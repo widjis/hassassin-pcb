@@ -3,6 +3,7 @@ import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, S
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import { DRAW_KINDS } from './tools/draw.ts';
+import { CORNER_MODES, VIA_PRESETS, WIDTH_PRESETS, type RouteMode } from './tools/route.ts';
 import { isTrackpadScroll, SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
 import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
@@ -756,6 +757,53 @@ pickBtn.addEventListener('click', (ev) => {
   pickMenu = menu;
 });
 window.addEventListener('click', closePick);
+
+// Option bars of the route and draw tools (P6b): the choices visible next to the tools, kept in step with
+// the right mouse button and the keys.
+const routeBar = $('routeBar');
+const drawBar = $('drawBar');
+const cornerSeg = $('cornerSeg');
+for (const c of CORNER_MODES) {
+  const b = document.createElement('button');
+  b.textContent = c.label;
+  b.dataset.corner = c.mode;
+  b.addEventListener('click', () => app.route.setCorner(c.mode));
+  cornerSeg.append(b);
+}
+const routeModeSel = $<HTMLSelectElement>('routeModeSel');
+for (const [m, l] of [['walkaround', 'Walkaround'], ['shove', 'Shove'], ['free', 'Free (no checks)']] as const) routeModeSel.append(new Option(l, m));
+routeModeSel.addEventListener('change', () => app.route.setMode(routeModeSel.value as RouteMode));
+const routeWidthSel = $<HTMLSelectElement>('routeWidthSel');
+routeWidthSel.append(new Option('Width: net rule', ''));
+for (const w of WIDTH_PRESETS) routeWidthSel.append(new Option(`Width ${w} mm`, String(w)));
+routeWidthSel.addEventListener('change', () => app.route.setWidth(routeWidthSel.value ? Number(routeWidthSel.value) : null));
+const routeViaSel = $<HTMLSelectElement>('routeViaSel');
+routeViaSel.append(new Option('Via: net rule', ''));
+for (const v of VIA_PRESETS) routeViaSel.append(new Option(`Via ${v.d}/${v.h} mm`, `${v.d}/${v.h}`));
+routeViaSel.addEventListener('change', () => {
+  const [d, h] = routeViaSel.value.split('/').map(Number);
+  app.route.setVia(routeViaSel.value ? { d: d!, h: h! } : null);
+});
+const bendSel = $<HTMLSelectElement>('bendSel');
+for (const b of BEND_STYLES) bendSel.append(new Option(`Bend ${b.n}: ${b.label}`, String(b.n)));
+bendSel.addEventListener('change', () => ((app.drawing.bend = Number(bendSel.value)), app.requestRender()));
+const miterInp = $<HTMLInputElement>('miterInp');
+miterInp.addEventListener('change', () => ((app.drawing.miter = Number(miterInp.value) || 0), app.requestRender()));
+const syncModeBars = () => {
+  routeBar.hidden = app.mode !== 'route';
+  drawBar.hidden = app.mode !== 'draw' || ['text', 'hole', 'fiducial', 'outline-rect'].includes(app.drawing.kind);
+  for (const b of cornerSeg.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.corner === app.route.corner);
+  routeModeSel.value = app.route.mode;
+  const w = app.route.widthChoice;
+  if (w !== null && ![...routeWidthSel.options].some((o) => o.value === String(w))) routeWidthSel.append(new Option(`Width ${w} mm`, String(w)));
+  routeWidthSel.value = w === null ? '' : String(w);
+  const v = app.route.viaChoice;
+  routeViaSel.value = v ? `${v.d}/${v.h}` : '';
+  bendSel.value = String(app.drawing.bend);
+  if (document.activeElement !== miterInp) miterInp.value = String(app.drawing.miter);
+};
+app.on('mode', syncModeBars);
+syncModeBars();
 
 // Layout grid and align (P5).
 const layoutGridSelect = $<HTMLSelectElement>('layoutGridSelect');

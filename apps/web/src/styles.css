@@ -420,6 +420,10 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 
 .layout-tools { display: flex; gap: 6px; align-items: center; }
 .layout-tools > button, .layout-tools .seg { background: rgba(21, 23, 29, 0.92); }
+.mode-bar { display: flex; gap: 6px; align-items: center; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 8px; background: rgba(21, 23, 29, 0.92); }
+.mode-bar[hidden] { display: none; }
+.mode-bar .seg button { padding: 3px 8px; white-space: nowrap; }
+.mode-bar label { display: flex; gap: 4px; align-items: center; font-size: 12px; }
 
 .menu-wrap { position: relative; }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 180px; display: flex; flex-direction: column; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); }

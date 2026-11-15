@@ -165,8 +165,6 @@ export class RouteTool {
     this.partnerPreview = [];
     this.blocked = null;
     this.pair = null;
-    this.width0 = null;
-    this.via0 = null;
     clearTimeout(this.shoveTimer);
     this.app.renderer.setLayer('__preview', new Float32Array());
     this.app.renderer.setLayer('__shove', new Float32Array());
@@ -221,6 +219,38 @@ export class RouteTool {
   cycleMode(): void {
     this.mode = MODES[(MODES.indexOf(this.mode) + 1) % MODES.length]!;
     this.app.say(`Routing mode: ${this.mode}${this.mode === 'walkaround' ? ' (around other copper)' : this.mode === 'shove' ? ' (pushes other traces aside)' : ' (no checks; DRC reports)'}`);
+    this.app.emit('mode');
+    this.rebuildPreview();
+  }
+
+  /** The width chosen in the route bar (null: each net's own rule); kept from one route to the next. */
+  get widthChoice(): number | null {
+    return this.width0;
+  }
+
+  get viaChoice(): { d: number; h: number } | null {
+    return this.via0;
+  }
+
+  setWidth(mm: number | null): void {
+    this.width0 = mm;
+    this.app.emit('mode');
+    this.rebuildPreview();
+  }
+
+  setVia(v: { d: number; h: number } | null): void {
+    this.via0 = v;
+    this.app.emit('mode');
+  }
+
+  setMode(m: RouteMode): void {
+    this.mode = m;
+    this.app.emit('mode');
+    this.rebuildPreview();
+  }
+
+  setCorner(c: CornerMode): void {
+    this.corner = c;
     this.app.emit('mode');
     this.rebuildPreview();
   }

@@ -448,7 +448,7 @@ Known limitations:
 - Hand routing does not shove or route pairs yet; those parts of P9 / P10 moved to PM1 (P4).
 - Next: milestone PM1 (the layout editor by hand), then PM3 (manufacturing).
 
-## PCB layout improvements, milestone PM1 (v0.3.0)
+## PCB layout improvements, milestone PM1 (v0.3.0, v0.3.1)
 
 Done under the work agreement [docs/05-pcb-improvements.md](05-pcb-improvements.md) (P1–P7), so the board
 is comfortable to edit by hand, next to the automatic placement and routing of PM2. Each editor action is
@@ -483,9 +483,29 @@ Benchmarks unchanged: the solar MPPT board 76 / 76 routed with 39 vias, the RGB 
 |---|---|---|
 | ![The route preview of a net leaving U3 pad 3 on the solar board, walking around the neighbouring pads and stopping, marked with a red cross and a dashed red line, before pad 5 of another net](media/pm1-walkaround.jpg) | ![The layout toolbar's Draw menu open (board outline, copper pour, keep-out area, silkscreen line, text, mounting hole, fiducial) next to a hatched keep-out area cut out of the ground pour](media/pm1-draw-keepout.jpg) | ![Two neighbouring pads of the 0.4 mm pitch VQFN selected, with a line between their edges labelled 0.225 mm (≥ 0.200)](media/pm1-clearance.jpg) |
 
+**v0.3.1** (revision 0.6 of the agreement, after the owner's review of v0.3.0, with production manuals as
+references: EAGLE help, the KiCad 8 manual, Pulsonix help):
+- **Drawing as in EAGLE (P6b):** pours, keep-outs, the board outline and silkscreen lines are drawn with
+  EAGLE's eight wire bends on the right mouse button (90°, 45°, straight, arcs, freehand arc) and a miter
+  that rounds or cuts the bend's corner; the segment being drawn and the closing line are dashed; outlines
+  are edited with corner and edge handles (insert a corner, bend an edge into an arc, delete a corner); the
+  pour form takes priority, clearance, minimum width, pad connection and spoke width.
+- **Routing corner modes (P6b):** 45°, 90°, 45° rounded, 90° rounded and free angle, as KiCad's router, on
+  the right mouse button and as buttons in the route bar (with mode, width and via size); in 90° mode the
+  walkaround keeps to square paths; rounded corners are arc traces.
+- **Copper coloured by net (P17):** as KiCad's net colours and Pulsonix / Easy-PC's "Use Own Colour": a
+  colour per net and per signal class (ground grey, power orange by default), shown on the copper or on
+  the ratsnest only, and "Colour every net" with a palette.
+
+| Copper coloured by net (solar board) | Drawing a pour: bend 0 with a 1 mm miter, the next bend dashed | Routing with 90° rounded corners |
+|---|---|---|
+| ![The solar MPPT board with every net in its own colour: power nets orange, ground grey, signals in distinct colours, bottom-layer copper dimmed](media/pm1-net-colours.jpg) | ![A pour outline being drawn: a placed piece running across then down with a rounded corner, and the next piece in the same bend style drawn dashed, labelled bend 0 · 90° · miter](media/pm1-bend-preview.jpg) | ![The route preview from U3 pad 3 to a resistor pad: across, a rounded bend up, then a rounded bend across, labelled walkaround · 90° rounded](media/pm1-route-rounded.jpg) |
+
 Known limitations:
 - Flipping an SMD part moves its pads to the other copper layer; traces on the old layer need routing
   again.
+- Rounded corners and arcs in outlines are stored as many points, so their handles crowd; differential
+  pairs keep sharp corners.
 - A `.hpcb` saved before this release with KiCad keep-outs reports its pours in them until the pours are
   refilled (B).
 - Bottom-side parts are not placed by the autoplacer (it places on the top).

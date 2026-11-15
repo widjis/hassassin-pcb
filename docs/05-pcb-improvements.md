@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
 | Version | 0.6 |
-| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-15 (0.6) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (`v0.3.0`, then P6b and P17 in revision 0.6, 2026-11-15, not released yet); PM3 to do** |
+| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-15 (0.6) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (`v0.3.0`; P6b and P17 in `v0.3.1`, 2026-11-15); PM3 to do** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |
@@ -305,6 +305,9 @@ document before work on a measured item starts.
     in `interactive.test.ts`. In the browser on a copy of the solar board: a pour drawn with bend 0 and a
     1 mm miter then bend 3, the form, the handles; U3-PA5 routed with 90° rounded corners: 5 traces, 2 of
     them arcs, connected, 0 DRC errors. Reviewed by the owner with screenshots before the commit.
+    After the owner tried it ("where are the route options?"): the choices are also visible as option bars
+    in the layout toolbar while a tool is on — Route: corner buttons, mode, width and via size (kept from
+    one route to the next); Draw: bend style and miter — kept in step with the right button and the keys.
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner
