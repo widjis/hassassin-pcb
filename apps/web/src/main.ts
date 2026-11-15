@@ -2,7 +2,8 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
-import { DRAW_KINDS } from './tools/draw.ts';
+import { DRAW_KEYS, DRAW_KINDS } from './tools/draw.ts';
+import { closeShortcuts, toggleShortcuts } from './ui/shortcuts.ts';
 import { CORNER_MODES, VIA_PRESETS, WIDTH_PRESETS, type RouteMode } from './tools/route.ts';
 import { isTrackpadScroll, SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
@@ -692,6 +693,13 @@ drawBtn.addEventListener('click', (ev) => {
   for (const d of DRAW_KINDS) {
     const b = document.createElement('button');
     b.textContent = d.label;
+    const key = DRAW_KEYS[d.kind];
+    if (key) {
+      const kb = document.createElement('span');
+      kb.textContent = /Mac/.test(navigator.platform) ? key.replace('Ctrl+', '⌘').replace('Shift+', '⇧') : key;
+      Object.assign(kb.style, { float: 'right', opacity: '0.55', marginLeft: '14px', fontFamily: 'var(--mono)' });
+      b.append(kb);
+    }
     b.title = d.hint;
     Object.assign(b.style, { textAlign: 'left', border: 'none', background: app.mode === 'draw' && app.drawing.kind === d.kind ? 'var(--panel-2)' : 'transparent' });
     b.addEventListener('click', () => (closeDraw(), app.drawing.start(d.kind)));
@@ -852,6 +860,8 @@ const typingIn = (t: EventTarget | null) => !!(t as HTMLElement | null)?.closest
 window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' || app.space !== 'layout' || typingIn(e.target)) return;
   e.preventDefault();
+  // Shift+Space while drawing: constrain to 45° (KiCad), not a pan.
+  if (e.shiftKey && app.mode === 'draw') return void (!e.repeat && app.drawing.toggleConstrain());
   if (!spaceDown) {
     spaceDown = true;
     if (!drag) app.glCanvas.style.cursor = 'grab';
@@ -1022,6 +1032,9 @@ window.addEventListener('keydown', (e) => {
     return save();
   }
   if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  // The shortcut list (KiCad's List Hotkeys is Ctrl+F1).
+  if ((e.key === '?' && !mod) || (mod && e.key === 'F1')) return void (e.preventDefault(), toggleShortcuts());
+  if (e.key === 'Escape' && closeShortcuts()) return void e.preventDefault();
   if (mod && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     return e.shiftKey ? app.redo() : app.undo();
@@ -1032,6 +1045,14 @@ window.addEventListener('keydown', (e) => {
   }
   if (mod && app.space === 'layout') {
     const k = e.key.toLowerCase();
+    // Tools as KiCad (Ctrl+Shift+…); the pour takes F because Ctrl+Shift+Z is Redo here.
+    if (e.shiftKey) {
+      const tool = ({ f: 'pour', k: 'keepout', p: 'outline-poly', l: 'line' } as const)[k as 'f' | 'k' | 'p' | 'l'];
+      if (tool) return void (e.preventDefault(), app.drawing.start(tool));
+      if (k === 'm') return void (e.preventDefault(), app.measure.start());
+    }
+    // Ctrl+/ steps the corner mode while routing (KiCad); with Shift backwards.
+    if ((e.key === '/' || e.key === '?') && app.mode === 'route') return void (e.preventDefault(), app.route.cycleCorner(e.shiftKey));
     if (k === 'c') return void (e.preventDefault(), app.copyBoard());
     if (k === 'v') return void (e.preventDefault(), app.pasteBoard());
     if (k === 'd') return void (e.preventDefault(), app.duplicateBoard());
@@ -1049,6 +1070,8 @@ window.addEventListener('keydown', (e) => {
     app.say(app.commentMode ? 'Click where the comment should go.' : '');
     return e.preventDefault();
   }
+  // Drawing: 0–7 pick the bend style (EAGLE SET WIRE_BEND n), before 3 (3D view) and 0 (fit).
+  if (app.space === 'layout' && app.mode === 'draw' && /^[0-7]$/.test(e.key)) return void (e.preventDefault(), app.drawing.setBend(Number(e.key)));
   if (e.key === '3') return void toggle3d();
   if (e.key === 'p' || e.key === 'P') return openLibrary();
   if (app.space === 'schematic') {
@@ -1128,6 +1151,31 @@ window.addEventListener('keydown', (e) => {
   }
   if (app.mode === 'draw' && app.drawing.key(e)) return e.preventDefault();
   switch (e.key) {
+    case "'":
+      if (app.mode === 'route') app.route.stepVia(1, false);
+      break;
+    case '\\':
+      if (app.mode === 'route') app.route.stepVia(-1, false);
+      break;
+    case 'PageUp':
+    case 'PageDown':
+    case '+': {
+      const want = e.key === 'PageUp' ? app.copper[0] : e.key === 'PageDown' ? app.copper[app.copper.length - 1] : app.copper[(app.copper.indexOf(app.activeLayer) + 1) % app.copper.length];
+      if (want && want !== app.activeLayer) {
+        app.activeLayer = want;
+        app.route.layerChanged();
+        app.emit('mode');
+        app.requestRender();
+      }
+      break;
+    }
+    case '`':
+      app.highlightNetAtCursor();
+      break;
+    case 't':
+    case 'T':
+      app.drawing.start('text');
+      break;
     case 'Tab':
       app.setSpace('schematic');
       break;

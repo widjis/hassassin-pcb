@@ -268,14 +268,16 @@ export class RouteTool {
     this.rebuildPreview();
   }
 
-  stepVia(): void {
-    if (!this.active) return this.app.say('Start routing first, then Shift+V changes the via size.');
+  /** Next (or with -1 previous) via size: Shift+V, or ' and \\ as KiCad. */
+  stepVia(dir: 1 | -1 = 1, wrap = true): void {
+    if (!this.active) return this.app.say("Start routing first, then Shift+V (or ' and \\) changes the via size.");
     const r = this.rules();
-    const list = [{ d: r.viaDiameter, h: r.viaHole }, ...VIA_PRESETS.filter((v) => v.d !== r.viaDiameter)];
+    // Smallest to largest, so ' is bigger and \\ smaller (KiCad); Shift+V wraps round.
+    const list = [{ d: r.viaDiameter, h: r.viaHole }, ...VIA_PRESETS.filter((v) => v.d !== r.viaDiameter)].sort((a, b) => a.d - b.d);
     const cur = this.viaSize();
     const i = list.findIndex((v) => v.d === cur.d && v.h === cur.h);
-    const next = list[(i + 1) % list.length]!;
-    this.via0 = i + 1 >= list.length || (next.d === r.viaDiameter && next.h === r.viaHole) ? null : next;
+    const next = list[wrap ? (i + dir + list.length) % list.length : Math.max(0, Math.min(list.length - 1, i + dir))]!;
+    this.via0 = next.d === r.viaDiameter && next.h === r.viaHole ? null : next;
     this.app.say(`Via ${next.d.toFixed(2)}/${next.h.toFixed(2)} mm${this.via0 === null ? ' (the net\'s rule)' : ''}`);
     this.app.emit('mode');
   }

@@ -308,6 +308,13 @@ document before work on a measured item starts.
     After the owner tried it ("where are the route options?"): the choices are also visible as option bars
     in the layout toolbar while a tool is on — Route: corner buttons, mode, width and via size (kept from
     one route to the next); Draw: bend style and miter — kept in step with the right button and the keys.
+    Shortcuts (owner: "no shortcuts?"), after the KiCad 8 Actions reference: Ctrl+/ (Shift backwards)
+    corner mode, `'` / `\` bigger / smaller via, Ctrl+Shift+K keep-out, Ctrl+Shift+P outline, Ctrl+Shift+L
+    line, Ctrl+Shift+M measure, PgUp / PgDn / + layers, ` highlight the net under the cursor, Shift+Space
+    45° while drawing, Ctrl+F1 or ? the list; and EAGLE's bend numbers 0–7 while drawing. Our own where the
+    KiCad key is taken: Ctrl+Shift+F pour (Ctrl+Shift+Z is Redo), T text (the browser keeps Ctrl+Shift+T),
+    K lock and L layer (as before). The list (`apps/web/src/ui/shortcuts.ts`) shows the source of each key;
+    the Draw menu, the toolbar and the option bars show them in their tooltips.
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

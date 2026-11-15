@@ -21,6 +21,9 @@ import { h } from '../ui/dom.ts';
 
 export type DrawKind = 'outline-rect' | 'outline-poly' | 'pour' | 'keepout' | 'line' | 'text' | 'hole' | 'fiducial';
 
+/** Hotkeys of the draw tools (KiCad's where the browser allows them; see `SHORTCUTS`). */
+export const DRAW_KEYS: Partial<Record<DrawKind, string>> = { 'outline-poly': 'Ctrl+Shift+P', pour: 'Ctrl+Shift+F', keepout: 'Ctrl+Shift+K', line: 'Ctrl+Shift+L', text: 'T' };
+
 export const DRAW_KINDS: { kind: DrawKind; label: string; hint: string }[] = [
   { kind: 'outline-rect', label: 'Board outline (rectangle)', hint: 'Drag from corner to corner; then set the corner radius.' },
   { kind: 'outline-poly', label: 'Board outline (polygon)', hint: 'Click the corners · right button: bend style (Shift back, Ctrl other way) · Backspace undo point · Enter or double-click closes.' },
@@ -96,6 +99,19 @@ export class DrawTool {
     const last = this.pts[this.pts.length - 1]!;
     const prev = this.pts.length > 1 ? this.pts[this.pts.length - 2]! : undefined;
     return bendPath(last, q, this.bend, { ...(prev ? { prevDir: { x: last.x - prev.x, y: last.y - prev.y } } : {}), miter: this.miter });
+  }
+
+  /** Set the bend style directly (0–7 while drawing, EAGLE's `SET WIRE_BEND n`). */
+  setBend(n: number): void {
+    this.bend = Math.max(0, Math.min(7, n));
+    this.app.say(`Bend ${this.bend}: ${BEND_STYLES[this.bend]!.label}`);
+    this.app.emit('mode');
+    this.app.requestRender();
+  }
+
+  /** Shift+Space (KiCad "Constrain to H, V, 45"): 45° bends, or back to straight. */
+  toggleConstrain(): void {
+    this.setBend(this.bend === 2 ? 1 : 2);
   }
 
   /** The right mouse button (EAGLE): the next bend style; Shift the previous; Ctrl the corresponding one. */

@@ -65,18 +65,18 @@
           <div class="layout-tools" id="layoutTools">
             <div class="seg tools" id="tools">
               <button data-mode="select" class="on" title="Select and move (Esc)">Select</button>
-              <button data-mode="route" title="Route traces (X)">Route</button>
-              <button data-mode="measure" title="Measure distances; select two objects to see their clearance (Q)">Measure</button>
+              <button data-mode="route" title="Route traces (X); while routing the right button or Ctrl+/ steps the corner mode">Route</button>
+              <button data-mode="measure" title="Measure distances; select two objects to see their clearance (Q, Ctrl+Shift+M)">Measure</button>
             </div>
             <button id="drawBtn" title="Draw the board outline, pours, keep-out areas, silkscreen, mounting holes and fiducials">Draw ▾</button>
             <div class="mode-bar" id="routeBar" hidden>
-              <div class="seg" id="cornerSeg" title="Corner style of new traces (right mouse button steps through them)"></div>
+              <div class="seg" id="cornerSeg" title="Corner style of new traces (right mouse button or Ctrl+/ steps through them)"></div>
               <select id="routeModeSel" title="Walkaround: go round other copper · Shove: push other traces aside · Free: no checks (M)"></select>
               <select id="routeWidthSel" title="Trace width (W / Shift+W); the net's rule unless chosen here"></select>
-              <select id="routeViaSel" title="Via size (Shift+V); the net's rule unless chosen here"></select>
+              <select id="routeViaSel" title="Via size (' bigger, \\ smaller, Shift+V next); the net's rule unless chosen here"></select>
             </div>
             <div class="mode-bar" id="drawBar" hidden>
-              <select id="bendSel" title="Bend style (EAGLE wire bend); the right mouse button steps through them"></select>
+              <select id="bendSel" title="Bend style (EAGLE wire bend): keys 0–7, the right mouse button steps through them, Shift+Space 45°"></select>
               <label class="dim" title="Miter radius at the bend's corner: positive rounds, negative cuts straight (90° bends), 0 sharp">Miter <input id="miterInp" type="number" step="0.1" style="width:56px"> mm</label>
             </div>
             <button id="layerBtn" title="Active copper layer (L)">F.Cu</button>

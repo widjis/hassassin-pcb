@@ -1047,6 +1047,16 @@ export class App {
     this.emit('inspect');
   }
 
+  /** ` (KiCad's Highlight Net): the net of the copper under the cursor; again on the same net clears it. */
+  private highlighted: string | null = null;
+  highlightNetAtCursor(): void {
+    const hit = this.pickRaw(this.cursor, (u) => !!this.netOf(u));
+    const net = hit ? this.netOf(hit.uid) : null;
+    this.highlighted = net && net !== this.highlighted ? net : null;
+    this.highlightNet(this.highlighted);
+    this.say(this.highlighted ? `Net ${this.highlighted} highlighted (\` again clears)` : 'Highlight cleared.');
+  }
+
   highlightNet(net: string | null): void {
     this.netHighlight.clear();
     if (net && this.doc) {
