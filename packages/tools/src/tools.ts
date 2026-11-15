@@ -4,6 +4,13 @@
  * project is live, shared with collaborators).
  */
 import {
+  autoNetColorOps,
+  netColorMap,
+  netColorMode,
+  setClassColorOp,
+  setNetColorModeOp,
+  setNetColorOps,
+  type NetColorMode,
   clearanceBetween,
   alignPartsMoves,
   flipPartOps,
@@ -2054,6 +2061,32 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: 'set_net_color',
+    description: 'Copper coloured by net (P17, as KiCad net colours / Easy-PC net colours): give a net (net) or a signal class (class: power, ground, rf …) a colour "#rrggbb", or null to clear it; mode "net" (copper of coloured nets in their colour), "ratsnest" (only the unrouted connections) or "layer" (layer colours); auto: true gives every net without a colour one from a palette. Several can be given at once.',
+    mutates: true,
+    input: { type: 'object', properties: { net: { type: 'string' }, class: { type: 'string' }, color: { type: 'string', description: '#rrggbb, or "none" to clear' }, mode: { type: 'string', enum: ['net', 'ratsnest', 'layer'] }, auto: { type: 'boolean' } } },
+    run: (p, a) => {
+      const ops: Op[] = [];
+      const color = typeof a.color === 'string' ? (a.color === 'none' ? null : a.color) : undefined;
+      try {
+        if (typeof a.net === 'string') ops.push(...setNetColorOps(p.doc, a.net, color ?? null));
+        if (typeof a.class === 'string') {
+          if (!isSignalClass(a.class)) throw new Error(`class must be one of ${SIGNAL_CLASSES.join(', ')}`);
+          ops.push(setClassColorOp(p.doc, a.class, color ?? null));
+        }
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      if (a.mode !== undefined) {
+        if (!['net', 'ratsnest', 'layer'].includes(String(a.mode))) throw new ToolError('mode: net, ratsnest or layer');
+        ops.push(setNetColorModeOp(a.mode as NetColorMode));
+      }
+      apply(p, 'Net colours', ops);
+      if (a.auto === true) apply(p, 'Colour every net', autoNetColorOps(p.doc));
+      return { mode: netColorMode(p.doc), colours: Object.fromEntries(netColorMap(p.doc)) };
+    },
+  },
+  {
     name: 'measure',
     description: 'Measure on the board (P7): the distance and Δx / Δy between two points (from / to as {x, y} in mm), or the clearance between two objects (a, b: pads like "R1.2", parts, trace or via uids): the edge-to-edge gap, where it is and the clearance they need.',
     mutates: false,
@@ -2199,7 +2232,11 @@ export const TOOLS: ToolDef[] = [
         layers: { type: 'string', description: 'Copper layers, e.g. "F.Cu" or "F.Cu B.Cu" (default all copper layers)' },
         x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' },
         points: { type: 'string', description: 'Outline, e.g. "100 100, 140 100, 140 130, 100 130"' },
-        priority: { type: 'number', description: 'Pour priority (default 0)' },
+        priority: { type: 'number', description: 'Pour priority (default 0); KiCad priority, EAGLE rank' },
+        clearance: { type: 'number', description: 'mm to other copper (EAGLE isolate); default from the rules' },
+        min_width: { type: 'number', description: 'mm: thinner necks are removed' },
+        pad_connection: { type: 'string', enum: ['thermal', 'solid', 'none'], description: 'How pads of the net join the pour' },
+        spoke_width: { type: 'number', description: 'mm, thermal spokes' },
         name: { type: 'string' },
       },
       required: ['net'],
@@ -2213,6 +2250,18 @@ export const TOOLS: ToolDef[] = [
       const prio = optNum(a.priority, 'priority');
       const uid = newUid('pour');
       const rules: RuleDecl[] = [{ name: 'layers', value: layers }, ...(pts ? [{ name: 'points', value: pts }] : []), ...(prio ? [{ name: 'pourPriority', value: prio }] : [])];
+      const cl = optNum(a.clearance, 'clearance');
+      if (cl !== undefined) rules.push({ name: 'keepOut', value: { all: cl, byType: {} } });
+      const mw = optNum(a.min_width, 'min_width');
+      if (mw !== undefined) rules.push({ name: 'traceWidthMin', value: mw });
+      if (a.pad_connection !== undefined) {
+        const pc = str(a.pad_connection, 'pad_connection');
+        const map: Record<string, string> = { thermal: 'spokes', solid: 'solid', none: 'none' };
+        if (!map[pc]) throw new ToolError('pad_connection: thermal, solid or none');
+        rules.push({ name: 'thermalRelief', value: map[pc]! });
+      }
+      const sw = optNum(a.spoke_width, 'spoke_width');
+      if (sw !== undefined) rules.push({ name: 'thermalSpokeWidth', value: sw });
       apply(p, 'Add pour', [{ op: 'add', parent: net.uid, index: net.children.length, tree: { nodes: [{ uid, type: 'fill', name: typeof a.name === 'string' ? a.name : `${netName} pour`, props: {}, rules, parent: net.uid, children: [] }] } }]);
       const { ops } = refillOps(p.doc, p.engine, p.copper);
       apply(p, 'Refill pours', ops);

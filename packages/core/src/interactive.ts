@@ -211,11 +211,13 @@ const round4 = (p: Vec2): Vec2 => ({ x: Math.round(p.x * 1e4) / 1e4, y: Math.rou
  * on the net's own pads (they are not obstacles); the first and last steps may leave a spot that is too
  * close to other copper only if the plain check of that piece passes.
  */
-export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, opts: { diagonalFirst?: boolean; margin?: number; maxCells?: number; budgetMs?: number } = {}): WalkResult {
+export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, opts: { diagonalFirst?: boolean; margin?: number; maxCells?: number; budgetMs?: number; orthogonal?: boolean } = {}): WalkResult {
   const first = opts.diagonalFirst ?? true;
   const t0 = performance.now();
+  // The plain path between two points: 45° (two postures), or square (90°: horizontal first, or vertical).
+  const plain = (a: Vec2, b: Vec2, d: boolean): Vec2[] => (opts.orthogonal ? (d ? [a, { x: b.x, y: a.y }, b] : [a, { x: a.x, y: b.y }, b]) : route45(a, b, d));
   for (const d of [first, !first]) {
-    const p = route45(from, to, d);
+    const p = plain(from, to, d);
     if (pathFree(w, layer, p)) return { path: simplify(p), reached: true };
   }
   // Grid search in a window around both points.
@@ -280,10 +282,12 @@ export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, o
     const p = at(c);
     const dx = Math.abs(p.x - tp.x);
     const dy = Math.abs(p.y - tp.y);
-    return (Math.max(dx, dy) - Math.min(dx, dy) + Math.SQRT2 * Math.min(dx, dy)) / step;
+    return (opts.orthogonal ? dx + dy : Math.max(dx, dy) - Math.min(dx, dy) + Math.SQRT2 * Math.min(dx, dy)) / step;
   };
   const DX = [1, 1, 0, -1, -1, -1, 0, 1];
   const DY = [0, 1, 1, 1, 0, -1, -1, -1];
+  // In 90° mode only the four square directions.
+  const DIRS = opts.orthogonal ? [0, 2, 4, 6] : [0, 1, 2, 3, 4, 5, 6, 7];
   g[s] = 0;
   push(s, hx(s));
   let best = s;
@@ -302,7 +306,7 @@ export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, o
     if (h < bestH) (bestH = h), (best = c);
     const cx = c % nx;
     const cy = Math.floor(c / nx);
-    for (let k = 0; k < 8; k++) {
+    for (const k of DIRS) {
       const x = cx + DX[k]!;
       const y = cy + DY[k]!;
       if (x < 0 || y < 0 || x >= nx || y >= ny) continue;
@@ -312,7 +316,9 @@ export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, o
       // A turn costs a little, so the path keeps few corners; a sharp turn (90° or more) costs more.
       const dc = dirOf[c]!;
       const turn = dc < 0 ? 0 : Math.min((k - dc + 8) % 8, (dc - k + 8) % 8);
-      const cost = g[c]! + (k % 2 ? Math.SQRT2 : 1) + (turn === 0 ? 0 : turn === 1 ? 0.3 : 3);
+      // A square turn is the normal bend in 90° mode, a sharp one elsewhere.
+      const bendCost = turn === 0 ? 0 : opts.orthogonal ? (turn === 2 ? 0.5 : 3) : turn === 1 ? 0.3 : 3;
+      const cost = g[c]! + (k % 2 ? Math.SQRT2 : 1) + bendCost;
       if (cost < g[n]!) {
         g[n] = cost;
         prev[n] = c;
@@ -338,7 +344,7 @@ export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, o
     for (let k = i + 2; k < raw.length && misses < 40; k++) {
       let ok: Vec2[] | undefined;
       for (const d of [first, !first]) {
-        const p = route45(raw[i]!, raw[k]!, d);
+        const p = plain(raw[i]!, raw[k]!, d);
         if (pathFree(w, layer, p)) {
           ok = p;
           break;
@@ -350,7 +356,17 @@ export function walkaround(w: RouteWorld, layer: string, from: Vec2, to: Vec2, o
     out.push(...via.slice(1));
     i = j;
   }
-  const path = simplify(out.map((p, k) => (k === 0 || (found && k === out.length - 1) ? p : round4(p))));
+  const rounded = out.map((p, k) => (k === 0 || (found && k === out.length - 1) ? p : round4(p)));
+  // Rounding may tip a straight or square piece by a hair: keep pieces that were level or plumb exactly so,
+  // working from the start (and, at the end, moving the corner before a fixed end point).
+  for (let k = 1; k < rounded.length; k++) {
+    const a = rounded[k - 1]!;
+    const b = rounded[k]!;
+    const last = k === rounded.length - 1 && found;
+    if (Math.abs(b.x - a.x) < 1e-3 && b.x !== a.x) last ? (rounded[k - 1] = { ...a, x: b.x }) : (rounded[k] = { ...b, x: a.x });
+    else if (Math.abs(b.y - a.y) < 1e-3 && b.y !== a.y) last ? (rounded[k - 1] = { ...a, y: b.y }) : (rounded[k] = { ...b, y: a.y });
+  }
+  const path = simplify(rounded);
   // A last check of each piece: cut the path at the first piece that is not legal.
   for (let k = 0; k + 1 < path.length; k++) {
     if (!segmentFree(w, layer, path[k]!, path[k + 1]!)) return { path: path.slice(0, k + 1), reached: false };

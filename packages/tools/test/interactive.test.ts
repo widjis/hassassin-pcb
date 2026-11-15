@@ -47,6 +47,25 @@ describe('interactive router (P4)', () => {
     expect(fresh).toEqual([]);
   });
 
+  it('90° mode (P6b): the walkaround keeps to square paths, still legal', async () => {
+    const p = await fixtureBus();
+    await runTool(p, 'autoroute', {});
+    const s = longest(p, 'B4');
+    const L = Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y);
+    const m = { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
+    const n = { x: -(s.b.y - s.a.y) / L, y: (s.b.x - s.a.x) / L };
+    const w = routeWorld(p.doc, p.engine, p.copper, 'B3');
+    const from = { x: m.x + n.x * 1.2, y: m.y + n.y * 1.2 };
+    const to = { x: m.x - n.x * 1.2 + 2, y: m.y - n.y * 1.2 };
+    const r = walkaround(w, s.layer, from, to, { orthogonal: true });
+    expect(pathFree(w, s.layer, r.path)).toBe(true);
+    for (let i = 0; i + 1 < r.path.length; i++) {
+      const a = r.path[i]!;
+      const b = r.path[i + 1]!;
+      expect(Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.y - b.y) < 1e-6).toBe(true);
+    }
+  });
+
   it('stops at the last legal point when the cursor is on other copper', async () => {
     const p = await fixtureBus();
     await runTool(p, 'autoroute', {});

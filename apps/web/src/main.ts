@@ -6,7 +6,7 @@ import { DRAW_KINDS } from './tools/draw.ts';
 import { isTrackpadScroll, SchematicView } from './sch/view.ts';
 import { Collab } from './collab.ts';
 import { mountCollabBar, mountComments, mountHistory, openShareDialog } from './ui/collabUi.ts';
-import { BOX_KINDS, LAYOUT_GRIDS, type BoxKind, type DocNode, type Vec2 } from '@hassassin/core';
+import { BEND_STYLES, BOX_KINDS, LAYOUT_GRIDS, type BoxKind, type DocNode, type Vec2 } from '@hassassin/core';
 import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
@@ -696,6 +696,21 @@ drawBtn.addEventListener('click', (ev) => {
     b.addEventListener('click', () => (closeDraw(), app.drawing.start(d.kind)));
     menu.append(b);
   }
+  // Bend style and miter (EAGLE SET WIRE_BEND and MITER); the right mouse button steps through the styles.
+  const sep = document.createElement('div');
+  sep.style.borderTop = '1px solid var(--line)';
+  const bend = document.createElement('select');
+  bend.title = 'Bend style (EAGLE wire bend); the right mouse button steps through them while drawing';
+  for (const b of BEND_STYLES) bend.append(new Option(`Bend ${b.n}: ${b.label}`, String(b.n), false, b.n === app.drawing.bend));
+  bend.addEventListener('change', () => (app.drawing.bend = Number(bend.value)));
+  const miterRow = document.createElement('label');
+  Object.assign(miterRow.style, { display: 'flex', gap: '6px', alignItems: 'center' });
+  const miter = document.createElement('input');
+  Object.assign(miter, { type: 'number', step: '0.1', value: String(app.drawing.miter), title: 'Miter radius at the corner of the 90° and 45° bends: positive rounds, negative cuts straight (90° only), 0 sharp' });
+  miter.style.width = '64px';
+  miter.addEventListener('change', () => (app.drawing.miter = Number(miter.value) || 0));
+  miterRow.append('Miter', miter, 'mm');
+  menu.append(sep, bend, miterRow);
   menu.addEventListener('click', (e) => e.stopPropagation());
   document.body.append(menu);
   drawMenu = menu;
@@ -823,7 +838,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (app.mode === 'draw' && !panning && e.button === 0) {
     kind = 'draw';
     app.drawing.down(app.toWorld(sx, sy));
-  } else if (app.mode === 'select' && !panning && app.drawing.beginVertex(app.toWorld(sx, sy))) {
+  } else if (app.mode === 'select' && !panning && app.drawing.beginVertex(app.toWorld(sx, sy), { shift: e.shiftKey, alt: e.altKey })) {
     kind = 'vertex';
   } else if (app.mode === 'select' && !panning) {
     kind = 'box';
@@ -923,7 +938,10 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  if (app.mode === 'route' && app.route.active) app.route.cancel();
+  // The right mouse button steps through the bend styles while drawing (EAGLE): Shift back, Ctrl the other way.
+  if (app.mode === 'draw') return app.drawing.cycleBend(e.shiftKey, e.ctrlKey || e.metaKey);
+  // Routing: the right button steps through the corner modes (EAGLE's ROUTE changes the wire bend); Esc stops.
+  if (app.mode === 'route') return app.route.cycleCorner(e.shiftKey);
 });
 canvas.addEventListener('dblclick', () => {
   if (app.mode === 'draw') app.drawing.dblclick();
@@ -1114,7 +1132,8 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'Delete':
     case 'Backspace':
-      if (app.mode === 'select') app.deleteSelection();
+      // On a corner handle of a selected outline: that corner goes (EAGLE DELETE); else the selection.
+      if (app.mode === 'select' && !app.drawing.deleteCornerAt(app.cursor)) app.deleteSelection();
       break;
     case 'f':
     case 'F':

@@ -53,3 +53,5 @@ export * from './rubberband.ts';
 export * from './boardClipboard.ts';
 export * from './boardEdit.ts';
 export * from './measure.ts';
+export * from './netColors.ts';
+export * from './drawBend.ts';

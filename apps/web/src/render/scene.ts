@@ -373,3 +373,34 @@ export function highlightTris(doc: Doc, e: StyleEngine, uids: Iterable<string>, 
   for (const u of uids) visit(u);
   return new Float32Array(out);
 }
+
+/**
+ * Copper of coloured nets, per copper layer and colour (P17): key `layer|#rrggbb` → triangles. Traces, vias
+ * and pours under a coloured net, and the pads on it.
+ */
+export function netColorTris(doc: Doc, e: StyleEngine, copper: string[], colors: Map<string, string>): Map<string, number[]> {
+  const out = new Map<string, number[]>();
+  if (!colors.size) return out;
+  const cu = new Set(copper);
+  const emit = (n: DocNode, color: string) => {
+    const sink: Sink = (layer) => {
+      if (!cu.has(layer)) return null;
+      const k = `${layer}|${color}`;
+      let a = out.get(k);
+      if (!a) out.set(k, (a = []));
+      return a;
+    };
+    emitNode(doc, e, n, copper, sink);
+  };
+  for (const n of doc.nodes.values()) {
+    if (n.type === 'pad') {
+      const c = typeof n.props.net === 'string' ? colors.get(n.props.net) : undefined;
+      if (c) emit(n, c);
+    } else if (n.type === 'trace' || n.type === 'via' || n.type === 'fill') {
+      const net = n.parent ? doc.nodes.get(n.parent) : undefined;
+      const c = net?.type === 'net' ? colors.get(net.name) : undefined;
+      if (c) emit(n, c);
+    }
+  }
+  return out;
+}

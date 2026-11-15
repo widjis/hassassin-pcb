@@ -20,6 +20,14 @@ import { type WaivedViolation,
   mapFills,
   movablePoints,
   rotateSelectionOps,
+  netColorMap,
+  netColorMode,
+  autoNetColorOps,
+  setClassColorOp,
+  setNetColorModeOp,
+  setNetColorOps,
+  type NetColorMode,
+  type SignalClass,
   alignPartsMoves,
   flipPartOps,
   lockOps,
@@ -65,7 +73,7 @@ import { buildFab, fabZip } from '@hassassin/fab';
 import { commentsContainer, opsAllowed, type SyncClient, type SyncTarget } from '@hassassin/sync';
 import { cssColor, HIGHLIGHT, layerColor, QUERY_HIGHLIGHT, type RGBA } from './render/colors.ts';
 import { GLRenderer, screenToWorld, worldToScreen, type View } from './render/gl.ts';
-import { HOLES, highlightTris, SceneCache } from './render/scene.ts';
+import { HOLES, highlightTris, netColorTris, SceneCache } from './render/scene.ts';
 import { RouteTool } from './tools/route.ts';
 import { DrawTool } from './tools/draw.ts';
 import { MeasureTool } from './tools/measure.ts';
@@ -393,8 +401,69 @@ export class App {
     const { layers, changed } = this.scene.layers();
     if (!changed && !force) return;
     this.renderer.clearLayers();
+    this.netColorKeys = [];
     for (const [k, v] of layers) this.renderer.setLayer(k, v);
     this.refreshHighlights();
+    this.refreshNetColors(force);
+  }
+
+  // ---------- copper coloured by net (P17) ----------
+  /** Batches of net-coloured copper: key, copper layer and colour. */
+  private netColorKeys: { key: string; layer: string; rgb: [number, number, number] }[] = [];
+  private netColorTimer = 0;
+  /** Net name → colour, for the ratsnest. */
+  netColors = new Map<string, string>();
+
+  setNetColorMode(mode: NetColorMode): void {
+    if (!this.doc) return;
+    this.apply('Net colour mode', [setNetColorModeOp(mode)]);
+    this.refreshNetColors(true);
+  }
+
+  setNetColor(net: string, color: string | null): void {
+    if (!this.doc) return;
+    this.apply(color ? `Colour ${net}` : `Clear colour of ${net}`, setNetColorOps(this.doc, net, color));
+    this.refreshNetColors(true);
+  }
+
+  setClassColor(cls: SignalClass, color: string | null): void {
+    if (!this.doc) return;
+    this.apply(`Colour class ${cls}`, [setClassColorOp(this.doc, cls, color)]);
+    this.refreshNetColors(true);
+  }
+
+  /** "Colour every net": palette colours for the nets with none; the copper shows them (P17). */
+  colourEveryNet(): void {
+    if (!this.doc) return;
+    const ops = autoNetColorOps(this.doc);
+    if (netColorMode(this.doc) !== 'net') ops.push(setNetColorModeOp('net'));
+    if (!ops.length) return this.say('Every net has a colour already.');
+    this.apply('Colour every net', ops);
+    this.refreshNetColors(true);
+  }
+
+  /** Rebuild the net-coloured copper (soon, unless `now`): after edits it waits a moment, so drags stay quick. */
+  refreshNetColors(now = false): void {
+    clearTimeout(this.netColorTimer);
+    if (!now) {
+      this.netColorTimer = window.setTimeout(() => this.refreshNetColors(true), 120);
+      return;
+    }
+    if (!this.doc || !this.engine) return;
+    for (const k of this.netColorKeys) this.renderer.setLayer(k.key, new Float32Array());
+    this.netColorKeys = [];
+    const mode = netColorMode(this.doc);
+    this.netColors = mode === 'layer' ? new Map() : netColorMap(this.doc);
+    if (mode === 'net') {
+      for (const [k, tris] of netColorTris(this.doc, this.engine, this.copper, this.netColors)) {
+        const [layer, color] = k.split('|') as [string, string];
+        const key = `__nc:${k}`;
+        this.renderer.setLayer(key, new Float32Array(tris));
+        const n = parseInt(color.slice(1), 16);
+        this.netColorKeys.push({ key, layer, rgb: [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255] });
+      }
+    }
+    this.requestRender();
   }
 
   private updateRatsnest(): void {
@@ -824,7 +893,7 @@ export class App {
     if (mode !== 'draw') this.drawing.cancel();
     if (mode !== 'measure') this.measure.cancel();
     this.mode = mode;
-    this.say(mode === 'route' ? `Route (${this.route.mode}): click a pad, via or trace to start. M = mode, W = width, V = via, / = corner style, Esc = stop.` : '');
+    this.say(mode === 'route' ? `Route (${this.route.mode}): click a pad, via or trace to start. Right button = corners (45°, 90°, rounded, free), / = posture, M = mode, W = width, V = via, Esc = stop.` : '');
     this.emit('mode');
     this.requestRender();
   }
@@ -1044,9 +1113,12 @@ export class App {
   }
 
   private draw(): void {
-    const order = this.drawOrder()
-      .filter((n) => this.visible.has(n))
-      .map((key) => ({ key, color: layerColor(key) as RGBA }));
+    const order: { key: string; color: RGBA }[] = [];
+    for (const key of this.drawOrder().filter((n) => this.visible.has(n))) {
+      order.push({ key, color: layerColor(key) as RGBA });
+      // Net-coloured copper right above its layer; the layers other than the active one dimmed (P17).
+      for (const k of this.netColorKeys) if (k.layer === key) order.push({ key: k.key, color: [k.rgb[0], k.rgb[1], k.rgb[2], key === this.activeLayer ? 0.92 : 0.45] });
+    }
     order.push(
       { key: '__net', color: [1, 1, 1, 0.22] },
       { key: '__query', color: QUERY_HIGHLIGHT },
@@ -1100,17 +1172,32 @@ export class App {
       ctx.restore();
     }
 
-    // Ratsnest
+    // Ratsnest (in its net's colour when nets are coloured, P17)
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(235, 240, 255, 0.7)';
     ctx.beginPath();
+    const coloured: typeof this.ratsnest.lines = [];
     for (const l of this.ratsnest.lines) {
+      if (this.netColors.has(l.net)) {
+        coloured.push(l);
+        continue;
+      }
       const a = S(l.a);
       const b = S(l.b);
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
     }
     ctx.stroke();
+    for (const l of coloured) {
+      const a = S(l.a);
+      const b = S(l.b);
+      ctx.strokeStyle = this.netColors.get(l.net)!;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
 
     // DRC markers (unrouted connections are already shown by the ratsnest)
     if (this.drc) {

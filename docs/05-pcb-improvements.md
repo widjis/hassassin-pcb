@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
-| Version | 0.5 |
-| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-14 (0.5) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (`v0.3.0`, 2026-11-15); PM3 to do** |
+| Version | 0.6 |
+| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-15 (0.6) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (`v0.3.0`, then P6b and P17 in revision 0.6, 2026-11-15, not released yet); PM3 to do** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |
@@ -258,6 +258,72 @@ document before work on a measured item starts.
     same name). Tests: `measure.test.ts`. In the browser on a copy of the solar board: two clicks near
     U1's pads snap to their centres, 0.400 mm (the 0.4 mm pitch); two selected pads read 0.225 mm,
     0.200 mm needed.
+
+- [x] **P6b. Drawing as in production tools (revision 0.6).** The owner's review of P6: drawing must work
+  like EAGLE. References (manuals only, no source code): EAGLE help for WIRE, POLYGON, SET WIRE_BEND,
+  MITER, SPLIT and DELETE; the KiCad 8 PCB Editor manual, "Working with zones".
+  - *Bend styles* while drawing a pour, keep-out, board outline or silkscreen line, as EAGLE's
+    `SET WIRE_BEND`: 0 horizontal then vertical, 1 horizontal then 45°, 2 straight (any angle), 3 45°
+    then horizontal, 4 vertical then horizontal, 5 arc then horizontal, 6 horizontal then arc, 7
+    freehand arc (tangent to the previous segment). The right mouse button steps to the next style,
+    Shift + right button to the previous one, Ctrl + right button to the corresponding one (0 ↔ 4,
+    1 ↔ 3, 5 ↔ 6); the current style shows next to the cursor.
+  - *Dashed guides:* the segment being drawn and the closing line back to the first point are drawn
+    dashed; placed segments solid; corners marked.
+  - *Miter* as EAGLE's MITER: a radius applied to the corners of the 90° and 45° styles, positive =
+    round (arc), negative = straight (chamfer); set in the drawing toolbar.
+  - Closing as EAGLE and KiCad: a double-click, a click on the first point, or Enter; Backspace takes the
+    last point back; Esc stops.
+  - *Editing an outline afterwards* (pour, keep-out, board outline polygon): square handles on corners
+    drag the corner; round handles on edge midpoints drag the edge (KiCad); Shift + drag on an edge handle
+    inserts a corner there (EAGLE SPLIT); Alt + drag on an edge handle bends that edge into an arc
+    through the pointer; Delete on a corner handle under the pointer removes the corner (EAGLE DELETE;
+    not below three corners).
+  - *Pour properties* in the form when a pour is drawn and in the inspector, with the names of both tools:
+    net, layers, priority (KiCad priority / EAGLE rank), clearance (isolate), minimum width, pad
+    connection (thermal / solid / none) and spoke width.
+  - *Routing too* (owner, 2026-11-15: "for the board outline and for routing as well, with a preview of
+    square, rounded or polygon"): the route tool gets corner modes after KiCad's interactive router
+    (45°, 90°, 45° rounded, 90° rounded) plus free angle; the right mouse button steps through them as
+    EAGLE's ROUTE does with the wire bend (Esc stops a route); `/` flips the posture; the preview shows
+    the shape, and the walkaround keeps to the mode (only square paths in 90° mode). Rounded corners are
+    arc traces of the net's width.
+  - Each finished shape and each edit is one undo step; the agents' tools take the same shapes.
+  - *Done (2026-11-15):* core module `drawBend.ts`: `bendPath` (styles 0–7 and the miter), `roundCorners`
+    and `piecePoints`; `walkaround` takes `orthogonal` (four directions, square pulls). Draw tool: bend
+    styles on the right button (Shift back, Ctrl the corresponding one) and in the Draw menu with the miter
+    radius; placed pieces solid, the bend being drawn dashed, the closing line dashed and dim, the style
+    next to the cursor; Backspace takes the last click back with its bend; silkscreen lines drawn the same
+    way (one undo step per click). Editing: corner handles (square), edge handles (round) that move the edge,
+    Shift + drag inserts a corner, Alt + drag bends the edge into an arc, Delete on a corner removes it (not
+    below three); pours refilled in the same undo step. The pour form and `add_pour` take priority,
+    clearance, minimum width, pad connection and spoke width. Route tool: corner modes 45°, 90°, 45°
+    rounded, 90° rounded, free angle on the right button (pairs keep sharp corners); rounded corners
+    become arc traces with a radius of four trace widths (at least 0.5 mm, less on short legs), an arc that
+    would break clearance stays sharp. Tests: `drawBend.test.ts` (each style's shape, miter round and
+    straight, rounded corners the short way round, shrinking on short legs, refusal), a square walkaround
+    in `interactive.test.ts`. In the browser on a copy of the solar board: a pour drawn with bend 0 and a
+    1 mm miter then bend 3, the form, the handles; U3-PA5 routed with 90° rounded corners: 5 traces, 2 of
+    them arcs, connected, 0 DRC errors. Reviewed by the owner with screenshots before the commit.
+- [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
+  net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
+  "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner
+  named).
+  - A colour per net and per signal class (P16 classes); a net's own colour wins over its class.
+  - Display mode: *layer colours* (as now), *net colours* (tracks, vias, pads and pours of a coloured net
+    in its colour, the other layers dimmed so the sides stay apart), *ratsnest only*.
+  - "Colour every net": a palette of easily told apart colours for every net without one (ground and
+    power keep their class colour).
+  - Saved in the project; a tool `set_net_color` for agents; a Nets list in the Layers panel to set them.
+  - *Done (2026-11-15):* core module `netColors.ts` (a net's `color` property, class colours in the meta
+    `netClassColors` with ground `#8c96a3` and power `#ff7043` by default, mode in the meta
+    `netColorMode`, default "ratsnest" as KiCad; a 16-colour palette without the shades that vanish on a
+    dark board). The editor draws each coloured net's copper right above its layer in its colour (the
+    active layer at 92 %, the others at 45 %) and its ratsnest lines in its colour; rebuilt shortly after
+    edits so drags stay quick. Layers panel: Net colours (mode, "Colour every net", class colours, one
+    colour picker per net). Tool `set_net_color` (net, class, colour or "none", mode, auto). Tests:
+    `netColors.test.ts`. In the browser on a copy of the solar board: 43 nets coloured, power orange,
+    ground grey, B.Cu dimmed. Reviewed by the owner with a screenshot before the commit.
 
 **PM1 done when:** every item above is checked.
 
@@ -1284,6 +1350,7 @@ that completes it, and adds the commit id after the item name.
 | 0.3 | 2026-11-12 | PM2 detailed after a study of the v0.0.3 code: P8 split into P8a–P8g (harness, per-net clearance, per-net routing, negotiated congestion, smoothing, cost tuning, verification and Web Worker); P9 and P10 limited to the core and the autorouter, their hand-routing parts moved to P4; dependencies on P5 / P6 resolved; RGB lamp baseline recorded; study notes added; working rule 4 for parallel work with the schematic agreement. Owner's findings added: soft corners only (no 90° or acute corners, 45° or arc, human-like pad entry and bundles) in P8e / P8f; new item P16, signal classes from pin metadata driving the layout rules. Owner's revision: perpendicular routing (top horizontal, bottom vertical) with `routeDirection`, fanout first and reference-plane cost in P8f; P10 rewritten with differential-pair rules (impedance width / gap, coupled routing, symmetric vias and breakout, skew as delay per layer, tuning rules, 3W spacing, interface presets); tabbed routing and field solvers out of scope. | Owner (widjis), in chat: "Setuju, commit" |
 | 0.4 | 2026-11-12 | P8e: the corner style becomes a choice, rule `cornerStyle` = `45` (default) / `arc` / `90`, with acute corners never made in any style; acceptance per style. | Owner (widjis), in chat: "harusnya itu optional … pilihan belokan melengkung, 90 degree atau 45 degree", then "ok, lanjut P8e" |
 | 0.5 | 2026-11-14 | P4 (PM1): live preview of the autorouter added, its traces drawn as an overlay while it routes. | Owner (widjis), in chat: "ya, masukkan live preview ke PM1 bareng P4" |
+| 0.6 | 2026-11-15 | PM1 reopened: P6b, drawing as in EAGLE (bend styles, dashed guides, miter, corner and edge editing, pour properties) with production manuals as references; P17, copper coloured by net (KiCad net colours, Pulsonix / Easy-PC "Use Own Colour"). | Owner (widjis), in chat: "Yes, add and start" |
 
 ## Approval
 

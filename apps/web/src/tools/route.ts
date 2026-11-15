@@ -18,6 +18,11 @@
  * keep their angles); it stops at other copper, or shoves it in shove mode.
  */
 import {
+  bendPath,
+  piecePoints,
+  pathFree,
+  roundCorners,
+  type PathPiece,
   dist,
   netPads,
   netRouteRules,
@@ -50,6 +55,15 @@ interface Target {
 }
 
 export type RouteMode = 'walkaround' | 'shove' | 'free';
+/** Corner modes (P6b), after KiCad's interactive router: 45°, 90°, either rounded, or free angle. */
+export type CornerMode = '45' | '90' | '45r' | '90r' | 'any';
+export const CORNER_MODES: { mode: CornerMode; label: string }[] = [
+  { mode: '45', label: '45°' },
+  { mode: '90', label: '90°' },
+  { mode: '45r', label: '45° rounded' },
+  { mode: '90r', label: '90° rounded' },
+  { mode: 'any', label: 'free angle' },
+];
 /** Time the walkaround search may take under the mouse (ms). */
 const HOVER_MS = 40;
 const MODES: RouteMode[] = ['walkaround', 'shove', 'free'];
@@ -73,6 +87,8 @@ interface PairState {
 export class RouteTool {
   net: string | null = null;
   mode: RouteMode = 'walkaround';
+  /** Corner mode (P6b); the right mouse button steps through them while routing. */
+  corner: CornerMode = '45';
   private netUid: string | null = null;
   private last: Vec2 | null = null;
   private startUid: string | null = null;
@@ -138,7 +154,7 @@ export class RouteTool {
   status(): string {
     if (!this.net) return `Route · ${this.mode}`;
     const { d, h } = this.viaSize();
-    return `${this.net}${this.pair ? ` + ${this.pair.partner}` : ''} · ${this.app.activeLayer} · ${this.mode} · width ${this.width().toFixed(2)} mm · via ${d.toFixed(2)}/${h.toFixed(2)}`;
+    return `${this.net}${this.pair ? ` + ${this.pair.partner}` : ''} · ${this.app.activeLayer} · ${this.mode} · ${CORNER_MODES.find((c) => c.mode === this.corner)!.label} corners · width ${this.width().toFixed(2)} mm · via ${d.toFixed(2)}/${h.toFixed(2)}`;
   }
 
   cancel(): void {
@@ -166,6 +182,40 @@ export class RouteTool {
   togglePosture(): void {
     this.diagonalFirst = !this.diagonalFirst;
     this.rebuildPreview();
+  }
+
+  /** The right mouse button (EAGLE's ROUTE changes the wire bend): the next corner mode; Shift the previous. */
+  cycleCorner(back = false): void {
+    const i = CORNER_MODES.findIndex((c) => c.mode === this.corner);
+    this.corner = CORNER_MODES[(i + (back ? CORNER_MODES.length - 1 : 1)) % CORNER_MODES.length]!.mode;
+    this.app.say(`Corners: ${CORNER_MODES.find((c) => c.mode === this.corner)!.label}${this.pair && this.corner !== '45' && this.corner !== '90' ? ' (a pair keeps sharp corners)' : ''}`);
+    this.app.emit('mode');
+    this.rebuildPreview();
+  }
+
+  private get square(): boolean {
+    return this.corner === '90' || this.corner === '90r';
+  }
+
+  /** The plain path between two points in the corner mode (posture by `/`). */
+  private plainPath(a: Vec2, b: Vec2): Vec2[] {
+    if (this.corner === 'any') return [a, b];
+    if (this.square) return bendPath(a, b, this.diagonalFirst ? 0 : 4);
+    return route45(a, b, this.diagonalFirst);
+  }
+
+  /** Radius of rounded corners: four trace widths (at least 0.5 mm), less where the segments are short. */
+  private cornerRadius(): number {
+    return Math.max(0.5, 4 * this.width());
+  }
+
+  /** A corner path as trace pieces: rounded in the rounded modes (an arc that would break clearance stays sharp). */
+  private piecesOf(path: Vec2[], check: boolean): PathPiece[] {
+    const rounded = (this.corner === '45r' || this.corner === '90r') && !this.pair;
+    if (!rounded) return path.slice(1).map((b, i) => ({ a: path[i]!, b }));
+    const w = check ? this.world() : null;
+    const layer = this.app.activeLayer;
+    return roundCorners(path, this.cornerRadius(), (arc) => !w || pathFree(w, layer, arc));
   }
 
   cycleMode(): void {
@@ -296,19 +346,21 @@ export class RouteTool {
     } else if (this.pair) {
       this.pairPreview(layer);
     } else if (freeAngle || this.mode === 'free') {
-      this.preview = freeAngle ? [this.last, this.target.p] : route45(this.last, this.target.p, this.diagonalFirst);
+      this.preview = freeAngle ? [this.last, this.target.p] : this.plainPath(this.last, this.target.p);
       const w = this.world();
       for (let i = 0; i + 1 < this.preview.length && !this.blocked; i++) {
         const hit = segmentHit(w, layer, this.preview[i]!, this.preview[i + 1]!);
         if (hit) this.blocked = this.preview[i + 1]!;
       }
+    } else if (this.corner === 'any' && pathFree(this.world(), layer, [this.last, this.target.p])) {
+      this.preview = [this.last, this.target.p];
     } else {
-      const r = walkaround(this.world(), layer, this.last, this.target.p, { diagonalFirst: this.diagonalFirst, budgetMs: HOVER_MS });
+      const r = walkaround(this.world(), layer, this.last, this.target.p, { diagonalFirst: this.diagonalFirst, budgetMs: HOVER_MS, orthogonal: this.square });
       this.preview = r.path;
       if (!r.reached) this.blocked = this.target.p;
     }
     const tris: number[] = [];
-    if (this.preview.length > 1) polyline(tris, this.preview, this.width(), false);
+    if (this.preview.length > 1) polyline(tris, piecePoints(this.piecesOf(this.preview, this.mode !== 'free')), this.width(), false);
     if (this.partnerPreview.length > 1) polyline(tris, this.partnerPreview, this.width(), false);
     app.renderer.setLayer('__preview', new Float32Array(tris));
     if (this.mode === 'shove') this.scheduleShovePreview();
@@ -402,17 +454,19 @@ export class RouteTool {
 
   private newTraces(): { layer: string; a: Vec2; b: Vec2; width: number }[] {
     const out: { layer: string; a: Vec2; b: Vec2; width: number }[] = [];
-    for (const path of [this.preview, this.partnerPreview])
+    for (const path of [piecePoints(this.piecesOf(this.preview, false)), this.partnerPreview])
       for (let i = 0; i + 1 < path.length; i++) if (dist(path[i]!, path[i + 1]!) > 1e-6) out.push({ layer: this.app.activeLayer, a: path[i]!, b: path[i + 1]!, width: this.width() });
     return out;
   }
 
-  private traceOps(netUid: string, path: Vec2[], start: number): Op[] {
+  /** Trace operations for a corner path (rounded corners become arc traces with a `mid`). */
+  private traceOps(netUid: string, path: Vec2[], start: number, round = true): Op[] {
     const ops: Op[] = [];
     let index = start;
-    for (let i = 0; i + 1 < path.length; i++) {
-      const a = path[i]!;
-      const b = path[i + 1]!;
+    const pieces = round ? this.piecesOf(path, this.mode !== 'free') : path.slice(1).map((b, i) => ({ a: path[i]!, b }) as PathPiece);
+    for (const pc of pieces) {
+      const a = pc.a;
+      const b = pc.b;
       if (dist(a, b) < 1e-6) continue;
       ops.push({
         op: 'add',
@@ -425,7 +479,7 @@ export class RouteTool {
               type: 'trace',
               name: '',
               props: {},
-              rules: [{ name: 'start', value: a }, { name: 'end', value: b }, { name: 'layer', value: this.app.activeLayer }, ...(this.width0 !== null ? [{ name: 'traceWidth', value: this.width0 }] : [])],
+              rules: [{ name: 'start', value: a }, { name: 'end', value: b }, ...(pc.mid ? [{ name: 'mid', value: pc.mid }] : []), { name: 'layer', value: this.app.activeLayer }, ...(this.width0 !== null ? [{ name: 'traceWidth', value: this.width0 }] : [])],
               parent: netUid,
               children: [],
             },
@@ -471,7 +525,7 @@ export class RouteTool {
     const ops = this.traceOps(this.netUid, segs, netNode.children.length);
     if (this.pair) {
       const pn = app.netNode(this.pair.partner);
-      if (pn && this.partnerPreview.length > 1) ops.push(...this.traceOps(pn.uid, this.partnerPreview, pn.children.length));
+      if (pn && this.partnerPreview.length > 1) ops.push(...this.traceOps(pn.uid, this.partnerPreview, pn.children.length, false));
     }
     if (!ops.length) return false;
     let laid = segs;
@@ -647,7 +701,8 @@ export class RouteTool {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillStyle = 'rgba(230, 235, 245, 0.85)';
-    ctx.fillText(this.active ? `${this.mode} · ${this.width().toFixed(2)} mm` : this.mode, s.x + 12, s.y + 10);
+    const cl = CORNER_MODES.find((c) => c.mode === this.corner)!.label;
+    ctx.fillText(this.active ? `${this.mode} · ${cl} · ${this.width().toFixed(2)} mm` : `${this.mode} · ${cl}`, s.x + 12, s.y + 10);
   }
 }
 
