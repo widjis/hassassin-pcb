@@ -1228,6 +1228,8 @@ window.addEventListener('keydown', (e) => {
       break;
     case 'Delete':
     case 'Backspace':
+      // While routing, Backspace takes the last placed step back (KiCad).
+      if (e.key === 'Backspace' && app.mode === 'route' && app.route.backstep()) break;
       // On a corner handle of a selected outline: that corner goes (EAGLE DELETE); else the selection.
       if (app.mode === 'select' && !app.drawing.deleteCornerAt(app.cursor)) app.deleteSelection();
       break;

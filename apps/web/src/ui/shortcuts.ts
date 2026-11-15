@@ -34,7 +34,8 @@ export const SHORTCUTS: { group: string; items: Shortcut[] }[] = [
     items: [
       { keys: 'Right button · Ctrl+/', what: 'Next corner mode: 45°, 90°, 45° rounded, 90° rounded, free', as: 'KiCad', note: 'right button as EAGLE' },
       { keys: 'Shift + right button · Ctrl+Shift+/', what: 'Previous corner mode' },
-      { keys: '/', what: 'Flip the posture', as: 'KiCad' },
+      { keys: '/', what: 'Flip the posture: which leg comes first (e.g. the bend goes up or down)', as: 'KiCad' },
+      { keys: 'Backspace', what: 'Take the last placed segment or via back, go on from before it', as: 'KiCad' },
       { keys: 'Shift (held)', what: 'Free angle for this segment' },
       { keys: 'M', what: 'Walkaround → shove → free', as: 'own' },
       { keys: 'W · Shift+W', what: 'Next / previous track width', as: 'KiCad' },

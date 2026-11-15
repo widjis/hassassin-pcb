@@ -315,6 +315,8 @@ document before work on a measured item starts.
     KiCad key is taken: Ctrl+Shift+F pour (Ctrl+Shift+Z is Redo), T text (the browser keeps Ctrl+Shift+T),
     K lock and L layer (as before). The list (`apps/web/src/ui/shortcuts.ts`) shows the source of each key;
     the Draw menu, the toolbar and the option bars show them in their tooltips.
+    Backspace while routing takes the last placed segment(s) or via back and routing goes on from before it
+    (KiCad); `/` says which way the posture now bends.
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

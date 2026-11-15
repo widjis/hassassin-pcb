@@ -179,7 +179,30 @@ export class RouteTool {
 
   togglePosture(): void {
     this.diagonalFirst = !this.diagonalFirst;
+    this.app.say(`Posture flipped: ${this.square ? (this.diagonalFirst ? 'across first, then up / down' : 'up / down first, then across') : this.diagonalFirst ? '45° first, then straight' : 'straight first, then 45°'}`);
     this.rebuildPreview();
+  }
+
+  /** What each placed step of this route was, so Backspace can take it back (KiCad). */
+  private steps: { label: string; last: Vec2; partnerLast?: Vec2; layer: string }[] = [];
+
+  /** Backspace while routing: take the last placed segment(s) or via back and go on from before it. */
+  backstep(): boolean {
+    const app = this.app;
+    const st = this.steps[this.steps.length - 1];
+    if (!this.active || !st) return false;
+    if (app.history?.undoLabel !== st.label) return (app.say('The last change is not this route’s; use Undo.'), true);
+    this.steps.pop();
+    app.history.undo();
+    this.last = st.last;
+    if (this.pair && st.partnerLast) this.pair.last = st.partnerLast;
+    if (app.activeLayer !== st.layer) {
+      app.activeLayer = st.layer;
+      app.emit('mode');
+    }
+    app.say('Took the last step back.');
+    this.rebuildPreview();
+    return true;
   }
 
   /** The right mouse button (EAGLE's ROUTE changes the wire bend): the next corner mode; Shift the previous. */
@@ -318,6 +341,7 @@ export class RouteTool {
     this.net = net;
     this.netUid = nn.uid;
     this.last = start;
+    this.steps = [];
     this.startUid = hit.uid;
     // A pair: start the partner from its pad nearest to this start.
     this.pair = null;
@@ -580,7 +604,9 @@ export class RouteTool {
         app.say(`Could not shove (${r.error}); walked around instead.`);
       }
     }
-    if (!app.apply(this.pair ? 'Route pair' : 'Route', ops)) return false;
+    const before = { label: this.pair ? 'Route pair' : 'Route', last: this.last!, ...(this.pair ? { partnerLast: this.pair.last } : {}), layer: app.activeLayer };
+    if (!app.apply(before.label, ops)) return false;
+    this.steps.push(before);
     const reached = !this.blocked;
     const endAt = laid[laid.length - 1]!;
     this.last = endAt;
@@ -627,7 +653,9 @@ export class RouteTool {
       if (r.error) return app.say(`Cannot shove for the via: ${r.error}.`);
       ops.push(...r.ops);
     }
+    const before = { label: 'Add via', last: this.last, ...(this.pair ? { partnerLast: this.pair.last } : {}), layer: app.activeLayer };
     if (!app.apply('Add via', ops)) return;
+    this.steps.push(before);
     app.activeLayer = app.activeLayer === top ? bottom : top;
     app.emit('mode');
     app.say(`Via ${d.toFixed(2)}/${h.toFixed(2)} mm placed · now on ${app.activeLayer}`);
