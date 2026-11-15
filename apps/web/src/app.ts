@@ -20,6 +20,8 @@ import { type WaivedViolation,
   mapFills,
   movablePoints,
   rotateSelectionOps,
+  unrouteOps,
+  type UnrouteScope,
   netColorMap,
   netColorMode,
   autoNetColorOps,
@@ -784,6 +786,72 @@ export class App {
     if (!this.apply('Rotate', ops, key)) return;
     if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
     this.history?.seal();
+  }
+
+  // ---------- unrouting (EAGLE RIPUP, KiCad Unroute Selected) ----------
+  /** The next box in select mode unroutes what it touches instead of selecting. */
+  unrouteBoxPending = false;
+
+  /** Take traces and vias off; pours refilled in the same undo step. */
+  unroute(scope: UnrouteScope, what: string): void {
+    if (!this.doc || !this.engine) return;
+    const r = unrouteOps(this.doc, this.engine, this.copper, scope);
+    if (!r.ops.length) return this.say(r.locked ? `Nothing to unroute: ${r.locked} locked item(s) stay.` : `Nothing routed in ${what}.`);
+    const key = newUid('unroute');
+    if (!this.apply(`Unroute ${what}`, r.ops, key)) return;
+    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    this.history?.seal();
+    this.select([...this.selection].filter((u) => this.doc!.nodes.has(u)));
+    const nets = r.nets.length > 3 ? `${r.nets.length} nets` : r.nets.join(', ');
+    this.say(`Unrouted ${what}: ${r.traces} trace(s), ${r.vias} via(s) on ${nets}${r.locked ? `; ${r.locked} locked kept` : ''}. Cmd/Ctrl+Z brings it back.`);
+  }
+
+  /** U: the selected traces and vias, and the copper attached to the selected parts' pads. */
+  unrouteSelection(): void {
+    if (!this.selection.size) return this.say('Select traces, vias or parts to unroute (U), or use Unroute ▾.');
+    this.unroute({ kind: 'items', uids: [...this.selection] }, 'the selection');
+  }
+
+  /** The nets of the selection: of selected traces, vias, pads, pours, and of the pads of selected parts. */
+  selectionNets(): string[] {
+    const nets = new Set<string>();
+    for (const u of this.selection) {
+      const n = this.node(u);
+      if (n?.type === 'element') for (const c of n.children) {
+        const net = this.netOf(c);
+        if (net && !net.startsWith('unconnected-')) nets.add(net);
+      }
+      else {
+        const net = this.netOf(u);
+        if (net) nets.add(net);
+      }
+    }
+    return [...nets];
+  }
+
+  /** Shift+U: every trace and via of the selection's nets (EAGLE RIPUP signal). */
+  unrouteSelectedNets(): void {
+    const nets = this.selectionNets();
+    if (!nets.length) return this.say('Select something on the nets to unroute (Shift+U).');
+    this.unroute({ kind: 'nets', nets }, nets.length === 1 ? nets[0]! : `${nets.length} nets`);
+  }
+
+  unrouteAll(keepPoured: boolean): void {
+    this.unroute({ kind: 'all', keepPoured }, keepPoured ? 'everything but the poured nets' : 'everything');
+  }
+
+  /** Arm the area unroute: the next drag on the board in select mode. */
+  armUnrouteArea(): void {
+    this.setMode('select');
+    this.unrouteBoxPending = true;
+    this.say('Drag a box over the copper to unroute (Esc cancels).');
+  }
+
+  unrouteRect(a: { x: number; y: number }, b: { x: number; y: number }): void {
+    this.unrouteBoxPending = false;
+    const p = this.toWorld(a.x, a.y);
+    const q = this.toWorld(b.x, b.y);
+    this.unroute({ kind: 'area', rect: { minX: Math.min(p.x, q.x), minY: Math.min(p.y, q.y), maxX: Math.max(p.x, q.x), maxY: Math.max(p.y, q.y) } }, 'the area');
   }
 
   /** The selection box being drawn, in screen pixels (P1). */

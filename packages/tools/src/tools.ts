@@ -4,6 +4,8 @@
  * project is live, shared with collaborators).
  */
 import {
+  unrouteOps,
+  type UnrouteScope,
   autoNetColorOps,
   netColorMap,
   netColorMode,
@@ -2058,6 +2060,41 @@ export const TOOLS: ToolDef[] = [
       for (const n of top) byType[n.type] = (byType[n.type] ?? 0) + 1;
       apply(p, `Delete ${top.length} object(s)`, top.map((n) => ({ op: 'remove', uid: n.uid }) as Op));
       return { deleted: top.length, byType, ...(refused.length ? { notDeleted: [...new Set(refused.map((n) => n.type))].map((t) => `${t} (structural or part of a symbol)`) } : {}) };
+    },
+  },
+  {
+    name: 'unroute',
+    description: 'Take routed copper (traces and vias) off the board, as EAGLE RIPUP / KiCad Unroute Selected. Give one of: targets (traces, vias or parts by uid, reference or selector; a part stands for the copper attached to its pads, followed up to other parts\' pads), nets (every trace and via of those nets), area {x, y, width, height} (what touches it), or all: true (with except: nets to keep, keep_poured: true keeps the nets that have a pour, e.g. ground). Locked copper stays. Pours are refilled afterwards.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        targets: { type: 'array', items: { type: 'string' } },
+        nets: { type: 'array', items: { type: 'string' } },
+        area: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' } } },
+        all: { type: 'boolean' },
+        except: { type: 'array', items: { type: 'string' } },
+        keep_poured: { type: 'boolean' },
+      },
+    },
+    run: (p, a) => {
+      let scope: UnrouteScope;
+      if (Array.isArray(a.targets)) scope = { kind: 'items', uids: a.targets.map(String).flatMap((t) => resolveTargets(p, t).map((n) => n.uid)) };
+      else if (Array.isArray(a.nets)) {
+        const known = new Set([...p.doc.nodes.values()].filter((n) => n.type === 'net').map((n) => n.name));
+        const bad = a.nets.map(String).filter((n) => !known.has(n));
+        if (bad.length) throw new ToolError(`No such net: ${bad.join(', ')}`);
+        scope = { kind: 'nets', nets: a.nets.map(String) };
+      } else if (a.area && typeof a.area === 'object') {
+        const r = a.area as Record<string, unknown>;
+        const x = num(r.x, 'area.x'), y = num(r.y, 'area.y'), w = num(r.width, 'area.width'), h = num(r.height, 'area.height');
+        scope = { kind: 'area', rect: { minX: Math.min(x, x + w), minY: Math.min(y, y + h), maxX: Math.max(x, x + w), maxY: Math.max(y, y + h) } };
+      } else if (a.all === true) scope = { kind: 'all', ...(Array.isArray(a.except) ? { except: a.except.map(String) } : {}), keepPoured: a.keep_poured === true };
+      else throw new ToolError('Give targets, nets, area or all: true.');
+      const r = unrouteOps(p.doc, p.engine, p.copper, scope);
+      apply(p, 'Unroute', r.ops);
+      if (r.ops.length && [...p.doc.nodes.values()].some((n) => n.type === 'fill')) apply(p, 'Refill pours', refillOps(p.doc, p.engine, p.copper).ops);
+      return { traces: r.traces, vias: r.vias, nets: r.nets, lockedKept: r.locked, unroutedConnections: computeRatsnest(p.doc, p.engine, p.copper).lines.length };
     },
   },
   {

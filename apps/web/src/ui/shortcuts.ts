@@ -64,6 +64,8 @@ export const SHORTCUTS: { group: string; items: Shortcut[] }[] = [
       { keys: 'R · Shift+R', what: 'Rotate counter-clockwise / clockwise', as: 'KiCad' },
       { keys: 'F', what: 'Flip the selected parts to the other side (nothing selected: flip the view)', as: 'KiCad' },
       { keys: 'K', what: 'Lock / unlock', as: 'own', note: "KiCad's L switches the layer here" },
+      { keys: 'U', what: 'Unroute the selection (traces, vias; copper on selected parts\' pads)', as: 'own', note: 'KiCad Unroute Selected has no default key' },
+      { keys: 'Shift+U', what: 'Unroute the nets of the selection', as: 'own', note: 'as EAGLE RIPUP signal' },
       { keys: 'Delete', what: 'Delete; on a corner handle: delete that corner', as: 'EAGLE', note: 'DELETE on a corner' },
       { keys: 'Shift / Alt + drag an edge handle', what: 'Insert a corner / bend the edge into an arc', as: 'EAGLE', note: 'SPLIT' },
       { keys: 'Ctrl+C · Ctrl+V · Ctrl+D', what: 'Copy · paste (follows the mouse) · duplicate', as: 'KiCad' },

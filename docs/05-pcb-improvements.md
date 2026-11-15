@@ -317,6 +317,14 @@ document before work on a measured item starts.
     the Draw menu, the toolbar and the option bars show them in their tooltips.
     Backspace while routing takes the last placed segment(s) or via back and routing goes on from before it
     (KiCad); `/` says which way the posture now bends.
+    Unrouting (owner: "how do I unroute a selected area, selected nets, all?"), after EAGLE's RIPUP and
+    KiCad's Unroute Selected: core module `unroute.ts` (`unrouteOps` for the selection, nets, an area or
+    all, with nets to keep and "keep the poured nets", i.e. with a pour or a `pourLayers` rule;
+    `copperAttachedToParts` follows a part's copper up to other parts' pads); locked copper stays; pours
+    refilled in the same undo step. Editor: Unroute ▾ (Selection U, Nets of the selection Shift+U, Area… a
+    box that draws even from copper, All but the poured nets, All); tool `unroute`. Tests:
+    `unroute.test.ts`. In the browser on a copy of the solar board: U on J3 took 16 traces, Shift+U its two
+    nets, an area 16 traces, "all but the poured nets" 297 traces and 32 vias with GND kept and 0 DRC errors.
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

@@ -726,6 +726,44 @@ drawBtn.addEventListener('click', (ev) => {
 });
 window.addEventListener('click', closeDraw);
 
+// Unroute (EAGLE RIPUP, KiCad Unroute Selected): a menu under the Unroute button.
+const unrouteBtn = $<HTMLButtonElement>('unrouteBtn');
+let unrouteMenu: HTMLElement | null = null;
+const closeUnroute = () => {
+  unrouteMenu?.remove();
+  unrouteMenu = null;
+};
+unrouteBtn.addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  if (unrouteMenu) return closeUnroute();
+  const r = unrouteBtn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 4}px`, zIndex: '60', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', padding: '6px', fontSize: '12px', display: 'grid', gap: '2px', minWidth: '260px', boxShadow: '0 6px 24px rgba(0,0,0,.4)' });
+  const item = (label: string, key: string, title: string, run: () => void) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.title = title;
+    if (key) {
+      const kb = document.createElement('span');
+      kb.textContent = key;
+      Object.assign(kb.style, { float: 'right', opacity: '0.55', marginLeft: '14px', fontFamily: 'var(--mono)' });
+      b.append(kb);
+    }
+    Object.assign(b.style, { textAlign: 'left', border: 'none', background: 'transparent' });
+    b.addEventListener('click', () => (closeUnroute(), run()));
+    menu.append(b);
+  };
+  item('Selection', 'U', 'The selected traces and vias, and the copper attached to the selected parts (as KiCad Unroute Selected)', () => app.unrouteSelection());
+  item('Nets of the selection', '⇧U', 'Every trace and via of the nets of what is selected (as EAGLE RIPUP signal)', () => app.unrouteSelectedNets());
+  item('Area…', '', 'Then drag a box: the traces and vias it touches', () => app.armUnrouteArea());
+  item('All but the poured nets', '', 'Every trace and via except on nets that have a pour (e.g. ground stitching)', () => app.unrouteAll(true));
+  item('All', '', 'Every trace and via on the board (as EAGLE RIPUP;)', () => app.unrouteAll(false));
+  menu.addEventListener('click', (e) => e.stopPropagation());
+  document.body.append(menu);
+  unrouteMenu = menu;
+});
+window.addEventListener('click', closeUnroute);
+
 // Selection box filter (P1): a small menu under the Pick button.
 const pickBtn = $<HTMLButtonElement>('pickBtn');
 let pickMenu: HTMLElement | null = null;
@@ -896,6 +934,9 @@ canvas.addEventListener('pointerdown', (e) => {
   if (app.mode === 'draw' && !panning && e.button === 0) {
     kind = 'draw';
     app.drawing.down(app.toWorld(sx, sy));
+  } else if (app.mode === 'select' && !panning && app.unrouteBoxPending) {
+    // Unroute area armed: a drag always draws the box, also when it starts on copper.
+    kind = 'box';
   } else if (app.mode === 'select' && !panning && app.drawing.beginVertex(app.toWorld(sx, sy), { shift: e.shiftKey, alt: e.altKey })) {
     kind = 'vertex';
   } else if (app.mode === 'select' && !panning) {
@@ -963,6 +1004,11 @@ canvas.addEventListener('pointerup', (e) => {
   canvas.style.cursor = spaceDown ? 'grab' : '';
   if (drag?.kind === 'box') {
     app.selBox = null;
+    if (drag.moved && app.unrouteBoxPending) {
+      app.unrouteRect({ x: drag.sx, y: drag.sy }, { x: sx, y: sy });
+      drag = null;
+      return app.requestRender();
+    }
     if (drag.moved) {
       app.boxSelect({ x: drag.sx, y: drag.sy }, { x: sx, y: sy }, e.shiftKey);
       drag = null;
@@ -1180,7 +1226,8 @@ window.addEventListener('keydown', (e) => {
       app.setSpace('schematic');
       break;
     case 'Escape':
-      if (app.pasting) app.endPaste(true);
+      if (app.unrouteBoxPending) (app.unrouteBoxPending = false), app.say('Unroute cancelled.');
+      else if (app.pasting) app.endPaste(true);
       else if (app.mode === 'measure') app.setMode('select');
       else if (app.mode === 'route' && app.route.active) app.route.cancel();
       else if (app.mode === 'route') app.setMode('select');
@@ -1241,6 +1288,11 @@ window.addEventListener('keydown', (e) => {
     case 'k':
     case 'K':
       app.toggleLock();
+      break;
+    case 'u':
+    case 'U':
+      if (e.shiftKey) app.unrouteSelectedNets();
+      else app.unrouteSelection();
       break;
     case 'q':
     case 'Q':
