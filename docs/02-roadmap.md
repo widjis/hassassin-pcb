@@ -448,6 +448,50 @@ Known limitations:
 - Hand routing does not shove or route pairs yet; those parts of P9 / P10 moved to PM1 (P4).
 - Next: milestone PM1 (the layout editor by hand), then PM3 (manufacturing).
 
+## PCB layout improvements, milestone PM1 (v0.3.0)
+
+Done under the work agreement [docs/05-pcb-improvements.md](05-pcb-improvements.md) (P1–P7), so the board
+is comfortable to edit by hand, next to the automatic placement and routing of PM2. Each editor action is
+also a tool for agents, and is one undo step.
+
+- **Interactive router (P4):** the preview walks around other nets' copper and clearance, or stops at the
+  last legal point (the rest red); modes walkaround, shove (other traces pushed aside, else walk around)
+  and free (M); width and via size switched while routing (W, Shift+V); a straight segment dragged
+  sideways with its neighbours following; differential pairs routed together with their skew shown; a
+  live preview of the autorouter while it works, and pours refilled after it in the same undo step.
+- **Selection (P1):** box selection (left to right inside, right to left touching) with a filter of kinds
+  and layer side; panning with the middle button, Space + drag or a trackpad; a group moves, turns and
+  deletes in one step.
+- **Rubber-banding (P2):** traces on the pads of moved, turned or flipped parts follow and are laid again at
+  45°; a move onto other copper shows red.
+- **Copy, paste, replication (P3):** Cmd/Ctrl+C / V / D; pasted parts take schematic parts not yet on the
+  board with their nets; the placement and routing of one block applied to the other blocks of the same
+  parts.
+- **Bottom side, locking, grid, align (P5):** parts flipped to the bottom (3D, Gerbers and pick-and-place
+  follow), locked items left alone by every move, a layout grid in mm and mil, align and spread.
+- **Drawing (P6):** board outline (rectangle with rounded corners, or polygon with arcs), copper pours with
+  a priority (pours of two nets never overlap), keep-out areas for traces, vias, pours and parts that the
+  router, placer, pour fill and DRC respect (also from KiCad files), silkscreen lines and text, mounting
+  holes and fiducials; corners of outlines, pours and keep-outs dragged.
+- **Measure (P7):** distance and Δx / Δy with snapping to pad centres and edges and trace centre lines; two
+  selected objects show their clearance.
+
+Benchmarks unchanged: the solar MPPT board 76 / 76 routed with 39 vias, the RGB sleep lamp 72 / 72, both with
+0 DRC errors (now including the keep-out check).
+
+| Routing by hand: the preview walks around other copper and stops at the last legal point | Draw menu; a keep-out area cuts the pour and is hatched | Two selected pads: the clearance between them and what they need |
+|---|---|---|
+| ![The route preview of a net leaving U3 pad 3 on the solar board, walking around the neighbouring pads and stopping, marked with a red cross and a dashed red line, before pad 5 of another net](media/pm1-walkaround.jpg) | ![The layout toolbar's Draw menu open (board outline, copper pour, keep-out area, silkscreen line, text, mounting hole, fiducial) next to a hatched keep-out area cut out of the ground pour](media/pm1-draw-keepout.jpg) | ![Two neighbouring pads of the 0.4 mm pitch VQFN selected, with a line between their edges labelled 0.225 mm (≥ 0.200)](media/pm1-clearance.jpg) |
+
+Known limitations:
+- Flipping an SMD part moves its pads to the other copper layer; traces on the old layer need routing
+  again.
+- A `.hpcb` saved before this release with KiCad keep-outs reports its pours in them until the pours are
+  refilled (B).
+- Bottom-side parts are not placed by the autoplacer (it places on the top).
+- Next: milestone PM3 (manufacturing: more DRC checks, silkscreen in the Gerbers, teardrops, `.kicad_pcb`
+  export).
+
 ## Out of scope (for now)
 
 SPICE simulation, mechanical / enclosure design, firmware, wire harnesses, ordering from fabricators.

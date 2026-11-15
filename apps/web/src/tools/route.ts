@@ -128,9 +128,11 @@ export class RouteTool {
     return w;
   }
 
+  /** The layer's colour lightened, so the preview stands out also over a pour of the same layer. */
   previewColor(): RGBA {
     const c = layerColor(this.app.activeLayer);
-    return [c[0], c[1], c[2], 0.75];
+    const l = (v: number) => v + (1 - v) * 0.55;
+    return [l(c[0]), l(c[1]), l(c[2]), 0.9];
   }
 
   status(): string {
