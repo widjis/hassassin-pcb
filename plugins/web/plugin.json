@@ -1,0 +1,18 @@
+{
+  "id": "web",
+  "name": "Web research",
+  "version": "0.4.0",
+  "publisher": "Hassassin PCB",
+  "description": "Search the web, open pages and PDFs, with every source's trust level (manufacturer, distributor, unverified, mirror).",
+  "permission": "read",
+  "hosts": ["any public web address", "api.search.brave.com (web_search, when set up)"],
+  "command": "server.ts",
+  "backendWebSearch": true,
+  "settings": [
+    { "key": "SEARCH_API_KEY", "label": "Brave Search API key (optional: backends with their own web search do not need it)", "secret": true },
+    { "key": "WEB_MAX_SEARCHES", "label": "Searches per message (default 10)" },
+    { "key": "WEB_MAX_FETCHES", "label": "Pages and documents per message (default 25)" },
+    { "key": "WEB_MAX_MB", "label": "Download per message, MB (default 60)" },
+    { "key": "WEB_MAX_SECONDS", "label": "Research time per message, s (default 600)" }
+  ]
+}

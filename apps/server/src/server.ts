@@ -34,6 +34,7 @@ import { AgentSession, runTool, TOOLS, type AgentEvent, type AgentMode, type Mod
 import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
 import { openLive, runLive, type LiveSession } from '../../cli/src/live.ts';
 import { CLI_LABEL, CliAgentSession, cliStatus, LoginJob, type CliId } from './cliAgents.ts';
+import { fileURLToPath } from 'node:url';
 import { McpClient, PluginHost, pluginNote, pluginToolName, type ActivePlugin } from './plugins.ts';
 import type { ExternalTool } from '@hassassin/tools';
 
@@ -58,6 +59,8 @@ export interface ServerOptions {
   kicadDownload?: { root?: string; fetchImpl?: (url: string, init?: { signal?: AbortSignal }) => Promise<Response> };
   /** Model for the in-app agent (default: Claude through the Anthropic SDK, if credentials exist). */
   agentModel?: ModelCall | null;
+  /** Folder of the plugins bundled with Hassassin (default `plugins/` of the repository; null for none). */
+  builtinPlugins?: string | null;
 }
 
 type Backend = 'api' | CliId;
@@ -109,7 +112,7 @@ export async function startServer(opts: ServerOptions) {
 
   const agentModel: ModelCall | null = opts.agentModel !== undefined ? opts.agentModel : hasAnthropicCredentials() ? anthropicModel() : null;
   const chats = new Map<string, Chat>();
-  const pluginHost = new PluginHost(opts.dataDir);
+  const pluginHost = new PluginHost(opts.dataDir, opts.builtinPlugins !== undefined ? opts.builtinPlugins : fileURLToPath(new URL('../../../plugins', import.meta.url)));
   let boundPort = opts.port;
   const sweep = setInterval(() => {
     for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (closeChat(c), chats.delete(k));
@@ -301,7 +304,12 @@ export async function startServer(opts: ServerOptions) {
         chat.session.pluginNote = note;
         await chat.session.send(prompt, send, abort.signal);
       } else {
-        await chat.session.send(prompt, send, abort.signal, { tools: externalTools(chat, active), note });
+        // Fresh plugin processes for each message, so their limits count per message.
+        for (const c of chat.pluginClients.values()) c.close();
+        chat.pluginClients.clear();
+        const web = active.find((p) => p.manifest.backendWebSearch);
+        const maxUses = web ? Number(web.env.WEB_MAX_SEARCHES) || 10 : 0;
+        await chat.session.send(prompt, send, abort.signal, { tools: externalTools(chat, active), note, ...(web ? { webSearch: { maxUses } } : {}) });
       }
     } catch (e) {
       send({ type: 'error', message: (e as Error).message });

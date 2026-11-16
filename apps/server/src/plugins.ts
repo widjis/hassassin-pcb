@@ -20,7 +20,7 @@
  * specification.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -51,10 +51,16 @@ export interface PluginManifest {
   command: string;
   args?: string[];
   settings?: PluginSetting[];
+  /** Ask the agent's backend to switch on its own web search while this plugin is on (A2). */
+  backendWebSearch?: boolean;
+  /** Folder the command is relative to (set by the host: the plugin's folder, or the data folder). */
+  dir?: string;
+  /** Bundled with Hassassin (`plugins/<id>/plugin.json`); off until a project switches it on. */
+  builtin?: boolean;
 }
 
 /** What clients see of an installed plugin (no setting values). */
-export interface PluginInfo extends Omit<PluginManifest, 'command' | 'args' | 'settings'> {
+export interface PluginInfo extends Omit<PluginManifest, 'command' | 'args' | 'settings' | 'dir'> {
   settings: (PluginSetting & { configured: boolean })[];
   /** Result of the last check: ok with its tools, or why it cannot run. */
   status: { ok: true; tools: { name: string; description: string }[] } | { ok: false; error: string };
@@ -73,6 +79,8 @@ export interface ActivePlugin {
   args: string[];
   env: Record<string, string>;
   tools: PluginTool[];
+  /** Guidance the plugin gives the agent (its MCP `instructions`), if any. */
+  instructions?: string;
 }
 
 export interface PluginLogEntry {
@@ -98,6 +106,7 @@ export function manifestProblems(m: Partial<PluginManifest>): string[] {
   if (m.permission !== 'read' && m.permission !== 'propose') p.push('permission must be "read" or "propose"');
   if (!Array.isArray(m.hosts) || m.hosts.some((h) => typeof h !== 'string')) p.push('hosts must be a list of host names (empty when the plugin needs no network)');
   if (m.args !== undefined && (!Array.isArray(m.args) || m.args.some((a) => typeof a !== 'string'))) p.push('args must be a list of strings');
+  if (m.backendWebSearch !== undefined && typeof m.backendWebSearch !== 'boolean') p.push('backendWebSearch must be true or false');
   if (m.settings !== undefined && (!Array.isArray(m.settings) || m.settings.some((s) => !s || typeof s.key !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(s.key)))) p.push('settings: each needs a key in UPPER_CASE (it is passed to the plugin as an environment variable)');
   return p;
 }
@@ -133,7 +142,8 @@ export class McpClient {
     return !!this.child && !this.exited;
   }
 
-  async start(): Promise<void> {
+  /** Start the plugin and introduce ourselves; returns its `instructions`, if it gives any. */
+  async start(): Promise<string | undefined> {
     const child = spawn(this.command, this.args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...this.env } });
     this.child = child;
     child.stderr?.on('data', (d) => {
@@ -161,8 +171,9 @@ export class McpClient {
     };
     child.on('error', (e) => gone(e.message));
     child.on('exit', (code, sig) => gone(`exited (${sig ?? code})`));
-    await this.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'hassassin-pcb', version: '0.4' } });
+    const init = (await this.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'hassassin-pcb', version: '0.4' } })) as { instructions?: unknown } | undefined;
     this.notify('notifications/initialized');
+    return typeof init?.instructions === 'string' ? init.instructions.slice(0, 3000) : undefined;
   }
 
   private why(): string {
@@ -216,37 +227,65 @@ export class McpClient {
 export class PluginHost {
   private file: string;
   private settingsFile: string;
-  private cache: { mtime: number; manifests: PluginManifest[]; problems: { id: string; problems: string[] }[] } | null = null;
-  private probes = new Map<string, { at: number; status: PluginInfo['status']; tools: PluginTool[] }>();
+  private cache: { key: string; manifests: PluginManifest[]; problems: { id: string; problems: string[] }[] } | null = null;
+  private probes = new Map<string, { at: number; status: PluginInfo['status']; tools: PluginTool[]; instructions?: string }>();
 
   private dataDir: string;
+  private builtinDir: string | null;
 
-  constructor(dataDir: string) {
+  /** `builtinDir`: folder of the plugins bundled with Hassassin (`<dir>/<id>/plugin.json`); null for none. */
+  constructor(dataDir: string, builtinDir: string | null = null) {
     this.dataDir = dataDir;
+    this.builtinDir = builtinDir;
     this.file = join(dataDir, 'plugins.json');
     this.settingsFile = join(dataDir, 'plugin-settings.json');
   }
 
-  /** Installed plugins as written in plugins.json (re-read when the file changes); bad entries are reported. */
+  /** The owner's source trust list (A2), given to every plugin; it may not exist. */
+  get trustFile(): string {
+    return join(this.dataDir, 'source-trust.json');
+  }
+
+  private builtinFiles(): string[] {
+    if (!this.builtinDir || !existsSync(this.builtinDir)) return [];
+    return readdirSync(this.builtinDir).map((d) => join(this.builtinDir!, d, 'plugin.json')).filter((f) => existsSync(f)).sort();
+  }
+
+  /**
+   * Installed plugins: the bundled ones, then those in plugins.json (an entry there with the same id
+   * replaces the bundled one). Re-read when a file changes; bad entries are reported.
+   */
   manifests(): { manifests: PluginManifest[]; problems: { id: string; problems: string[] }[] } {
-    if (!existsSync(this.file)) return { manifests: [], problems: [] };
-    const mtime = statSync(this.file).mtimeMs;
-    if (this.cache?.mtime === mtime) return this.cache;
-    const manifests: PluginManifest[] = [];
+    const files = [...this.builtinFiles(), ...(existsSync(this.file) ? [this.file] : [])];
+    const key = files.map((f) => `${f}:${statSync(f).mtimeMs}`).join('|');
+    if (this.cache?.key === key) return this.cache;
+    const byId = new Map<string, PluginManifest>();
     const problems: { id: string; problems: string[] }[] = [];
-    try {
-      const raw = JSON.parse(readFileSync(this.file, 'utf8')) as { plugins?: Partial<PluginManifest>[] };
-      const seen = new Set<string>();
-      for (const m of raw.plugins ?? []) {
-        const p = manifestProblems(m);
-        if (m.id && seen.has(m.id)) p.push('id used twice');
-        if (p.length) problems.push({ id: String(m.id ?? '?'), problems: p });
-        else (manifests.push({ ...(m as PluginManifest), args: m.args ?? [], settings: m.settings ?? [] }), seen.add(m.id!));
+    const take = (m: Partial<PluginManifest>, dir: string, builtin: boolean, seen: Set<string>) => {
+      const p = manifestProblems(m);
+      if (m.id && seen.has(m.id)) p.push('id used twice');
+      if (p.length) return void problems.push({ id: String(m.id ?? '?'), problems: p });
+      seen.add(m.id!);
+      byId.set(m.id!, { ...(m as PluginManifest), args: m.args ?? [], settings: m.settings ?? [], dir, ...(builtin ? { builtin: true } : {}) });
+    };
+    const builtinSeen = new Set<string>();
+    for (const f of this.builtinFiles()) {
+      try {
+        take(JSON.parse(readFileSync(f, 'utf8')) as Partial<PluginManifest>, dirname(f), true, builtinSeen);
+      } catch (e) {
+        problems.push({ id: f, problems: [`cannot be read: ${(e as Error).message}`] });
       }
-    } catch (e) {
-      problems.push({ id: 'plugins.json', problems: [`cannot be read: ${(e as Error).message}`] });
     }
-    this.cache = { mtime, manifests, problems };
+    if (existsSync(this.file)) {
+      try {
+        const raw = JSON.parse(readFileSync(this.file, 'utf8')) as { plugins?: Partial<PluginManifest>[] };
+        const seen = new Set<string>();
+        for (const m of raw.plugins ?? []) take(m, dirname(this.file), false, seen);
+      } catch (e) {
+        problems.push({ id: 'plugins.json', problems: [`cannot be read: ${(e as Error).message}`] });
+      }
+    }
+    this.cache = { key, manifests: [...byId.values()], problems };
     this.probes.clear();
     return this.cache;
   }
@@ -270,28 +309,29 @@ export class PluginHost {
 
   /** How to start a plugin: the command (Node for scripts) and its settings as environment. */
   launch(m: PluginManifest): { command: string; args: string[]; env: Record<string, string> } {
-    const base = dirname(this.file);
-    const looksLikePath = m.command.includes('/') || m.command.startsWith('.');
+    const base = m.dir ?? dirname(this.file);
+    const local = !isAbsolute(m.command) && existsSync(resolve(base, m.command));
+    const looksLikePath = m.command.includes('/') || m.command.startsWith('.') || local;
     const cmd = looksLikePath && !isAbsolute(m.command) ? resolve(base, m.command) : m.command;
-    const env = { ...this.values(m.id), HASSASSIN_PLUGIN: m.id };
-    if (/\.(mjs|cjs|js)$/.test(cmd)) return { command: process.execPath, args: [cmd, ...(m.args ?? [])], env };
+    const env = { ...this.values(m.id), HASSASSIN_PLUGIN: m.id, HASSASSIN_TRUST_FILE: this.trustFile };
+    if (/\.(mjs|cjs|js|ts|mts)$/.test(cmd)) return { command: process.execPath, args: [cmd, ...(m.args ?? [])], env };
     return { command: cmd, args: m.args ?? [], env };
   }
 
   /** Start the plugin, read its tools, stop it (cached for a minute). */
-  async probe(m: PluginManifest, force = false): Promise<{ status: PluginInfo['status']; tools: PluginTool[] }> {
+  async probe(m: PluginManifest, force = false): Promise<{ status: PluginInfo['status']; tools: PluginTool[]; instructions?: string }> {
     const hit = this.probes.get(m.id);
     if (hit && !force && Date.now() - hit.at < 60_000) return hit;
     const missing = (m.settings ?? []).filter((s) => s.required && !this.values(m.id)[s.key]);
-    let out: { status: PluginInfo['status']; tools: PluginTool[] };
+    let out: { status: PluginInfo['status']; tools: PluginTool[]; instructions?: string };
     if (missing.length) out = { status: { ok: false, error: `not set up: ${missing.map((s) => s.label || s.key).join(', ')} missing in plugin-settings.json` }, tools: [] };
     else {
       const l = this.launch(m);
       const c = new McpClient(l.command, l.args, l.env, 10000);
       try {
-        await c.start();
+        const instructions = await c.start();
         const tools = await c.listTools();
-        out = { status: { ok: true, tools: tools.map((t) => ({ name: t.name, description: t.description.split('\n')[0]!.slice(0, 200) })) }, tools };
+        out = { status: { ok: true, tools: tools.map((t) => ({ name: t.name, description: t.description.split('\n')[0]!.slice(0, 200) })) }, tools, ...(instructions ? { instructions } : {}) };
       } catch (e) {
         out = { status: { ok: false, error: (e as Error).message }, tools: [] };
       } finally {
@@ -312,7 +352,7 @@ export class PluginHost {
         const { status } = await this.probe(m, force);
         return {
           id: m.id, name: m.name, version: m.version, publisher: m.publisher, ...(m.description ? { description: m.description } : {}),
-          permission: m.permission, hosts: m.hosts,
+          permission: m.permission, hosts: m.hosts, ...(m.builtin ? { builtin: true } : {}), ...(m.backendWebSearch ? { backendWebSearch: true } : {}),
           settings: (m.settings ?? []).map((s) => ({ ...s, configured: !!v[s.key] })),
           status,
         } satisfies PluginInfo;
@@ -345,7 +385,7 @@ export class PluginHost {
         skipped.push({ id, reason: `is not available (${p.status.error})` });
         continue;
       }
-      plugins.push({ manifest: m, ...this.launch(m), tools: p.tools });
+      plugins.push({ manifest: m, ...this.launch(m), tools: p.tools, ...(p.instructions ? { instructions: p.instructions } : {}) });
     }
     return { plugins, skipped };
   }
@@ -380,7 +420,10 @@ export const pluginToolName = (plugin: string, tool: string) => `${plugin}.${too
 export function pluginNote(active: ActivePlugin[], skipped: { id: string; reason: string }[]): string {
   if (!active.length && !skipped.length) return '';
   const lines = ['Plugins for this project (tools from outside Hassassin):'];
-  for (const p of active) lines.push(`- ${p.manifest.id}: ${p.manifest.name} by ${p.manifest.publisher}, permission ${p.manifest.permission}${p.manifest.hosts.length ? `, contacts ${p.manifest.hosts.join(', ')}` : ''}. Tools: ${p.tools.map((t) => t.name).join(', ')}.`);
+  for (const p of active) {
+    lines.push(`- ${p.manifest.id}: ${p.manifest.name} by ${p.manifest.publisher}, permission ${p.manifest.permission}${p.manifest.hosts.length ? `, contacts ${p.manifest.hosts.join(', ')}` : ''}. Tools: ${p.tools.map((t) => t.name).join(', ')}.${p.manifest.backendWebSearch ? ' Your own web search is switched on for it: use it to search, and open pages and documents with its fetch tool so their trust level is known.' : ''}`);
+    if (p.instructions) lines.push(...p.instructions.split('\n').map((l) => `  ${l}`));
+  }
   for (const s of skipped) lines.push(`- ${s.id} ${s.reason}; work without it and tell the user if they need it.`);
   if (active.length)
     lines.push(

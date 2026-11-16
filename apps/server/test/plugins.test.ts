@@ -168,7 +168,7 @@ describe('plugins on the collaboration server', () => {
     const r = await fetch(`${base}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'P', doc: toFile(p.doc) }) });
     const { id, tokens } = (await r.json()) as { id: string; tokens: { edit: string; view: string } };
     const list = (await (await fetch(`${base}/api/agent/${id}/plugins?token=${tokens.view}`)).json()) as { plugins: { id: string }[]; enabled: string[]; log: unknown[] };
-    expect(list.plugins.map((x) => x.id)).toEqual(['echo', 'off']);
+    expect(list.plugins.map((x) => x.id)).toEqual(['web', 'echo', 'off']); // the bundled web plugin (A2) is listed too, off
     expect(list.enabled).toEqual(['echo', 'gone']);
     expect(list.log).toEqual([]);
     expect(JSON.stringify(list)).not.toContain(SECRET);

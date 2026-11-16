@@ -131,6 +131,8 @@ function systemPrompt(mode: AgentMode, note = ''): string {
 /** Tool names as the Agent tab shows them: Hassassin's bare, a plugin's as "<plugin>.<tool>". */
 const toolName = (n: string) => {
   if (n.startsWith('mcp__hassassin__')) return n.slice('mcp__hassassin__'.length);
+  // The backend's own web search, switched on for the web plugin (A2): shown and logged as part of it.
+  if (n === 'WebSearch') return pluginToolName('web', 'search');
   const m = /^mcp__([a-z][a-z0-9-]*)__(.+)$/.exec(n);
   return m ? pluginToolName(m[1]!, m[2]!) : n;
 };
@@ -165,6 +167,11 @@ export class CliAgentSession {
     return !!this.child;
   }
 
+  /** Whether a plugin of this message asks for the backend's own web search (A2). */
+  private get webSearch(): boolean {
+    return this.plugins.some((p) => p.manifest.backendWebSearch);
+  }
+
   private mcpEnv(): Record<string, string> {
     return {
       HASSASSIN_PROJECT: this.mode === 'agent' ? this.link : this.viewLink,
@@ -182,8 +189,9 @@ export class CliAgentSession {
         '-p', prompt,
         '--output-format', 'stream-json', '--verbose',
         '--mcp-config', JSON.stringify({ mcpServers: servers }), '--strict-mcp-config',
-        '--tools', '',
-        '--allowedTools', ['mcp__hassassin', ...this.plugins.map((p) => `mcp__${p.manifest.id}`)].join(','),
+        // Built-in tools stay off; only web search, while a plugin asks for it.
+        '--tools', this.webSearch ? 'WebSearch' : '',
+        '--allowedTools', ['mcp__hassassin', ...this.plugins.map((p) => `mcp__${p.manifest.id}`), ...(this.webSearch ? ['WebSearch'] : [])].join(','),
         '--permission-mode', 'dontAsk',
         '--append-system-prompt', systemPrompt(this.mode, this.pluginNote),
         ...(this.sessionId ? ['--resume', this.sessionId] : []),
@@ -202,7 +210,9 @@ export class CliAgentSession {
     // The plugins may change between messages, so their note goes with every message.
     const note = this.pluginNote ? `<plugins>\n${this.pluginNote}\n</plugins>\n\n` : '';
     const text = this.sessionId ? `${this.mode === 'ask' ? `(${READ_ONLY_HINT})\n\n` : '(Agent mode: you may change the project.)\n\n'}${note}${prompt}` : `<instructions>\n${systemPrompt(this.mode)}\n</instructions>\n\n${note}${prompt}`;
-    return this.sessionId ? ['exec', 'resume', ...common, this.sessionId, text] : ['exec', ...common, text];
+    // Codex's live web search is a flag before the subcommand.
+    const search = this.webSearch ? ['--search'] : [];
+    return this.sessionId ? [...search, 'exec', 'resume', ...common, this.sessionId, text] : [...search, 'exec', ...common, text];
   }
 
   async send(prompt: string, emit: (e: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
@@ -249,6 +259,10 @@ export class CliAgentSession {
           const r = item.result as { content?: { text?: string }[] } | null;
           this.result(String(item.id), !item.error && item.status !== 'failed', item.error ? String((item.error as { message?: string }).message ?? item.error) : r?.content?.map((c) => c.text ?? '').join('') ?? '', emit, names);
         }
+      } else if (item?.type === 'web_search') {
+        // Codex's own web search (A2), shown and logged as part of the web plugin.
+        if (e.type === 'item.started') this.tool(String(item.id), 'WebSearch', { query: item.query }, emit, names);
+        else if (e.type === 'item.completed') this.result(String(item.id), item.status !== 'failed', typeof item.query === 'string' ? `searched: ${item.query}` : 'searched', emit, names);
       } else if (item?.type === 'agent_message' && e.type === 'item.completed' && typeof item.text === 'string') emit({ type: 'text', text: `${item.text}\n` });
       else if (item?.type === 'reasoning' && e.type === 'item.completed' && typeof item.text === 'string' && item.text.trim()) emit({ type: 'note', text: item.text.trim() });
       else if (item?.type === 'error' && typeof item.message === 'string') errLines.push(item.message);

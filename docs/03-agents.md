@@ -209,3 +209,35 @@ call starts it again (Claude API backend; the CLIs manage their own plugin proce
 plugin, tool, arguments with secret values replaced by `[secret]`, result size, the plugin's hosts); the
 Agent tab shows the most recent calls.
 
+### The bundled web plugin
+
+Hassassin comes with one plugin, `web` (`plugins/web/`), listed on every server and off until a project
+switches it on. It lets the agent research components on the web on its own: search, open pages, follow
+links to the manufacturer's datasheet, try again with other words, and report the steps it took.
+
+- Tools: `fetch_document` (a page: its readable text, or the text around given words, and its links with
+  datasheet and PDF links first; a PDF: size, SHA-256 and approximate page count), `source_trust` (the trust
+  level of an address without opening it) and `web_search` (through a Brave Search API key, optional).
+- While it is on, the backend's own web search is switched on too: Claude Code's `WebSearch` tool, Codex's
+  `--search`, the Claude API's web search tool (at most `WEB_MAX_SEARCHES` per message). Pages and documents
+  are opened with `fetch_document`, so their trust level is known. Searches show as `web.search` in the
+  Agent tab and the plugin log.
+- **Source trust:** every result carries a level: `manufacturer` (the maker's own site), `distributor`,
+  `unverified` (any other site: values from it need the user's approval) or `mirror` (datasheet mirror and
+  aggregator sites: never trusted). The default lists are in `packages/core/src/sourceTrust.ts`; add or move
+  domains in `source-trust.json` in the server's data folder:
+
+  ```json
+  { "manufacturer": ["acme-chips.com"], "distributor": [], "mirror": ["some-mirror.example"] }
+  ```
+
+- **Limits per message**, settings of the plugin in `plugin-settings.json` (`"web": { … }`):
+  `WEB_MAX_SEARCHES` (10), `WEB_MAX_FETCHES` (25), `WEB_MAX_MB` (60, total download), `WEB_MAX_SECONDS`
+  (600), `WEB_MAX_DOC_MB` (25 per document); `SEARCH_API_KEY` for `web_search`. When a limit is reached the
+  tool says so and the agent reports what it found. The searches of Claude Code and Codex are not counted
+  by Hassassin (only the Claude API's are limited).
+- It only opens public http(s) addresses: an address that resolves to this machine or a private network is
+  refused.
+- Everything it returns carries a notice that it is data from the web, not instructions; the agent is told
+  the same.
+

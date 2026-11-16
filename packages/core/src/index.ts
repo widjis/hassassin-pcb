@@ -61,3 +61,4 @@ export * from './drcChecks.ts';
 export * from './strokeFont.ts';
 export * from './teardrops.ts';
 export * from './stitch.ts';
+export * from './sourceTrust.ts';

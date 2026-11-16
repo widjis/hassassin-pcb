@@ -393,6 +393,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     description?: string;
     permission: 'read' | 'propose';
     hosts: string[];
+    builtin?: boolean;
+    backendWebSearch?: boolean;
     settings: { key: string; label: string; secret?: boolean; required?: boolean; configured: boolean }[];
     status: { ok: true; tools: { name: string; description: string }[] } | { ok: false; error: string };
   }
@@ -458,7 +460,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
           'div',
           { class: `plugin-row${isOn ? ' on' : ''}` },
           h('label', { class: 'plugin-title' }, sw, h('span', { class: 'plugin-name' }, p.name), h('span', { class: `badge ${p.permission}`, title: p.permission === 'read' ? 'Returns data only; also in Ask mode' : 'May propose changes (the agent applies them with Hassassin tools); Agent mode only' }, p.permission)),
-          h('div', { class: 'dim plugin-meta' }, `${p.publisher} · v${p.version}${p.hosts.length ? ` · contacts ${p.hosts.join(', ')}` : ' · no network'}`),
+          h('div', { class: 'dim plugin-meta' }, `${p.builtin ? 'bundled · ' : ''}${p.publisher} · v${p.version}${p.hosts.length ? ` · contacts ${p.hosts.join(', ')}` : ' · no network'}${p.backendWebSearch ? ' · also switches on the AI\'s own web search' : ''}`),
           p.description ? h('div', { class: 'plugin-desc' }, p.description) : null,
           h('div', { class: 'plugin-status' }, st, p.status.ok ? h('span', { class: 'dim' }, ` ${p.status.tools.map((t) => t.name).join(', ')}`) : null),
           p.settings.length ? h('div', { class: 'dim plugin-meta' }, `Settings: ${p.settings.map((x) => `${x.label || x.key} ${x.configured ? '✓' : x.required ? '(missing)' : '(not set)'}`).join(' · ')}`) : null,

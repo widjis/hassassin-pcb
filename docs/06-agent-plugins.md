@@ -142,6 +142,35 @@ can be checked; an item is done only when all of them pass.
     mirror site is never marked trusted; a page containing instructions to the agent ("ignore previous
     instructions …") in a recorded fixture does not change what the agent does; trust level shown with
     every result; the limits stop a search that goes on too long.
+  - *Progress (2026-11-16), not ticked yet:* everything is built and tested with recorded pages; the live
+    check (20 MPNs with a real agent) waits for the owner's go-ahead, since it runs on the owner's
+    subscription.
+    - **Trust** (`packages/core/src/sourceTrust.ts`): levels manufacturer / distributor / unverified /
+      mirror; default lists (80 manufacturer domains, the main distributors, datasheet mirror and
+      aggregator sites); a host matches its domain or a subdomain, the most specific entry wins; the owner's
+      `source-trust.json` adds domains or moves them between lists.
+    - **Bundled plugin `web`** (`plugins/web/`, read-only, listed on every server, off until switched on):
+      `fetch_document` (HTML: title, readable text without scripts, menus and footers, or the text around
+      given words; links with datasheet and PDF links first, each with its trust level. PDF: size, SHA-256,
+      approximate page count), `source_trust`, `web_search` (Brave Search API with the owner's key,
+      optional). Every result carries a notice that it is data from the web, not instructions. Redirects
+      are followed by hand, each hop checked; only public http(s) addresses (this machine and private
+      networks refused); size and time limits per document. Its MCP `instructions` (how to research, which
+      sources count) reach the agent with the plugin note.
+    - **The backend's own web search** while `web` is on (manifest `backendWebSearch`): Claude Code
+      `--tools WebSearch`, Codex `--search`, the Claude API's `web_search_20260318` tool with `max_uses`;
+      their searches show and are logged as `web.search`. Pages are opened with `fetch_document`, so their
+      trust is known.
+    - **Limits per message:** searches, documents, total download, time (plugin settings); the API backend
+      starts fresh plugin processes for each message, so the counts are per message. Claude Code's and
+      Codex's own searches are not counted by Hassassin.
+    - **Live sanity check of `fetch_document`** (no agent): TI's TPS7A02 product page (HTML, trust
+      manufacturer), its datasheet PDF (3.4 MB, 48 pages, manufacturer), an LCSC page (distributor).
+    - Tests: `apps/server/test/web-plugin.test.ts` (trust levels and the owner's list; page reading; the
+      bundled plugin's manifest, tools and guidance; a page with an injected instruction returned as data
+      under the notice; redirect to a PDF; private addresses refused; per-message limits; the search API
+      with the key from the settings; Claude Code / Codex flags only while the plugin is on; the API web
+      search tool with its limit, shown as `web.search`).
 - [ ] **A3. Datasheet store.**
   - `get_datasheet` (by MPN, or by URL): finds the datasheet URL (distributor data first, then the
     manufacturer's site), downloads it, keeps it in the project's own storage (not in the repository) under

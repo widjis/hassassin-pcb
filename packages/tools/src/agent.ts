@@ -128,6 +128,8 @@ export interface TurnExtras {
   tools?: ExternalTool[];
   /** Text added to the turn's context (next to project_status), e.g. the plugins and their rules. */
   note?: string;
+  /** The API's own web search for this message (A2: while the web plugin is on), at most this many searches. */
+  webSearch?: { maxUses: number };
 }
 
 export interface AgentOptions {
@@ -160,6 +162,7 @@ export class AgentSession {
   private opts: AgentOptions;
   private busy = false;
   private external: ExternalTool[] = [];
+  private webSearch: { maxUses: number } | null = null;
 
   constructor(opts: AgentOptions) {
     this.opts = opts;
@@ -183,6 +186,7 @@ export class AgentSession {
       tools: [
         ...agentTools(this.mode),
         ...this.external.map((t) => ({ name: t.name, description: `[plugin ${t.display}] ${t.description}`, input_schema: t.input_schema as Anthropic.Beta.BetaTool.InputSchema, eager_input_streaming: true })),
+        ...(this.webSearch ? [{ type: 'web_search_20260318' as const, name: 'web_search' as const, max_uses: this.webSearch.maxUses }] : []),
       ],
       tool_choice: { type: 'auto' },
       messages: this.messages,
@@ -194,6 +198,7 @@ export class AgentSession {
     if (this.busy) throw new Error('The agent is still working on the previous message.');
     this.busy = true;
     this.external = extras.tools ?? [];
+    this.webSearch = extras.webSearch ?? null;
     try {
       // Fresh project context with each user turn (kept out of the cached system prompt).
       let status = '';
@@ -216,7 +221,16 @@ export class AgentSession {
         const msg = await this.opts.model(this.params(), (t) => emit({ type: 'text', text: t }), signal);
         this.messages.push({ role: 'assistant', content: msg.content as Anthropic.Beta.BetaContentBlockParam[] });
         emit({ type: 'usage', input: msg.usage.input_tokens, output: msg.usage.output_tokens, cacheRead: msg.usage.cache_read_input_tokens ?? 0 });
-        for (const b of msg.content) if (b.type === 'thinking' && b.thinking.trim()) emit({ type: 'note', text: b.thinking.trim() });
+        for (const b of msg.content) {
+          if (b.type === 'thinking' && b.thinking.trim()) emit({ type: 'note', text: b.thinking.trim() });
+          // The API's own web search (A2): shown and logged as part of the web plugin.
+          else if (b.type === 'server_tool_use' && b.name === 'web_search') emit({ type: 'tool', id: b.id, name: 'web.search', input: b.input });
+          else if (b.type === 'web_search_tool_result') {
+            const c = b.content as unknown;
+            const hits = Array.isArray(c) ? (c as { url?: string; title?: string }[]) : [];
+            emit({ type: 'tool_result', id: b.tool_use_id, name: 'web.search', ok: Array.isArray(c), summary: Array.isArray(c) ? `${hits.length} result(s)` : `search failed (${(c as { error_code?: string }).error_code ?? 'error'})`, detail: hits.map((x) => `${x.title ?? ''}\n${x.url ?? ''}`).join('\n\n').slice(0, 6000) });
+          }
+        }
 
         if (msg.stop_reason === 'refusal') return emit({ type: 'error', message: 'The model declined this request.' });
         if (msg.stop_reason === 'max_tokens') return emit({ type: 'error', message: 'The reply hit the length limit; ask for a smaller step.' });
