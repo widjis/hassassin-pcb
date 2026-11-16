@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Document | `docs/07-desktop-app.md` |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | **Draft, waiting for the owner's answers and approval; to start after A1 of [06-agent-plugins.md](06-agent-plugins.md)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
@@ -114,13 +114,15 @@ criteria that can be checked; an item is done only when all of them pass.
   - Acceptance: a fresh install signs in to Claude Code and runs the agent on a new project; an API key typed
     once is used after a restart and is not found in any file of the app or the project.
 - [ ] **D8. Packages and releases.**
-  - Builds for macOS (Apple silicon and Intel), Windows (x64) and Linux (AppImage), made by a script in the
-    repository and attached to a GitHub Release; versions follow the repository's tags.
+  - **macOS first** (owner's choice): builds for Apple silicon and Intel, made by a script in the repository
+    and attached to a GitHub Release; versions follow the repository's tags. Windows (x64) and Linux
+    (AppImage) builds come once the app is ready for version 1.0.0; until then the code keeps them possible
+    (no macOS-only calls outside the shell's small interfaces), but they are not built or tested.
   - The app checks GitHub Releases for a newer version and says so (it does not update itself).
   - Code signing and notarisation where the owner has the accounts (see open questions); unsigned builds
     otherwise, with the steps to open them written in the release notes.
-  - Acceptance: each build installs and opens the solar sample on a clean machine of its system (the owner's
-    Mac for macOS; Windows and Linux in a virtual machine or on CI).
+  - Acceptance: the macOS builds install and open the solar sample on the owner's Mac (Apple silicon) and on
+    an Intel Mac or under Rosetta; the Windows and Linux checks are part of the 1.0.0 release.
 
 ### Milestone DM3 — collaboration between desktop apps
 
@@ -166,7 +168,7 @@ plus:
 |---|---|
 | Automated tests (Vitest) | Local projects without sharing (D1), project folder round trip (D2), chats per project, summaries and crash safety (D3), autosave per project (D4), server secret and host checks (D5), no chats on the collaboration server (D9) |
 | Browser / app check | D1–D7 and D9 with screenshots in the milestone notes |
-| Install check | D8: each package on a clean machine of its system |
+| Install check | D8: the macOS packages on the owner's Mac (Windows and Linux at 1.0.0) |
 
 ## 7. Definition of done (per milestone)
 
@@ -191,7 +193,7 @@ that completes it, and adds the commit id after the item name.
 1. **Desktop shell:** Electron (MIT; carries Node, which the server and the agent CLIs need, so it is the
    shortest way; packages of about 100–150 MB) or Tauri (MIT / Apache-2.0; smaller window layer, but the
    Node server must ship as a separate program next to it)? The implementer's recommendation: Electron.
-2. **Systems:** macOS first and Windows / Linux later, or all three in DM2?
+2. ~~**Systems**~~ — answered 2026-11-16: macOS first; Windows and Linux when the app reaches 1.0.0 (D8).
 3. **Code signing:** is there an Apple Developer account (and a Windows signing certificate) to sign the
    builds, or are unsigned builds fine for now?
 4. **Project on disk:** a `.hpcb` with a companion folder (proposed, keeps today's files opening), or one
@@ -204,6 +206,7 @@ that completes it, and adds the commit id after the item name.
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 0.1 | 2026-11-16 | First draft | — |
+| 0.2 | 2026-11-16 | Owner's answer on systems: macOS first, Windows and Linux at 1.0.0 (D8, verification). Other open questions still open. | Answer by the owner in chat; approval pending |
 
 ## Approval
 
