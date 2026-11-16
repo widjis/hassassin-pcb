@@ -231,6 +231,7 @@ const syncSpace = () => {
   $('layoutTools').classList.toggle('hidden', schMode || is3d());
   tools.classList.toggle('hidden', schMode || is3d());
   $('schTools').classList.toggle('hidden', !schMode || is3d());
+  $('schPalette').classList.toggle('hidden', !schMode || is3d());
   // sheet list
   sheetSelect.replaceChildren(
     ...sch.sheets().map((s) => {
@@ -628,6 +629,21 @@ for (const b of $('palette').querySelectorAll<HTMLButtonElement>('button')) {
   if (k in TOOL_ICONS) iconize(b, k, PALETTE_NAMES[k] ?? k);
 }
 iconize($('unrouteBtn'), 'unroute', 'Unroute', true);
+// The schematic: tools in a palette on the right (KiCad's schematic editor right toolbar), actions on top.
+for (const b of $('schToolSeg').querySelectorAll<HTMLButtonElement>('button')) {
+  const k = (`sch-${b.dataset.tool}`) as ToolIcon;
+  if (k in TOOL_ICONS) iconize(b, k, PALETTE_NAMES[k] ?? b.dataset.tool!);
+}
+iconize($('labelBtn'), 'label', 'Net label');
+iconize($('subSheetBtn'), 'subsheet', 'Sub-sheet');
+iconize($('libBtn'), 'part', 'Add a part');
+iconize($('annotateBtn'), 'annotate', 'Annotate');
+iconize($('frameBtn'), 'frame', 'Frame and title block');
+iconize($('schExportBtn'), 'export', 'Export PDF / SVG');
+iconize($('compactBtn'), 'compact', 'Compact');
+iconize($('tidyBtn'), 'tidy', 'Tidy wires');
+iconize($('syncBtn'), 'to-pcb', 'Update PCB');
+iconize($('backBtn'), 'from-pcb', 'Update from PCB');
 iconize(autorouteBtn, 'autoroute', 'Autoroute');
 iconize($('flipBtn'), 'flip', 'View from the other side');
 iconize($('fitBtn'), 'fit', 'Fit');

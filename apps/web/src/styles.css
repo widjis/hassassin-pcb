@@ -468,10 +468,9 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .workspace.no-left .rail-btn[data-rail='panel'] { color: var(--accent); }
 .workspace.no-left .rail-btn[data-rail='panel'] svg { transform: scaleX(-1); }
 /* Icon buttons of the layout toolbar (names in the tooltips). */
-.layout-tools button.ico { display: inline-flex; align-items: center; justify-content: center; gap: 1px; padding: 4px 7px; min-height: 28px; }
-.layout-tools button.ico svg { display: block; }
+.layout-tools button.ico, .sch-tools button.ico { display: inline-flex; align-items: center; justify-content: center; gap: 1px; padding: 4px 7px; min-height: 28px; }
+.layout-tools button.ico svg, .sch-tools button.ico svg { display: block; }
 .layout-tools button.ico .caret { font-size: 9px; opacity: 0.7; margin-left: 1px; }
-.layout-tools .seg.tools button.ico { padding: 4px 9px; }
 /* The tool palette on the right of the board (KiCad 8's right toolbar), styled as the rail. */
 .rail.palette { left: auto; right: 8px; justify-content: flex-start; gap: 6px; }
 .rail.palette.hidden { display: none; }

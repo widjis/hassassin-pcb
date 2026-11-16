@@ -348,6 +348,10 @@ document before work on a measured item starts.
     rectangle, silkscreen line, text, mounting hole, fiducial), Measure and Delete; the lit icon is the
     active tool. The Draw menu is gone (bend and miter stay in the drawing bar); the toolbar's Pour button
     became a paint bucket so it is not taken for drawing a pour. Approved from a screenshot ("Keep it").
+    The schematic the same way, after the KiCad schematic editor's right toolbar: Select, Wire, Bus, Bus
+    entry, Net label, Sub-sheet and Add a part in a palette on the right; Annotate, Frame, Export, Compact,
+    Tidy wires, Update PCB and Update from PCB as icons on top (the drop-downs stay text). Approved from a
+    screenshot ("Keep them").
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

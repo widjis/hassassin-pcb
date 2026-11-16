@@ -45,6 +45,19 @@
           </div>
         </div>
         <nav class="rail" id="rail"></nav>
+        <nav class="rail palette hidden" id="schPalette" aria-label="Schematic tools">
+          <div class="rail-group" id="schToolSeg">
+            <button class="rail-btn on" data-tool="select" title="Select and move (Esc)"></button>
+            <button class="rail-btn" data-tool="wire" title="Draw wires (W)"></button>
+            <button class="rail-btn" data-tool="bus" title="Draw a bus (B); name it with a label such as DATA[0..7]"></button>
+            <button class="rail-btn" data-tool="entry" title="Bus entry (E): click next to a bus where a wire should join it"></button>
+          </div>
+          <div class="rail-group">
+            <button class="rail-btn" id="labelBtn" title="Place a net label at the cursor (L): local, global, or hierarchical inside a sub-sheet"></button>
+            <button class="rail-btn" id="subSheetBtn" title="Add a hierarchical sub-sheet block at the cursor; double-click it to open, U to go back up"></button>
+            <button class="rail-btn" id="libBtn" title="Search the part library and place a part (P)"></button>
+          </div>
+        </nav>
         <nav class="rail palette" id="palette" aria-label="Board tools">
           <div class="rail-group">
             <button class="rail-btn" data-mode="select" title="Select and move (S, Esc)"></button>
@@ -116,18 +129,9 @@
           </div>
           <div class="sch-tools" id="schTools">
             <select id="sheetSelect" title="Sheet"></select>
-            <div class="seg" id="schToolSeg">
-              <button data-tool="select" class="on" title="Select and move (Esc)">Select</button>
-              <button data-tool="wire" title="Draw wires (W)">Wire</button>
-              <button data-tool="bus" title="Draw a bus (B); name it with a label such as DATA[0..7]">Bus</button>
-              <button data-tool="entry" title="Bus entry (E): click next to a bus where a wire should join it">Entry</button>
-            </div>
-            <button id="labelBtn" title="Place a net label at the cursor (L): local, global, or hierarchical inside a sub-sheet">Label</button>
-            <button id="subSheetBtn" title="Add a hierarchical sub-sheet block at the cursor; double-click it to open, U to go back up">Sub-sheet</button>
             <select id="partSelect" title="Add a part at the view centre (A)">
               <option value="">+ Part…</option>
             </select>
-            <button id="libBtn" title="Search the part library (P)">Library</button>
             <button id="annotateBtn" title="Renumber references (R1, R2 …) in reading order">Annotate</button>
             <select id="alignSelect" title="Align or spread the selected parts">
               <option value="">Align…</option>
