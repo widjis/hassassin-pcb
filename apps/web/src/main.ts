@@ -38,7 +38,7 @@ mountInspector(app, $('inspector'), $('helpPanel'), (shown) => {
 mountProject(app, $('projectPanel'));
 // ---- tool rail (panels open as flyouts over the canvas) ----
 const rail = mountRail($('rail'), $('flyout'), [
-  { id: 'panel', title: 'Hide / show the left (agent) panel (Ctrl+\\)', action: () => toggleLeft() },
+  { id: 'panel', title: 'Hide / show the left (agent) panel (Ctrl+\\)', label: 'Panel', action: () => toggleLeft() },
   { id: 'project', title: 'Project' },
   { id: 'parts', title: 'Parts' },
   { id: 'board', title: 'Board' },
@@ -48,7 +48,7 @@ const rail = mountRail($('rail'), $('flyout'), [
   { id: 'review', title: 'Review', badge: 'reviewBadge' },
   { id: 'comments', title: 'Comments', badge: 'commentBadge' },
   { id: 'history', title: 'History' },
-  { id: 'help', title: 'Board summary and shortcuts', bottom: true },
+  { id: 'help', title: 'Board summary and shortcuts', label: 'Help', bottom: true },
 ]);
 const sch = new SchematicView(app, $<HTMLCanvasElement>('sch'));
 mountReview(app, $('reviewPanel'), $('reviewBadge'), (v) => {

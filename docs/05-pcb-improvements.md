@@ -355,6 +355,9 @@ document before work on a measured item starts.
     Quick tooltips (owner: "the tooltips take too long"): the browser's `title` tooltip waits about a
     second and cannot be changed, so `apps/web/src/ui/tooltip.ts` shows the same text after 150 ms (at once
     when moving on from one tooltip to the next), beside the side palettes and below other controls.
+    Rail labels (owner: "add small labels under the rail icons"): each icon of the left rail has its short
+    name under it (Panel, Project, Parts, Board, Layers, Objects, Rules, Review, Comments, History, Help);
+    the rail is 52 px wide and the flyout and the toolbar row moved right to match.
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

@@ -1,7 +1,7 @@
 /**
  * The icon rail on the canvas edge. Each icon opens one tool panel (layers, rules, review …) as a
  * flyout over the canvas, so the left panel stays free for the agent. Clicking the open icon again,
- * the × or Esc closes it.
+ * the × or Esc closes it. A short name under each icon says what it is without hovering.
  */
 import { h } from './dom.ts';
 
@@ -26,6 +26,8 @@ const ICONS: Record<string, string> = {
 export interface RailEntry {
   id: string;
   title: string;
+  /** A short name shown under the icon (the title by default). */
+  label?: string;
   /** Id for a count badge on the icon (the panel's own code fills it). */
   badge?: string;
   /** Placed at the bottom of the rail. */
@@ -49,11 +51,13 @@ export function mountRail(rail: HTMLElement, flyout: HTMLElement, entries: RailE
   for (const e of entries) {
     const b = h('button', { class: 'rail-btn', title: e.title, 'aria-label': e.title, onclick: () => (e.action ? e.action() : open === e.id ? api.close() : api.show(e.id)) });
     b.innerHTML = ICONS[e.id] ?? '';
+    b.append(h('span', { class: 'rail-label' }, e.label ?? e.title));
     if (e.badge) b.append(h('span', { id: e.badge, class: 'badge rail-badge' }));
     if (!e.action) buttons.set(e.id, b);
     b.dataset.rail = e.id;
     (e.bottom ? bottom : top).append(b);
   }
+  rail.classList.add('labeled');
   rail.append(top, bottom);
 
   const sections = () => flyout.querySelectorAll<HTMLElement & { refresh?: () => void }>('.tab-body');
