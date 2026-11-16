@@ -164,6 +164,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   const header = h('div', { class: 'agent-head' });
   const loginBox = h('div', { class: 'agent-login' });
   const taskBox = h('div', { class: 'agent-tasks' });
+  const pluginBox = h('div', { class: 'agent-plugins' });
   const log = h('div', { class: 'agent-log' });
   const input = h('textarea', { rows: '1', placeholder: 'Ask about the design, or tell the agent what to do…' });
   const sendBtn = h('button', { class: 'send', title: 'Send (Enter) · new line: Shift+Enter' }, '↑');
@@ -383,6 +384,100 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     input.placeholder = cur.ready ? (mode === 'ask' ? 'Ask about the design (read-only)…' : 'Ask about the design, or tell the agent what to do…') : 'Choose an AI above and sign in first';
   };
 
+  // ---------------------------------------------------------------- plugins (docs/06-agent-plugins.md, A1)
+  interface PluginInfo {
+    id: string;
+    name: string;
+    version: string;
+    publisher: string;
+    description?: string;
+    permission: 'read' | 'propose';
+    hosts: string[];
+    settings: { key: string; label: string; secret?: boolean; required?: boolean; configured: boolean }[];
+    status: { ok: true; tools: { name: string; description: string }[] } | { ok: false; error: string };
+  }
+  interface PluginLog {
+    at: string;
+    by: string;
+    plugin: string;
+    tool: string;
+    args: string;
+    ok: boolean;
+    bytes: number;
+  }
+  let plugins: { plugins: PluginInfo[]; problems: { id: string; problems: string[] }[]; log: PluginLog[] } | null = null;
+  let pluginsOpen = false;
+  let canEdit = false;
+  const enabledPlugins = (): string[] => {
+    const v = app.doc?.meta.agentPlugins;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  };
+  const loadPlugins = async (refresh = false) => {
+    if (!collab.session) return;
+    const q = `token=${encodeURIComponent(collab.session.token)}${refresh ? '&refresh=1' : ''}`;
+    const [list, info] = await Promise.all([
+      fetch(`/api/agent/${collab.session.id}/plugins?${q}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      collab.info().catch(() => null),
+    ]);
+    plugins = list;
+    canEdit = info?.role === 'edit';
+    drawPlugins();
+  };
+  /** Switch a plugin on or off for this project: a change of the project (one undo step), editors only. */
+  const setPlugin = (id: string, on: boolean) => {
+    const cur = enabledPlugins();
+    const next = on ? [...new Set([...cur, id])] : cur.filter((x) => x !== id);
+    app.apply(`Agent plugin ${id} ${on ? 'on' : 'off'}`, [{ op: 'setMeta', key: 'agentPlugins', value: next.length ? next : null }]);
+    drawPlugins();
+  };
+  const drawPlugins = () => {
+    clear(pluginBox);
+    const list = plugins?.plugins ?? [];
+    const enabled = enabledPlugins();
+    const on = list.filter((p) => enabled.includes(p.id));
+    const head = h(
+      'button',
+      { class: 'tasks-head', title: 'Tools from outside Hassassin that the agent may use in this project', onclick: () => ((pluginsOpen = !pluginsOpen), pluginsOpen ? void loadPlugins() : drawPlugins()) },
+      h('span', {}, pluginsOpen ? '▾' : '▸'),
+      h('span', {}, 'Plugins'),
+      h('span', { class: 'dim' }, list.length ? `${on.length} of ${list.length} on` : 'none installed'),
+    );
+    pluginBox.append(head);
+    if (!pluginsOpen) return;
+    if (!plugins) return void pluginBox.append(h('div', { class: 'dim' }, 'Loading…'));
+    if (!list.length)
+      pluginBox.append(h('div', { class: 'dim plugin-note' }, 'No plugins are installed on this server. The owner lists them in plugins.json in the server\'s data folder (see docs/03-agents.md).'));
+    for (const p of list) {
+      const isOn = enabled.includes(p.id);
+      const sw = h('input', { type: 'checkbox', ...(isOn ? { checked: true } : {}), ...(canEdit ? {} : { disabled: true }), title: canEdit ? `Switch ${p.name} ${isOn ? 'off' : 'on'} for this project` : 'Only editors can switch plugins' });
+      sw.addEventListener('change', () => setPlugin(p.id, (sw as HTMLInputElement).checked));
+      const st = p.status.ok ? h('span', { class: 'plugin-ok' }, `ready · ${p.status.tools.length} tool${p.status.tools.length === 1 ? '' : 's'}`) : h('span', { class: 'err-text' }, p.status.error);
+      const missing = p.settings.filter((x) => !x.configured);
+      pluginBox.append(
+        h(
+          'div',
+          { class: `plugin-row${isOn ? ' on' : ''}` },
+          h('label', { class: 'plugin-title' }, sw, h('span', { class: 'plugin-name' }, p.name), h('span', { class: `badge ${p.permission}`, title: p.permission === 'read' ? 'Returns data only; also in Ask mode' : 'May propose changes (the agent applies them with Hassassin tools); Agent mode only' }, p.permission)),
+          h('div', { class: 'dim plugin-meta' }, `${p.publisher} · v${p.version}${p.hosts.length ? ` · contacts ${p.hosts.join(', ')}` : ' · no network'}`),
+          p.description ? h('div', { class: 'plugin-desc' }, p.description) : null,
+          h('div', { class: 'plugin-status' }, st, p.status.ok ? h('span', { class: 'dim' }, ` ${p.status.tools.map((t) => t.name).join(', ')}`) : null),
+          p.settings.length ? h('div', { class: 'dim plugin-meta' }, `Settings: ${p.settings.map((x) => `${x.label || x.key} ${x.configured ? '✓' : x.required ? '(missing)' : '(not set)'}`).join(' · ')}`) : null,
+          missing.some((x) => x.required) ? h('div', { class: 'plugin-meta err-text' }, 'Set it up in plugin-settings.json on the server.') : null,
+        ),
+      );
+    }
+    for (const pr of plugins.problems) pluginBox.append(h('div', { class: 'err-text plugin-meta' }, `plugins.json, ${pr.id}: ${pr.problems.join('; ')}`));
+    const recent = plugins.log.slice(-8).reverse();
+    if (recent.length) {
+      pluginBox.append(h('div', { class: 'step-label' }, 'Recent plugin calls'));
+      for (const l of recent)
+        pluginBox.append(
+          h('div', { class: `plugin-call${l.ok ? '' : ' bad'}`, title: l.args }, h('span', {}, `${l.ok ? '✓' : '!'} ${l.plugin}.${l.tool}`), h('span', { class: 'dim' }, ` ${l.by} · ${new Date(l.at).toLocaleTimeString()} · ${l.bytes} chars`)),
+        );
+    }
+    pluginBox.append(h('button', { class: 'link', onclick: () => void loadPlugins(true) }, 'Check again'));
+  };
+
   const render = async () => {
     const seq = ++renderSeq;
     if (!status) await loadStatus();
@@ -414,8 +509,9 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       chat = saved?.chat ?? null;
       if (saved?.backend) backend = saved.backend;
     }
-    root.append(header, loginBox, taskBox, log, bottom);
+    root.append(header, loginBox, pluginBox, taskBox, log, bottom);
     drawHeader();
+    void loadPlugins();
     drawTasks();
     drawLog();
     setBusy(busy);
@@ -626,6 +722,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     void render().then(loadTranscripts);
   });
   app.on('drc', drawHints);
+  // A collaborator may switch plugins; the switches follow the project.
+  app.on('change', () => pluginsOpen && drawPlugins());
   // The intro's button depends on whether a project is open.
   app.on('doc', () => {
     if (!app.collab) void render();

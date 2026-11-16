@@ -16,6 +16,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_SYSTEM, type AgentEvent, type AgentMode, type AgentTask } from '@hassassin/tools';
+import { pluginToolName, type ActivePlugin } from './plugins.ts';
 
 export type CliId = 'claude' | 'codex';
 
@@ -123,11 +124,16 @@ export class LoginJob {
 
 const READ_ONLY_HINT = 'This conversation is in Ask mode: you can read the project but not change it. If the user asks for a change, describe it and tell them to switch the Agent tab to Agent mode.';
 
-function systemPrompt(mode: AgentMode): string {
-  return `${AGENT_SYSTEM}\n\nYou work through the "hassassin" tools only; they are already bound to the project the user has open, so never pass a project argument. Publish multi-step plans with hassassin update_tasks.${mode === 'ask' ? `\n\n${READ_ONLY_HINT}` : ''}`;
+function systemPrompt(mode: AgentMode, note = ''): string {
+  return `${AGENT_SYSTEM}\n\nYou work through the "hassassin" tools; they are already bound to the project the user has open, so never pass a project argument. Publish multi-step plans with hassassin update_tasks.${mode === 'ask' ? `\n\n${READ_ONLY_HINT}` : ''}${note ? `\n\n${note}` : ''}`;
 }
 
-const toolName = (n: string) => n.replace(/^mcp__hassassin__/, '');
+/** Tool names as the Agent tab shows them: Hassassin's bare, a plugin's as "<plugin>.<tool>". */
+const toolName = (n: string) => {
+  if (n.startsWith('mcp__hassassin__')) return n.slice('mcp__hassassin__'.length);
+  const m = /^mcp__([a-z][a-z0-9-]*)__(.+)$/.exec(n);
+  return m ? pluginToolName(m[1]!, m[2]!) : n;
+};
 
 /** One conversation with a CLI agent (each message is one CLI run, resuming the previous one). */
 export class CliAgentSession {
@@ -140,6 +146,9 @@ export class CliAgentSession {
   private sessionId: string | null = null;
   private child: ChildProcess | null = null;
   private agentName: string;
+  /** Plugins of the next message (set by the server before each send) and the note about them. */
+  plugins: ActivePlugin[] = [];
+  pluginNote = '';
 
   private bin: string;
 
@@ -167,27 +176,32 @@ export class CliAgentSession {
   private args(prompt: string): string[] {
     const env = this.mcpEnv();
     if (this.cli === 'claude') {
-      const mcp = { mcpServers: { hassassin: { command: process.execPath, args: [MCP_BIN, 'mcp'], env } } };
+      const servers: Record<string, unknown> = { hassassin: { command: process.execPath, args: [MCP_BIN, 'mcp'], env } };
+      for (const p of this.plugins) servers[p.manifest.id] = { command: p.command, args: p.args, env: p.env };
       return [
         '-p', prompt,
         '--output-format', 'stream-json', '--verbose',
-        '--mcp-config', JSON.stringify(mcp), '--strict-mcp-config',
+        '--mcp-config', JSON.stringify({ mcpServers: servers }), '--strict-mcp-config',
         '--tools', '',
-        '--allowedTools', 'mcp__hassassin',
+        '--allowedTools', ['mcp__hassassin', ...this.plugins.map((p) => `mcp__${p.manifest.id}`)].join(','),
         '--permission-mode', 'dontAsk',
-        '--append-system-prompt', systemPrompt(this.mode),
+        '--append-system-prompt', systemPrompt(this.mode, this.pluginNote),
         ...(this.sessionId ? ['--resume', this.sessionId] : []),
       ];
     }
     const toml = (s: string) => JSON.stringify(s);
-    const envToml = `{${Object.entries(env).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`;
-    // Replace the user's own MCP servers for this run: only Hassassin is offered.
-    const servers = `mcp_servers={hassassin={command=${toml(process.execPath)},args=[${toml(MCP_BIN)},"mcp"],env=${envToml}}}`;
+    const envOf = (e: Record<string, string>) => `{${Object.entries(e).map(([k, v]) => `${k}=${toml(v)}`).join(',')}}`;
+    const server = (command: string, args: string[], e: Record<string, string>) => `{command=${toml(command)},args=[${args.map(toml).join(',')}],env=${envOf(e)}}`;
+    // Replace the user's own MCP servers for this run: Hassassin and this project's plugins only.
+    const plugins = this.plugins.map((p) => `${JSON.stringify(p.manifest.id)}=${server(p.command, p.args, p.env)}`);
+    const servers = `mcp_servers={hassassin=${server(process.execPath, [MCP_BIN, 'mcp'], env)}${plugins.map((x) => `,${x}`).join('')}}`;
     // Sandbox through a config override: `codex exec resume` has no -s / --sandbox flag.
     const common = ['--json', '--skip-git-repo-check', '-c', 'sandbox_mode="read-only"', '-c', 'approval_policy="never"', '-c', servers];
     // Codex has no separate system prompt flag here: the instructions lead the first message,
     // and the mode is restated on each later one.
-    const text = this.sessionId ? `${this.mode === 'ask' ? `(${READ_ONLY_HINT})\n\n` : '(Agent mode: you may change the project.)\n\n'}${prompt}` : `<instructions>\n${systemPrompt(this.mode)}\n</instructions>\n\n${prompt}`;
+    // The plugins may change between messages, so their note goes with every message.
+    const note = this.pluginNote ? `<plugins>\n${this.pluginNote}\n</plugins>\n\n` : '';
+    const text = this.sessionId ? `${this.mode === 'ask' ? `(${READ_ONLY_HINT})\n\n` : '(Agent mode: you may change the project.)\n\n'}${note}${prompt}` : `<instructions>\n${systemPrompt(this.mode)}\n</instructions>\n\n${note}${prompt}`;
     return this.sessionId ? ['exec', 'resume', ...common, this.sessionId, text] : ['exec', ...common, text];
   }
 
@@ -228,7 +242,9 @@ export class CliAgentSession {
       if (e.type === 'thread.started' && typeof e.thread_id === 'string') this.sessionId = e.thread_id;
       const item = e.item as Record<string, unknown> | undefined;
       if (item?.type === 'mcp_tool_call') {
-        if (e.type === 'item.started') this.tool(String(item.id), String(item.tool), item.arguments, emit, names);
+        const server = typeof item.server === 'string' ? item.server : 'hassassin';
+        const tool = server === 'hassassin' ? String(item.tool) : `mcp__${server}__${String(item.tool)}`;
+        if (e.type === 'item.started') this.tool(String(item.id), tool, item.arguments, emit, names);
         else if (e.type === 'item.completed') {
           const r = item.result as { content?: { text?: string }[] } | null;
           this.result(String(item.id), !item.error && item.status !== 'failed', item.error ? String((item.error as { message?: string }).message ?? item.error) : r?.content?.map((c) => c.text ?? '').join('') ?? '', emit, names);

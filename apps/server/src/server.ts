@@ -34,6 +34,8 @@ import { AgentSession, runTool, TOOLS, type AgentEvent, type AgentMode, type Mod
 import { anthropicModel, hasAnthropicCredentials } from '../../../packages/tools/src/agentModel.ts';
 import { openLive, runLive, type LiveSession } from '../../cli/src/live.ts';
 import { CLI_LABEL, CliAgentSession, cliStatus, LoginJob, type CliId } from './cliAgents.ts';
+import { McpClient, PluginHost, pluginNote, pluginToolName, type ActivePlugin } from './plugins.ts';
+import type { ExternalTool } from '@hassassin/tools';
 
 interface Client {
   id: string;
@@ -75,7 +77,19 @@ interface Chat {
   agentUser: string;
   /** Each reply's range of transactions, so its edits can be undone together. */
   turns: Map<string, { from: number; to: number; undone: boolean }>;
+  /** Running plugin processes of this chat (API backend), started on first use. */
+  pluginClients: Map<string, McpClient>;
 }
+
+/** Stop a chat's connections: the live project link and its plugin processes. */
+const closeChat = (c: Chat) => {
+  c.live?.client.close();
+  for (const p of c.pluginClients.values()) p.close();
+  c.pluginClients.clear();
+};
+
+/** The model's name for a plugin tool: letters, digits, "_" and "-", at most 64 characters. */
+const modelToolName = (plugin: string, tool: string) => `${plugin}__${tool}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
 
 /** Requests from this machine (the CLI backends and sign-in act on the local user's accounts). */
 const isLocal = (req: IncomingMessage) => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '');
@@ -95,9 +109,10 @@ export async function startServer(opts: ServerOptions) {
 
   const agentModel: ModelCall | null = opts.agentModel !== undefined ? opts.agentModel : hasAnthropicCredentials() ? anthropicModel() : null;
   const chats = new Map<string, Chat>();
+  const pluginHost = new PluginHost(opts.dataDir);
   let boundPort = opts.port;
   const sweep = setInterval(() => {
-    for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (c.live?.client.close(), chats.delete(k));
+    for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (closeChat(c), chats.delete(k));
   }, 60 * 1000);
   sweep.unref?.();
 
@@ -119,6 +134,27 @@ export async function startServer(opts: ServerOptions) {
    * POST /api/agent/:id/stop?token= {chat}
    * The agent joins the shared project as a collaborator, so its edits reach everyone live.
    */
+  /** Plugin tools for the API backend: each call goes to the chat's plugin process, started (again) when needed. */
+  const externalTools = (chat: Chat, active: ActivePlugin[]): ExternalTool[] =>
+    active.flatMap((p) =>
+      p.tools.map((t) => ({
+        name: modelToolName(p.manifest.id, t.name),
+        display: pluginToolName(p.manifest.id, t.name),
+        description: t.description,
+        input_schema: t.inputSchema,
+        call: async (args: Record<string, unknown>) => {
+          let c = chat.pluginClients.get(p.manifest.id);
+          if (!c?.alive) {
+            c?.close();
+            c = new McpClient(p.command, p.args, p.env);
+            chat.pluginClients.set(p.manifest.id, c);
+            await c.start();
+          }
+          return c.callTool(t.name, args);
+        },
+      })),
+    );
+
   const agentApi = async (req: IncomingMessage, res: ServerResponse, url: URL) => {
     const parts = url.pathname.split('/').filter(Boolean); // api agent :id [stop]
     if (req.method === 'GET' && parts[2] === 'status') {
@@ -178,6 +214,12 @@ export async function startServer(opts: ServerOptions) {
       log(`${who} undid ${plan.count} agent change(s) on ${id}`);
       return json(res, 200, { ok: true, undone: plan.count });
     }
+    if (parts[3] === 'plugins') {
+      // Plugins installed on this server, which this project switched on, and its recent plugin calls.
+      const { plugins, problems } = await pluginHost.list(url.searchParams.get('refresh') === '1');
+      const enabled = Array.isArray(lp.doc.meta.agentPlugins) ? lp.doc.meta.agentPlugins : [];
+      return json(res, 200, { plugins, problems, enabled, log: await pluginHost.readLog(id, 30) });
+    }
     if (parts[3] === 'chats') {
       // Recent agent conversations on this project, newest last.
       const list = [...chats.values()].filter((c) => c.project === id).sort((x, y) => x.lastUsed - y.lastUsed).slice(-5);
@@ -201,7 +243,7 @@ export async function startServer(opts: ServerOptions) {
           model: agentModel!,
           runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
         });
-        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: agentName.slice(0, 40), turns: new Map() };
+        chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: agentName.slice(0, 40), turns: new Map(), pluginClients: new Map() };
       } else {
         const st = await cliStatus(backend);
         if (!st.installed) return json(res, 503, { error: `${CLI_LABEL[backend]} is not installed here (run pnpm install).` });
@@ -210,7 +252,7 @@ export async function startServer(opts: ServerOptions) {
         const link = (t: string | undefined) => `http://127.0.0.1:${boundPort}/?p=${id}&t=${t ?? tok}`;
         const cliName = `${agentName} · ${backend === 'claude' ? 'Claude Code' : 'Codex'}`;
         const session = new CliAgentSession({ cli: backend, editLink: link(role === 'edit' ? tok : undefined), viewLink: link(tokenFor('view') ?? tok), workDir: join(opts.dataDir, 'agent-work', chatId), agentName: cliName });
-        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: cliName.slice(0, 40), turns: new Map() };
+        chat = { id: chatId, project: id, backend, session, live: null, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: cliName.slice(0, 40), turns: new Map(), pluginClients: new Map() };
       }
       chats.set(chatId, chat);
     }
@@ -224,9 +266,21 @@ export async function startServer(opts: ServerOptions) {
       if (c0.events.length > 1200) c0.events.splice(0, c0.events.length - 1200);
       broadcast(lp, { t: 'agent', chat: chatId, by: c0.by, backend, event: e });
     };
+    // Plugin calls are logged per project (tool, arguments with secrets removed, result size).
+    const pluginCalls = new Map<string, { plugin: string; tool: string; input: unknown }>();
     const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend } | { type: 'edits'; turn: string; count: number; labels: string[] }) => {
       res.write(`data: ${JSON.stringify(e)}\n\n`);
       if (e.type !== 'chat') mirror(e as Record<string, unknown>);
+      if (e.type === 'tool' && e.name.includes('.')) {
+        const [plugin, ...rest] = e.name.split('.');
+        pluginCalls.set(e.id, { plugin: plugin!, tool: rest.join('.'), input: e.input });
+      } else if (e.type === 'tool_result' && pluginCalls.has(e.id)) {
+        const c = pluginCalls.get(e.id)!;
+        pluginCalls.delete(e.id);
+        pluginHost
+          .log(id, { chat: chatId, by: c0.by, plugin: c.plugin, tool: c.tool, args: c.input, ok: e.ok, bytes: (e.detail ?? e.summary ?? '').length })
+          .catch((err) => log(`plugin log: ${(err as Error).message}`));
+      }
     };
     send({ type: 'chat', chat: chatId, mode, backend });
     mirror({ type: 'user', text: prompt, by: c0.by });
@@ -238,7 +292,17 @@ export async function startServer(opts: ServerOptions) {
     const turnId = `t${Date.now().toString(36)}`;
     const from = lp.seq;
     try {
-      await chat.session.send(prompt, send, abort.signal);
+      // This project's plugins for this message; those that cannot run are left out with a note.
+      const { plugins: active, skipped } = await pluginHost.active(lp.doc.meta.agentPlugins, mode);
+      for (const s of skipped) send({ type: 'note', text: `Plugin ${s.id} ${s.reason}.` });
+      const note = pluginNote(active, skipped);
+      if (chat.session instanceof CliAgentSession) {
+        chat.session.plugins = active;
+        chat.session.pluginNote = note;
+        await chat.session.send(prompt, send, abort.signal);
+      } else {
+        await chat.session.send(prompt, send, abort.signal, { tools: externalTools(chat, active), note });
+      }
     } catch (e) {
       send({ type: 'error', message: (e as Error).message });
     } finally {
@@ -521,7 +585,7 @@ export async function startServer(opts: ServerOptions) {
     close: () =>
       new Promise<void>((r) => {
         clearInterval(sweep);
-        for (const c of chats.values()) c.live?.client.close();
+        for (const c of chats.values()) closeChat(c);
         for (const l of logins.values()) l.cancel();
         for (const c of wss.clients) c.terminate();
         wss.close();

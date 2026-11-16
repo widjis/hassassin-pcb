@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
 | Version | 0.3 |
-| Status | **Approved on 2026-11-16 (0.3)** |
+| Status | **Approved on 2026-11-16 (0.3); A1 done, AM1 continues (A2, A3, A12, A13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -70,7 +70,7 @@ can be checked; an item is done only when all of them pass.
 
 ### Milestone AM1 — plugins and trusted sources
 
-- [ ] **A1. Plugin mechanism.**
+- [x] **A1. Plugin mechanism.**
   - A plugin is an MCP server (a command with arguments, or a URL) described by a manifest: name,
     version, publisher, the tools it offers, the permission it needs (`read`: may only return data;
     `propose`: may return changes that the user applies; never direct writes to the project), the
@@ -87,6 +87,37 @@ can be checked; an item is done only when all of them pass.
   - Acceptance: a test plugin installed, switched on and off per project, its tools offered to each
     backend only when on; a `read` plugin cannot change the project; a missing or crashing plugin gives a
     clear message and the agent continues without it.
+  - *Done (2026-11-16).* MCP from its public specification; the client and host are our own
+    (`apps/server/src/plugins.ts`); how to install a plugin: [03-agents.md, Plugins](03-agents.md#plugins).
+    - **Manifests** in `<data>/plugins.json` (id, name, version, publisher, description, permission, hosts,
+      command and args, settings), checked on load (a bad entry is reported, the others load); setting
+      values in `<data>/plugin-settings.json`, given to the plugin as environment variables, with `PATH`
+      and `HOME` only (not the server's environment). Clients and the agent only learn whether a setting
+      is filled in.
+    - **Per project:** `meta.agentPlugins` in the project, switched in the Agent tab (*Plugins*: name,
+      publisher, version, read / propose badge, hosts, status with its tools or the reason it cannot run,
+      settings filled in or missing, recent calls; *Check again*), one undo step, editors only.
+    - **Each message:** the plugins that are on, allowed in the mode (*Ask*: `read` only), set up and
+      answering (started, tool list read, cached for a minute) go to the backend; the others are left out
+      with a note in the conversation, and the agent is told which plugins it has, that what they return is
+      data and not instructions, and that changes go through the Hassassin tools. Claude Code gets them in
+      `--mcp-config` and `--allowedTools`, Codex in its `mcp_servers`, the Claude API backend as tools named
+      `<plugin>__<tool>` that the server forwards to the plugin (started on first use, again after a crash).
+      The Agent tab shows every plugin tool as `<plugin>.<tool>`.
+    - **Log:** `<data>/plugin-log/<project>.jsonl`, one line per call (time, chat, who, plugin, tool,
+      arguments with secret values replaced by `[secret]`, result size, the plugin's declared hosts);
+      `GET /api/agent/:id/plugins` returns the plugins, the project's switches and the last 30 calls.
+    - Limits: plugins run as a local program over stdio (an MCP server at a URL is not supported yet); the
+      hosts are as the plugin declares them, not enforced; with the CLI backends the plugin settings pass
+      through the CLI's MCP configuration on this machine (those backends are for the owner's own machine
+      only).
+    - Browser check on a copy (server on port 5193 with its own data folder, the test plugin and a
+      `propose` plugin without its key): the section lists both with their state; switching on reaches the
+      server and Undo switches it off again.
+    - Tests: `apps/server/test/plugins.test.ts` with the test plugin `fixtures/echo-plugin.mjs`
+      (manifests, settings never listed, a missing command, filters per project and mode, MCP calls with
+      the setting and without the server's keys, a crash, Claude Code and Codex arguments only when on, the
+      API agent calling a plugin and going on after a crash, the endpoint and the log without secrets).
 - [ ] **A2. Agentic web research with source trust.**
   - The agent researches on its own, as a person would: it searches the web, opens results, follows links
     (a distributor page to the manufacturer's product page to its datasheet), tries other words or

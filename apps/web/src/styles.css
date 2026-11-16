@@ -242,6 +242,18 @@ button.link { background: none; border: none; padding: 0; color: var(--dim); tex
 
 .agent-tasks { margin: 8px 10px 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; }
 .agent-tasks:empty { display: none; }
+.agent-plugins { margin: 8px 10px 0; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 5px; font-size: 12px; }
+.agent-plugins .link { align-self: flex-start; font-size: 11.5px; }
+.plugin-row { border-top: 1px solid var(--line); padding-top: 5px; display: flex; flex-direction: column; gap: 2px; }
+.plugin-title { display: flex; gap: 6px; align-items: center; font-weight: 600; cursor: pointer; }
+.plugin-name { flex: 1; }
+.plugin-meta, .plugin-desc, .plugin-status, .plugin-note { font-size: 11.5px; line-height: 1.35; padding-left: 20px; }
+.plugin-ok { color: var(--ok, #4caf7d); }
+.agent-plugins .badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--line); text-transform: uppercase; letter-spacing: 0.03em; }
+.agent-plugins .badge.read { color: #6fb3ff; border-color: #6fb3ff55; }
+.agent-plugins .badge.propose { color: #f0b04a; border-color: #f0b04a55; }
+.plugin-call { font-size: 11.5px; padding-left: 4px; }
+.plugin-call.bad { color: var(--err, #e5675a); }
 .tasks-head { display: flex; gap: 6px; align-items: center; background: none; border: none; padding: 0; font-size: 12px; font-weight: 600; color: var(--text); }
 .tasks-bar { flex: 1; height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; margin-left: 4px; }
 .tasks-bar span { display: block; height: 100%; background: #4fd6a6; }

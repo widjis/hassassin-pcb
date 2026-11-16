@@ -109,6 +109,27 @@ How to work:
   - Required finishing step for the schematic stage, before update_pcb: when every block is wired and run_erc is clean, call compact_blocks, then tidy_wires, then run_erc again. Then name each block with add_group_box (refs of its parts, a short title such as "Power 20 V → 5 V"), add a note for any design decision a reader needs, and call set_sheet_frame.
 - Be concise. When you finish, summarise what changed and what the user should look at next.`;
 
+/**
+ * A tool from outside Hassassin for one message (an agent plugin, docs/06-agent-plugins.md A1): the model
+ * sees it as `name`, the Agent tab as `display`; it never changes the project.
+ */
+export interface ExternalTool {
+  /** Name for the model: letters, digits, "_" and "-" only. */
+  name: string;
+  /** Name shown to the user, e.g. "web.fetch_document". */
+  display: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  call: (args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>;
+}
+
+/** Extra context and tools for one message. */
+export interface TurnExtras {
+  tools?: ExternalTool[];
+  /** Text added to the turn's context (next to project_status), e.g. the plugins and their rules. */
+  note?: string;
+}
+
 export interface AgentOptions {
   model: ModelCall;
   /** Runs one tool on the project (throws ToolError for user-facing failures). */
@@ -138,6 +159,7 @@ export class AgentSession {
   mode: AgentMode;
   private opts: AgentOptions;
   private busy = false;
+  private external: ExternalTool[] = [];
 
   constructor(opts: AgentOptions) {
     this.opts = opts;
@@ -158,16 +180,20 @@ export class AgentSession {
       output_config: { effort: this.opts.effort ?? (this.mode === 'agent' ? 'high' : 'medium') },
       cache_control: { type: 'ephemeral' },
       system: AGENT_SYSTEM,
-      tools: agentTools(this.mode),
+      tools: [
+        ...agentTools(this.mode),
+        ...this.external.map((t) => ({ name: t.name, description: `[plugin ${t.display}] ${t.description}`, input_schema: t.input_schema as Anthropic.Beta.BetaTool.InputSchema, eager_input_streaming: true })),
+      ],
       tool_choice: { type: 'auto' },
       messages: this.messages,
     } satisfies AgentParams;
   }
 
   /** Send a user message and run until the model ends its turn. */
-  async send(prompt: string, emit: (e: AgentEvent) => void, signal?: AbortSignal): Promise<void> {
+  async send(prompt: string, emit: (e: AgentEvent) => void, signal?: AbortSignal, extras: TurnExtras = {}): Promise<void> {
     if (this.busy) throw new Error('The agent is still working on the previous message.');
     this.busy = true;
+    this.external = extras.tools ?? [];
     try {
       // Fresh project context with each user turn (kept out of the cached system prompt).
       let status = '';
@@ -180,6 +206,7 @@ export class AgentSession {
         role: 'user',
         content: [
           { type: 'text', text: `<project_status mode="${this.mode}">\n${clip(status, 20000)}\n</project_status>` },
+          ...(extras.note ? [{ type: 'text' as const, text: `<plugins>\n${extras.note}\n</plugins>` }] : []),
           { type: 'text', text: prompt },
         ],
       });
@@ -200,13 +227,23 @@ export class AgentSession {
         const results: Anthropic.Beta.BetaToolResultBlockParam[] = [];
         for (const u of uses) {
           const input = (u.input && typeof u.input === 'object' ? u.input : null) as Record<string, unknown> | null;
-          emit({ type: 'tool', id: u.id, name: u.name, input: u.input });
+          const ext = this.external.find((t) => t.name === u.name);
+          const shown = ext?.display ?? u.name;
+          emit({ type: 'tool', id: u.id, name: shown, input: u.input });
           if (!input) {
             results.push({ type: 'tool_result', tool_use_id: u.id, is_error: true, content: 'INVALID_JSON: the tool input was not a JSON object. Send it again.' });
             continue;
           }
           try {
             let out: unknown;
+            if (ext) {
+              // A plugin: its text goes back as it is (data from outside the project).
+              const r = await ext.call(input);
+              if (r.isError) throw new ToolError(r.text || `${ext.display} reported an error`);
+              results.push({ type: 'tool_result', tool_use_id: u.id, content: clip(r.text, 16000) });
+              emit({ type: 'tool_result', id: u.id, name: shown, ok: true, summary: `${r.text.length} characters`, detail: clip(r.text, 6000) });
+              continue;
+            }
             if (u.name === 'update_tasks') {
               if (!Array.isArray(input.tasks)) throw new ToolError('"tasks" must be an array');
               this.tasks = (input.tasks as AgentTask[]).map((t) => ({ title: String(t.title), status: (['todo', 'doing', 'done', 'blocked'].includes(t.status) ? t.status : 'todo') as AgentTask['status'], ...(t.stage ? { stage: String(t.stage) } : {}) }));
@@ -224,7 +261,7 @@ export class AgentSession {
           } catch (e) {
             const message = (e as Error).message ?? String(e);
             results.push({ type: 'tool_result', tool_use_id: u.id, is_error: true, content: message });
-            emit({ type: 'tool_result', id: u.id, name: u.name, ok: false, summary: message });
+            emit({ type: 'tool_result', id: u.id, name: shown, ok: false, summary: message });
           }
         }
         this.messages.push({ role: 'user', content: results });

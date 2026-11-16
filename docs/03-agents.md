@@ -148,3 +148,64 @@ Notes:
   are refused): a subscription is personal. A server shared with other people should use the API.
 - Claude Code is Anthropic software under its own license (not open source); Codex is Apache-2.0.
   Both are installed from npm and are not copied into this repository.
+
+## Plugins
+
+Plugins give the built-in agent tools from outside Hassassin (web research, distributor catalogues,
+datasheets …; [docs/06-agent-plugins.md](06-agent-plugins.md)). A plugin is an MCP server that runs as
+its own program over stdio. The owner of the server installs plugins once; each project switches them on
+in the Agent tab (*Plugins*), and every backend (Claude Code, Codex, Claude API) gets the plugins that are
+on, next to the Hassassin tools. The agent sees a plugin's tools as `<plugin>.<tool>`.
+
+**Installing:** list the plugin in `plugins.json` in the server's data folder (`.data/` with
+`pnpm run server`):
+
+```json
+{
+  "plugins": [
+    {
+      "id": "echo",
+      "name": "Echo (test plugin)",
+      "version": "1.0.0",
+      "publisher": "Hassassin tests",
+      "description": "Returns the text it is given.",
+      "permission": "read",
+      "hosts": [],
+      "command": "../apps/server/test/fixtures/echo-plugin.mjs",
+      "args": [],
+      "settings": [{ "key": "ECHO_KEY", "label": "Echo key", "secret": true, "required": true }]
+    }
+  ]
+}
+```
+
+- `id`: lower-case letters, digits and `-` (not `hassassin`). `command`: a program, or a path relative to
+  `plugins.json`; `.mjs` / `.js` files run with Node.
+- `permission`: `read` (returns data only; also offered in *Ask* mode) or `propose` (may return proposed
+  changes, which the agent applies with the Hassassin tools; *Agent* mode only). A plugin never gets a link
+  to the project, so it cannot change it itself.
+- `hosts`: the network hosts the plugin contacts, shown in the Agent tab and kept with every logged call
+  (declared by the plugin; not enforced by Hassassin).
+- `settings`: values the plugin needs (API keys …), given to it as environment variables. Their values go
+  in `plugin-settings.json` next to `plugins.json`, never in a project:
+
+  ```json
+  { "echo": { "ECHO_KEY": "…" } }
+  ```
+
+  The Agent tab shows only whether each setting is filled in. A plugin gets its settings, `PATH` and
+  `HOME`, not the server's own environment (no API keys of the server).
+
+**Switching on:** Agent tab → *Plugins* → the switch of a plugin (editors only). The switches are part of
+the project (`agentPlugins`), so they are one undoable step and travel with the file.
+
+**Checks and failures:** before each agent message the server starts every plugin that is on, reads its
+tools and stops it (cached for a minute; *Check again* in the Agent tab checks now). A plugin that is not
+installed, not set up or not answering is left out with a note in the conversation, and the agent works
+without it. A plugin that stops in the middle of a reply gives the agent an error for that call; the next
+call starts it again (Claude API backend; the CLIs manage their own plugin processes).
+
+**Log:** every plugin call is written to `plugin-log/<project>.jsonl` in the data folder (time, who asked,
+plugin, tool, arguments with secret values replaced by `[secret]`, result size, the plugin's hosts); the
+Agent tab shows the most recent calls.
+
