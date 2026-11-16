@@ -1371,7 +1371,7 @@ Findings in the v0.0.3 code that the items above answer:
     - Tests: `packages/tools/test/silk-text-p13.test.ts` (glyph set and grid, size / justify / rotation /
       mirror / upright, a part flipped to the bottom has its reference mirrored, every top text of the solar
       board is in its legend Gerber at its place).
-- [x] **P14. Teardrops and via stitching.**
+- [x] **P14. Teardrops and via stitching.** — `4383c70`
   - Optional teardrops on pad and via entries (rule per net class), filled as copper and checked by DRC.
   - Via stitching for a pour (grid pitch, edge distance), avoiding other copper and keep-out areas.
   - *Done (2026-11-16).* Reference: the KiCad 8 manual (teardrops: where they go, length and width as a
@@ -1405,7 +1405,7 @@ Findings in the v0.0.3 code that the items above answer:
       without pours keeps its old teardrop until the next refill (B).
     - Tests: `packages/tools/test/p14.test.ts` (shape, modes per class, DRC, Gerber regions, refill, a
       deleted trace, the solar board, stitching grid / edge / keep-out / replace).
-- [x] **P15. `.kicad_pcb` export.**
+- [x] **P15. `.kicad_pcb` export.** — `2a4b312`
   - A board made in Hassassin opens in KiCad 9 / 10 with the same parts, footprints, traces, vias, pours
     and outline; KiCad's DRC on it agrees with ours for the benchmark boards (differences listed and
     explained). Written from the public file format documentation only.
@@ -1448,6 +1448,10 @@ Findings in the v0.0.3 code that the items above answer:
       circle, more than the 10 µm margin the pours add). Round pads and rounded corners now have as many sides
       as keep the chords within 4 µm of the true arc. The lamp project's stored pour has the old shape until
       it is refilled.
+      Then, on the solar board with its pours filled here (not KiCad's fill), KiCad found the GND pour on
+      three pads of U1: custom pads were taken as their small anchor square in the copper (DRC, pours,
+      Gerbers), though drawn with their real shape. A custom pad is now its own polygon everywhere; the
+      solar board with teardrops and pours refilled here is clean in both DRCs.
     - Limits: custom pads keep their first shape only (as the importer reads them); trapezoid pads are
       written as rectangles (with a note); footprints are not linked to schematic symbols (no `path`), so
       KiCad's "update PCB from schematic" sees them as unlinked; our fill is written as it is (refilling in

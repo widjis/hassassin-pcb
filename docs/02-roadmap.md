@@ -512,6 +512,54 @@ Known limitations:
 - Next: milestone PM3 (manufacturing: more DRC checks, silkscreen in the Gerbers, teardrops, `.kicad_pcb`
   export).
 
+## PCB layout improvements, milestone PM3 (manufacturing confidence)
+
+Done under the work agreement [docs/05-pcb-improvements.md](05-pcb-improvements.md) (P12–P15): checks and
+output a fabricator and KiCad can trust. Each editor action is also a tool for agents.
+
+- **More DRC checks and waivers (P12):** courtyard overlap, silkscreen over pads, annular ring, hole to hole
+  (vias, pads, slots), traces with an unconnected end and vias joined on one layer only, keep-out areas;
+  every limit a rule; any DRC item waived with a reason, kept in the project and shown in Review; DRC runs
+  in a Web Worker, so the editor stays responsive on large boards.
+- **Silkscreen text (P13):** a stroke font drawn for this project (printable ASCII plus Ω µ ° ±) gives
+  board texts one geometry in the editor, the legend Gerbers and DRC; justify, rotation, mirrored on the
+  bottom, part texts kept upright. The third-party Gerber check (KiCad's GerbView) is still to do, so P13
+  stays open.
+- **Teardrops and via stitching (P14):** teardrops on vias, plated pads or all pads per net class, filled
+  as copper of the net and made again on every refill; stitching vias on a grid inside a net's pour on two
+  layers, clear of its edge, other copper and keep-outs.
+- **`.kicad_pcb` export (P15):** the board in KiCad 9's format (read by KiCad 10) with a `.kicad_pro` for
+  its net classes and rules, pours filled as here; KiCad's DRC (`kicad-cli`) agrees with ours on the
+  benchmark boards and a broken test board (`apps/cli/bench/kicad.ts`), and our importer reads it back with
+  every pad in place.
+- **Found by KiCad's DRC and fixed:** round pads and rounded corners had chords up to 11 µm inside the true
+  arc (pours came 1.5 µm too close); custom pads were taken as their small anchor in the copper (pours
+  filled here ran over three pads of the solar board's charger IC).
+
+Benchmarks: the solar MPPT board 0 errors in our DRC and in KiCad's (also with 80 teardrops and 19
+stitching vias); the RGB lamp 4 errors in both, at the same places (two stacked via pairs, two slight
+courtyard overlaps), left for the owner to fix or waive.
+
+| Review: the new checks, each with Waive (RGB lamp) | Board panel: teardrops and stitching (solar board) |
+|---|---|
+| ![The Review panel listing holes too close, courtyards overlap with the R3 / R4 and U2 / C7 items and their Waive buttons, part outside board and silkscreen over pad, next to the board zoomed on R3 and R4 and the inspector showing the annular ring and hole to hole rules](media/pm3-drc-review.jpg) | ![The Board panel with the Teardrops & stitching section (mode Vias + plated pads, Stitch /GND at 5 mm) next to the solar board with its legend texts in the stroke font](media/pm3-board-panel.jpg) |
+
+| The exported solar board in KiCad 10 (its 3D render) | Teardrops at the vias and stitching vias, as KiCad draws them |
+|---|---|
+| ![KiCad's 3D render of the solar MPPT board exported from Hassassin: parts, pours, the legend texts and the four mounting holes](media/pm3-kicad-solar.jpg) | ![A close KiCad render around U2 and the charger IC: traces flaring into their vias, and stitching vias in the ground pour](media/pm3-kicad-teardrops.jpg) |
+
+Known limitations:
+- P13's third-party Gerber check (GerbView) is not done yet.
+- Teardrops only on straight traces; a trace moved on a board without pours keeps its old teardrop until the
+  next refill.
+- The export is checked with KiCad 10 only (KiCad 9 is not installed here); footprints are not linked to
+  schematic symbols, so KiCad's "Update PCB from schematic" sees them as unlinked; custom pads keep their
+  first shape only.
+- KiCad also checks the solder mask (an opening over two nets) and silkscreen against silkscreen and the
+  board edge, which our DRC does not.
+- Projects saved before this release keep their pours as filled then (round and custom pads with the old
+  shapes) until they are refilled (B).
+
 ## Out of scope (for now)
 
 SPICE simulation, mechanical / enclosure design, firmware, wire harnesses, ordering from fabricators.

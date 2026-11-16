@@ -109,6 +109,18 @@ describe('P15: .kicad_pcb export', () => {
     expect(errors(back)).toEqual([]);
   });
 
+  it('a custom pad is its own polygon in the copper, so pours filled here keep clear of it (found by KiCad)', async () => {
+    const p = openProject([{ name: 'solar.kicad_pcb', text: solarText() }]);
+    const u1 = [...p.doc.nodes.values()].find((n) => n.type === 'element' && n.name === 'U1')!;
+    const pad9 = u1.children.map((c) => p.doc.nodes.get(c)!).find((n) => n.type === 'pad' && n.props.number === '9')!;
+    expect(p.engine.get(pad9.uid, 'padShape')!.value).toBe('custom');
+    const g = padGeom(p.doc, p.engine, pad9, p.copper)!;
+    expect(g.outline.length).toBe((p.engine.get(pad9.uid, 'points')!.value as Vec2[]).length);
+    expect(area(g.outline)).toBeGreaterThan(0.15 * 0.15 * 4);
+    await runTool(p, 'refill_pours', {});
+    expect(errors(p)).toEqual([]);
+  });
+
   it('the export tool writes the board and its project file, or one zip', async () => {
     const p = await fixtureMcu();
     const written = new Map<string, Uint8Array | string>();
@@ -138,6 +150,13 @@ describe.runIf(!!KICAD_CLI)('P15 in KiCad (kicad-cli)', { timeout: 120_000 }, ()
   it('the solar board: KiCad DRC finds nothing, as ours', () => {
     const p = openProject([{ name: 'solar.kicad_pcb', text: solarText() }]);
     expect(kicadDrc(exportOf(p, 'solar'))).toEqual({ errors: [], warnings: [], unconnected: 0 });
+  });
+
+  it('the solar board with teardrops and pours filled here: KiCad DRC clean, as ours', async () => {
+    const p = openProject([{ name: 'solar.kicad_pcb', text: solarText() }]);
+    await runTool(p, 'set_teardrops', { mode: 'through' });
+    expect(errors(p)).toEqual([]);
+    expect(kicadDrc(exportOf(p, 'solar-td')).errors).toEqual([]);
   });
 
   it('a board made here (bottom part, pour, teardrops, stitching, keep-out): KiCad DRC clean, as ours', async () => {

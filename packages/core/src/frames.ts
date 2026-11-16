@@ -61,7 +61,10 @@ export function padGeom(doc: Doc, engine: StyleEngine, pad: DocNode, copper: str
   const size: Vec2 = typeof sizeV === 'number' ? { x: sizeV, y: sizeV } : (asVec(sizeV) ?? { x: 1, y: 1 });
   const shape = String(engine.get(pad.uid, 'padShape')?.value ?? 'rect');
   const ratio = Number(engine.get(pad.uid, 'cornerRatio')?.value ?? 0.25);
-  const outline = padOutline(shape === 'custom' ? 'rect' : shape, size, ratio).map((p) => place(p, center, rot));
+  // A custom pad is its own polygon (in the pad's frame, as KiCad's primitives); without one, its anchor.
+  const prim = shape === 'custom' ? (engine.get(pad.uid, 'points')?.value as Vec2[] | undefined) : undefined;
+  const shapeLocal = Array.isArray(prim) && prim.length >= 3 ? prim : padOutline(shape === 'custom' ? 'rect' : shape, size, ratio);
+  const outline = shapeLocal.map((p) => place(p, center, rot));
   const raw = engine.get(pad.uid, 'layers')?.value;
   const layers = (Array.isArray(raw) ? (raw as string[]) : []).flatMap((l) => (l === '*' ? copper : [l]));
   const holeV = engine.get(pad.uid, 'holeSize')?.value;
