@@ -2,6 +2,8 @@
  * Line icons for the layout toolbar, drawn for this app in the style of the rail icons (20 × 20, 1.5 px
  * stroke). The button's name moves to its tooltip and aria-label; menus keep a small ▾.
  */
+import { tipOf } from './tooltip.ts';
+
 const svg = (body: string) =>
   `<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 
@@ -102,6 +104,6 @@ export function iconize(btn: HTMLElement, icon: ToolIcon, name: string, menu = f
   btn.classList.add('ico');
   btn.innerHTML = TOOL_ICONS[icon] + (menu ? '<span class="caret">▾</span>' : '');
   btn.setAttribute('aria-label', name);
-  const t = btn.getAttribute('title') ?? '';
+  const t = tipOf(btn);
   if (!t.toLowerCase().startsWith(name.toLowerCase())) btn.title = t ? `${name} — ${t}` : name;
 }

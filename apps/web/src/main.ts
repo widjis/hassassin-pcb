@@ -15,6 +15,7 @@ import { mountAgent } from './ui/agent.ts';
 import { mountBoard } from './ui/board.ts';
 import { initResizers, toggleLeft } from './ui/resize.ts';
 import { iconize, PALETTE_NAMES, TOOL_ICONS, type ToolIcon } from './ui/toolIcons.ts';
+import { initTooltips } from './ui/tooltip.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -69,6 +70,7 @@ loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmWithAsmJsF
   .catch((e) => console.error('Geometry engine failed to load', e));
 
 initResizers(document.querySelector<HTMLElement>('.workspace')!);
+initTooltips();
 
 const showTab = (name: string) => rail.show(name);
 // ---- File menu ----

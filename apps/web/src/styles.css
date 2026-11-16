@@ -474,3 +474,5 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 /* The tool palette on the right of the board (KiCad 8's right toolbar), styled as the rail. */
 .rail.palette { left: auto; right: 8px; justify-content: flex-start; gap: 6px; }
 .rail.palette.hidden { display: none; }
+/* Quick tooltips (ui/tooltip.ts), in place of the browser's slow ones. */
+.qtip { position: fixed; z-index: 200; display: none; max-width: 340px; padding: 5px 8px; border-radius: 6px; background: #1d2028; color: var(--text); border: 1px solid var(--line); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); font-size: 11.5px; line-height: 1.4; pointer-events: none; white-space: normal; }

@@ -352,6 +352,9 @@ document before work on a measured item starts.
     entry, Net label, Sub-sheet and Add a part in a palette on the right; Annotate, Frame, Export, Compact,
     Tidy wires, Update PCB and Update from PCB as icons on top (the drop-downs stay text). Approved from a
     screenshot ("Keep them").
+    Quick tooltips (owner: "the tooltips take too long"): the browser's `title` tooltip waits about a
+    second and cannot be changed, so `apps/web/src/ui/tooltip.ts` shows the same text after 150 ms (at once
+    when moving on from one tooltip to the next), beside the side palettes and below other controls.
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner
