@@ -64,6 +64,7 @@ import {
   busEntryAt,
   kicadNetlist,
   kicadSchematic,
+  kicadPcb,
   describePinPad,
   generateFootprint,
   genericFootprint,
@@ -2503,6 +2504,34 @@ export const TOOLS: ToolDef[] = [
         written.push(path);
       }
       return { written, symbols: r.symbols, sheets: r.sheets, ...(r.warnings.length ? { warnings: r.warnings } : {}) };
+    },
+  },
+  {
+    name: 'export_kicad_pcb',
+    description: 'Export the board as a KiCad board file (.kicad_pcb, KiCad 9 / 10) plus a .kicad_pro with the design rules and net classes. out: path of the .kicad_pcb (the .kicad_pro is written next to it) or of a .zip with both. Parts with their pads, graphics and texts; traces, arcs, vias; pours with their current fill; keep-out areas; teardrops; the board outline.',
+    mutates: false,
+    input: { type: 'object', properties: { out: { type: 'string', description: '.kicad_pcb path, or a .zip' } }, required: ['out'] },
+    run: async (p, a, ctx) => {
+      if (!ctx.writeFile) throw new ToolError('This host cannot write files.');
+      const out = str(a.out, 'out');
+      const zipped = /\.zip$/i.test(out);
+      if (!zipped && !/\.kicad_pcb$/i.test(out)) throw new ToolError('out must end in .kicad_pcb or .zip');
+      const base = out.split(/[\\/]/).pop()!;
+      const name = zipped ? (p.doc.meta.projectName ? String(p.doc.meta.projectName) : p.name.replace(/\.(hpcb|kicad_pcb)$/i, '')) : base.replace(/\.kicad_pcb$/i, '');
+      const r = kicadPcb(p.doc, p.engine, { project: name || 'board', layers: p.layers.map((l) => l.name) });
+      const extra = { ...r.stats, ...(r.warnings.length ? { warnings: r.warnings } : {}) };
+      if (zipped) {
+        await ctx.writeFile(out, zip(r.files.map((f) => ({ name: f.name, data: f.text }))));
+        return { written: out, files: r.files.map((f) => f.name), ...extra };
+      }
+      const dir = out.slice(0, out.length - base.length);
+      const written: string[] = [];
+      for (const f of r.files) {
+        const path = f.name === r.board ? out : dir + f.name;
+        await ctx.writeFile(path, f.text);
+        written.push(path);
+      }
+      return { written, ...extra };
     },
   },
   {

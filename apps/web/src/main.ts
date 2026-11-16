@@ -1,5 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
-import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
+import { describeBackChange, kicadNetlist, kicadPcb, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
 import type { DrawKind } from './tools/draw.ts';
@@ -683,6 +683,18 @@ $('fabBtn').addEventListener('click', () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   app.say(`Exported ${r.name}${r.notes.length ? ' — ' + r.notes[0] : ''}`);
+});
+$('pcbKicadBtn').addEventListener('click', () => {
+  if (!app.doc || !app.engine) return app.say('Open or create a project first.');
+  const base = (app.fileName || 'board').replace(/\.[^.]+$/, '').replace(/[^\w.-]+/g, '_') || 'board';
+  const r = kicadPcb(app.doc, app.engine, { project: base, layers: app.layers.map((l) => l.name) });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([zip(r.files.map((f) => ({ name: f.name, data: f.text }))) as BlobPart], { type: 'application/zip' }));
+  a.download = `${base}-kicad-pcb.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  const s = r.stats;
+  app.say(`Exported ${base}-kicad-pcb.zip — ${s.footprints} parts, ${s.traces} traces, ${s.vias} vias, ${s.zones} pours; open ${r.board} in KiCad 9 or 10${r.warnings.length ? ` · ${r.warnings[0]}` : ''}`);
 });
 $('schKicadBtn').addEventListener('click', () => {
   if (!app.doc || !app.engine) return app.say('Open or create a project first.');

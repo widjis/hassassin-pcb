@@ -20,6 +20,7 @@ export * from './ercSettings.ts';
 export * from './backAnnotate.ts';
 export * from './kicadNetlist.ts';
 export * from './kicadSchematic.ts';
+export * from './kicadPcb.ts';
 export * from './erc.ts';
 export * from './sync.ts';
 export * from './symbolGen.ts';

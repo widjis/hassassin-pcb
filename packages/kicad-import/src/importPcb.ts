@@ -406,8 +406,14 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
     }
   }
 
-  // Zones.
+  // Zones. Teardrop zones are left out: our teardrops are made from the `teardrops` rule (P14), linked to
+  // their trace and pad, and come back on the next refill once the rule is set.
+  let teardropZones = 0;
   for (const z of children(root, 'zone')) {
+    if (child(child(z, 'attr') ?? [], 'teardrop')) {
+      teardropZones++;
+      continue;
+    }
     stats.zones!++;
     const net = netName(z);
     const zoneLayers = child(z, 'layers') ? layersOf(z) : [str(child(z, 'layer')?.[1]) ?? 'F.Cu'];
@@ -448,6 +454,7 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
     });
   }
 
+  if (teardropZones) warnings.push({ message: `Left out ${teardropZones} teardrop zone${teardropZones === 1 ? '' : 's'}; set the teardrops rule (Board panel, set_teardrops) to make teardrops again.` });
   if (!stats.footprints && !stats.traces) warnings.push({ message: 'The board has no footprints or tracks.' });
   return { doc, layers, warnings, stats };
 }

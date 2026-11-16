@@ -1405,10 +1405,56 @@ Findings in the v0.0.3 code that the items above answer:
       without pours keeps its old teardrop until the next refill (B).
     - Tests: `packages/tools/test/p14.test.ts` (shape, modes per class, DRC, Gerber regions, refill, a
       deleted trace, the solar board, stitching grid / edge / keep-out / replace).
-- [ ] **P15. `.kicad_pcb` export.**
+- [x] **P15. `.kicad_pcb` export.**
   - A board made in Hassassin opens in KiCad 9 / 10 with the same parts, footprints, traces, vias, pours
     and outline; KiCad's DRC on it agrees with ours for the benchmark boards (differences listed and
     explained). Written from the public file format documentation only.
+  - *Done (2026-11-16).* Written from KiCad's public file format documentation and example files.
+    - **Board file** (`packages/core/src/kicadPcb.ts`): format version 20241229 (KiCad 9.0's, also read by
+      KiCad 10), KiCad 9 layer ids, numbered nets. Parts become footprints in their own frame (pads, graphics,
+      texts; the reference text as the Reference field, other values as hidden fields; a part on the bottom
+      is a B.Cu footprint with mirrored texts); traces, arcs, vias; pours become zones with their outline,
+      clearance, thermal settings and priority, and with our fill as the zone's filled areas (each hole
+      joined to the outline by a zero-width cut, as KiCad stores them), so the board opens filled as it is
+      here; keep-out areas become rule areas; teardrops become teardrop zones; board graphics and texts as
+      they are. A footprint keeps its library name; a generated one gets the KiCad library name it maps to
+      (as the netlist export, S15), else its own name.
+    - **Project file:** one net class per set of net rules (clearance, trace width, via size), with its nets
+      by name; the board minimums (trace width, annular ring, hole to hole, edge clearance, via and drill
+      size); holes too close and holes on top of each other are errors, as in our DRC.
+    - **Editor:** File → "Export KiCad board (.zip)". **Tool:** `export_kicad_pcb` (out: a `.kicad_pcb`, the
+      `.kicad_pro` next to it, or a `.zip`). Bench: `apps/cli/bench/kicad.ts` exports boards, runs KiCad's
+      DRC (`kicad-cli`) on them, prints both DRCs and reads the file back with our importer.
+    - **Importer:** teardrop zones of a KiCad file are left out with a note (our teardrops come from the
+      `teardrops` rule), not read as pours.
+    - **Third-party check** with KiCad 10.0.7 installed on the owner's machine (`kicad-cli`: DRC and 3D
+      render of the exported boards; KiCad 9 is not installed, so the file is checked only as KiCad 10
+      reads it):
+
+      | Board (copy) | Our DRC (errors) | KiCad DRC (errors) | Round trip (our importer) |
+      |---|---|---|---|
+      | Solar MPPT sample | 0 | 0, no warnings, 0 unconnected | 158 pads in place, 395 traces, 43 vias, 2 pours, 4 keep-outs; 0 errors |
+      | Fixture MCU, made here (bottom part, 2-layer pour, 27 teardrops, stitching, keep-out) | 0 | 0, 0 unconnected | 69 pads in place, traces / vias / pours equal; 0 errors |
+      | Same, C1 moved onto traces | 9 short / clearance + 1 courtyard | shorts / clearances at the same place + the courtyard | — |
+      | RGB lamp (pours refilled) | 2 courtyard overlap, 2 hole to hole | 2 courtyards overlap, 1 hole to hole, 1 holes co-located (same places) | 141 pads in place; 4 errors → 4 |
+
+      Differences, explained: KiCad counts a short or clearance once per pair of items (ours once per
+      place) and reports copper in a pour of another net as a clearance of 0; KiCad also checks the solder
+      mask (a mask opening over two nets), silkscreen against silkscreen and silkscreen against the board
+      edge, which we do not (our nearest: a part outside the board); KiCad warns that a generated footprint
+      differs from the KiCad library footprint of the same name (expected: it is ours).
+    - **Found and fixed on the way:** KiCad measured a pour 0.2985 mm from the round test pads of the lamp
+      (rule 0.3 mm): round pads were polygons of too few sides (18 for a 1.5 mm pad, chords 11 µm inside the
+      circle, more than the 10 µm margin the pours add). Round pads and rounded corners now have as many sides
+      as keep the chords within 4 µm of the true arc. The lamp project's stored pour has the old shape until
+      it is refilled.
+    - Limits: custom pads keep their first shape only (as the importer reads them); trapezoid pads are
+      written as rectangles (with a note); footprints are not linked to schematic symbols (no `path`), so
+      KiCad's "update PCB from schematic" sees them as unlinked; our fill is written as it is (refilling in
+      KiCad gives KiCad's own fill).
+    - Tests: `packages/tools/test/kicad-pcb-p15.test.ts` (hole joining, the file and project contents, the
+      round trip of a board made here and of the solar board, the tool; with KiCad installed: KiCad's DRC
+      on the solar board, on a board made here and on a broken one).
 
 **PM3 done when:** every item above is checked.
 

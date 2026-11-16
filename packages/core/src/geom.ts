@@ -71,7 +71,13 @@ export function arcPoints(s: Vec2, m: Vec2, e: Vec2): Vec2[] {
   return out;
 }
 
-const circleSegments = (r: number) => Math.max(10, Math.min(48, Math.ceil(r * 24)));
+/** Largest gap between an arc and the chords drawn for it (mm): below the 10 µm margin the pours and DRC add
+ *  to every clearance (`ARC_MARGIN`), so polygonal pads never come closer than the true round ones. */
+const ARC_CHORD_TOL = 0.004;
+/** Chords needed for an arc of radius r and the given angle (radians), at least `min`, at most `max`. */
+const arcSegments = (r: number, angle: number, min: number, max: number) =>
+  r <= ARC_CHORD_TOL ? min : Math.max(min, Math.min(max, Math.ceil(angle / (2 * Math.acos(1 - ARC_CHORD_TOL / r)))));
+const circleSegments = (r: number) => arcSegments(r, Math.PI * 2, 10, 128);
 
 export function roundedRectPoints(w: number, h: number, radius: number): Vec2[] {
   const r = Math.max(0, Math.min(radius, w / 2, h / 2));
@@ -85,9 +91,10 @@ export function roundedRectPoints(w: number, h: number, radius: number): Vec2[] 
     [-hw + r, hh - r, Math.PI / 2],
     [-hw + r, -hh + r, Math.PI],
   ];
+  const k = arcSegments(r, Math.PI / 2, 6, 32);
   for (const [cx, cy, a0] of corners) {
-    for (let i = 0; i <= 6; i++) {
-      const a = a0 + (i / 6) * (Math.PI / 2);
+    for (let i = 0; i <= k; i++) {
+      const a = a0 + (i / k) * (Math.PI / 2);
       out.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
     }
   }
