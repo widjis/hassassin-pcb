@@ -7,7 +7,7 @@
  * the Claude API) and joins the shared project as a collaborator, so its edits are live,
  * undoable and in the history. The conversation is kept per project in this browser.
  */
-import { aiFlowOf, computeGates, nextStage, STAGE_TITLES, AI_STAGES, type AgentQuestion } from '@hassassin/tools';
+import { aiFlowOf, computeGates, isGoAhead, nextStage, STAGE_TITLES, AI_STAGES, type AgentQuestion } from '@hassassin/tools';
 import type { App } from '../app.ts';
 import type { Collab } from '../collab.ts';
 import { clear, h } from './dom.ts';
@@ -247,7 +247,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
         { class: 'flow-head' },
         h('span', { class: 'flow-badge' }, 'AI Full'),
         h('span', {}, f.done ? 'Every stage done' : `Stage ${n} of ${AI_STAGES.length} · ${STAGE_TITLES[f.stage]}`),
-        h('span', { class: 'dim' }, f.done ? '' : f.waiting ? '· waiting for you' : busy ? '· working' : ''),
+        h('span', { class: 'dim' }, busy ? '· working' : f.done ? '' : f.waiting ? '· waiting for you' : ''),
       ),
       h('div', { class: 'flow-steps' }, ...AI_STAGES.map((s, i) => h('span', { class: `flow-step${i < n - 1 || f.done || (s === f.stage && f.waiting) ? ' done' : s === f.stage ? ' now' : ''}`, title: STAGE_TITLES[s] }))),
     );
@@ -499,6 +499,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     bytes: number;
   }
   let plugins: { plugins: PluginInfo[]; problems: { id: string; problems: string[] }[]; log: PluginLog[] } | null = null;
+  /** The server could not list plugins (an older server, or not reachable). */
+  let pluginsError = '';
   let pluginsOpen = false;
   let canEdit = false;
   const enabledPlugins = (): string[] => {
@@ -509,10 +511,13 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     if (!collab.session) return;
     const q = `token=${encodeURIComponent(collab.session.token)}${refresh ? '&refresh=1' : ''}`;
     const [list, info] = await Promise.all([
-      fetch(`/api/agent/${collab.session.id}/plugins?${q}`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`/api/agent/${collab.session.id}/plugins?${q}`)
+        .then((r) => (r.ok ? r.json() : ((pluginsError = r.status === 404 || r.status === 400 ? 'This server does not know plugins yet: restart it with the current version.' : `The server answered ${r.status}.`), null)))
+        .catch(() => ((pluginsError = 'The server is not reachable.'), null)),
       collab.info().catch(() => null),
     ]);
     plugins = list;
+    if (list) pluginsError = '';
     canEdit = info?.role === 'edit';
     drawPlugins();
   };
@@ -533,11 +538,11 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       { class: 'tasks-head', title: 'Tools from outside Hassassin that the agent may use in this project', onclick: () => ((pluginsOpen = !pluginsOpen), pluginsOpen ? void loadPlugins() : drawPlugins()) },
       h('span', {}, pluginsOpen ? '▾' : '▸'),
       h('span', {}, 'Plugins'),
-      h('span', { class: 'dim' }, list.length ? `${on.length} of ${list.length} on` : 'none installed'),
+      h('span', { class: 'dim' }, !plugins ? (pluginsError ? 'not available' : '…') : list.length ? `${on.length} of ${list.length} on` : 'none installed'),
     );
     pluginBox.append(head);
     if (!pluginsOpen) return;
-    if (!plugins) return void pluginBox.append(h('div', { class: 'dim' }, 'Loading…'));
+    if (!plugins) return void pluginBox.append(h('div', { class: pluginsError ? 'err-text plugin-note' : 'dim' }, pluginsError || 'Loading…'));
     if (!list.length)
       pluginBox.append(h('div', { class: 'dim plugin-note' }, 'No plugins are installed on this server. The owner lists them in plugins.json in the server\'s data folder (see docs/03-agents.md).'));
     for (const p of list) {
@@ -647,6 +652,10 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     }
     if (text === undefined) input.value = '';
     autoGrow();
+    // A typed "lanjut" / "continue" while an AI Full stage waits is the Continue button (A14).
+    const flow = aiFlowOf(app.doc);
+    const nxt = flow?.mode === 'full' && flow.waiting && !flow.done ? nextStage(flow.stage) : null;
+    if (nxt && isGoAhead(prompt)) app.apply(`AI Full: start ${STAGE_TITLES[nxt]}`, [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: nxt, waiting: false } }]);
     if (!items.length) clear(log), log.append(typing);
     const user: Item = { kind: 'user', text: prompt };
     items.push(user);

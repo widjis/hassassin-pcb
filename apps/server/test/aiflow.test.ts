@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toFile } from '@hassassin/core';
 import {
-  agentTools, aiFlowNote, aiFlowOf, AGENT_SYSTEM, AgentSession, DEFAULT_LIMITS, newProject, parseQuestions, projectNameFrom, runTool, wizardPrompt,
+  agentTools, aiFlowNote, aiFlowOf, isGoAhead, AGENT_SYSTEM, AgentSession, DEFAULT_LIMITS, newProject, parseQuestions, projectNameFrom, runTool, wizardPrompt,
   type AgentEvent, type AgentParams, type ModelCall,
 } from '@hassassin/tools';
 import { CliAgentSession } from '../src/cliAgents.ts';
@@ -49,6 +49,11 @@ describe('AI Full stages (A14)', () => {
     expect(note).toContain('Never start the Components stage yourself');
     f.doc.meta.aiFlow = { mode: 'full', stage: 'schematic', waiting: true };
     expect(aiFlowNote(f.doc)).toContain('the user has not continued yet');
+  });
+
+  it('a typed go-ahead counts as Continue; other messages do not', () => {
+    for (const t of ['lanjut', 'Lanjut!', 'lanjutkan', 'oke lanjut', 'ya, lanjut', 'gas', 'continue', 'go ahead', 'next', 'lanjut ke tahap berikutnya']) expect(isGoAhead(t), t).toBe(true);
+    for (const t of ['lanjut tapi ganti sensornya ke AHT20', 'ganti LED', 'continue with 4 layers instead', 'ok']) expect(isGoAhead(t), t).toBe(false);
   });
 
   it('builds the first message from the wizard, and a project name', () => {

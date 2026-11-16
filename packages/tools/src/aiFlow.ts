@@ -133,6 +133,12 @@ export function wizardPrompt(a: WizardAnswers): string {
     .join('\n\n');
 }
 
+/** A message that only says "go on" (English or Indonesian): while a stage waits it starts the next one. */
+export function isGoAhead(text: string): boolean {
+  const t = text.trim().toLowerCase().replace(/[.!…]+$/, '');
+  return /^(lanjut(kan)?( aja| saja| ya)?|ya,? lanjut(kan)?|oke?,? lanjut(kan)?|gas|next|continue|go( on| ahead)?|ok(ay)?,? (continue|go on)|proceed|lanjut ke (tahap )?(berikut(nya)?|selanjutnya))$/.test(t);
+}
+
 /** A short project name from the wizard's description. */
 export function projectNameFrom(description: string): string {
   const words = description.replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter(Boolean).slice(0, 5).join(' ');
