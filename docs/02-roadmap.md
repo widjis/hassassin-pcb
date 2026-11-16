@@ -512,7 +512,7 @@ Known limitations:
 - Next: milestone PM3 (manufacturing: more DRC checks, silkscreen in the Gerbers, teardrops, `.kicad_pcb`
   export).
 
-## PCB layout improvements, milestone PM3 (manufacturing confidence)
+## PCB layout improvements, milestone PM3 (v0.4.0)
 
 Done under the work agreement [docs/05-pcb-improvements.md](05-pcb-improvements.md) (P12–P15): checks and
 output a fabricator and KiCad can trust. Each editor action is also a tool for agents.
