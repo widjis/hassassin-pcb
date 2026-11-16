@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/07-desktop-app.md` |
-| Version | 0.2 |
-| Status | **Draft, waiting for the owner's answers and approval; to start after A1 of [06-agent-plugins.md](06-agent-plugins.md)** |
+| Version | 0.3 |
+| Status | **Draft 0.3 with the owner's answers, waiting for approval; to start after every item of [06-agent-plugins.md](06-agent-plugins.md) is done (AM1–AM3)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) and the fixes after it |
@@ -48,7 +48,7 @@ conversations, and a new project starts with none.
 
 ## 3. Scope
 
-Three milestones, in order. DM1 makes the existing web app local-first (useful with `pnpm start` too), DM2
+Three milestones, in order, started once [06-agent-plugins.md](06-agent-plugins.md) is done. DM1 makes the existing web app local-first (useful with `pnpm start` too), DM2
 wraps it as a desktop app, DM3 keeps collaboration working between desktop apps. Each item has acceptance
 criteria that can be checked; an item is done only when all of them pass.
 
@@ -65,7 +65,7 @@ criteria that can be checked; an item is done only when all of them pass.
     edits it, with no Share step; the old project is untouched; nothing is sent to another host (checked
     with the server's request log).
 - [ ] **D2. A project on disk with its own data.**
-  - A project is a `.hpcb` file with a companion folder next to it (`<name>.hassassin/`) holding what belongs
+  - A project is a `.hpcb` file with a companion folder (owner's choice) next to it (`<name>.hassassin/`) holding what belongs
     to the project but not to the design: agent chats (D3), the plugin call log (A1), stored datasheets (A3),
     saved versions, the undo history since opening, and the autosave.
   - Opening a `.hpcb` without a companion folder works as today; the folder is made on first save. A KiCad
@@ -93,7 +93,8 @@ criteria that can be checked; an item is done only when all of them pass.
 ### Milestone DM2 — desktop app
 
 - [ ] **D5. The app shell.**
-  - A desktop shell starts the local server (on a free `127.0.0.1` port, with a secret per launch so other
+  - The shell is **Electron** (owner's choice; it carries Node, which the server and the agent CLIs need). It
+    starts the local server (on a free `127.0.0.1` port, with a secret per launch so other
     programs on the machine cannot use it) and opens the editor in its window. One instance; opening a file
     while it runs opens it in the running app.
   - Native menus (File: New, Open, Open recent, Save, Save as, Export; Edit; View; Help), file associations
@@ -119,8 +120,9 @@ criteria that can be checked; an item is done only when all of them pass.
     (AppImage) builds come once the app is ready for version 1.0.0; until then the code keeps them possible
     (no macOS-only calls outside the shell's small interfaces), but they are not built or tested.
   - The app checks GitHub Releases for a newer version and says so (it does not update itself).
-  - Code signing and notarisation where the owner has the accounts (see open questions); unsigned builds
-    otherwise, with the steps to open them written in the release notes.
+  - **Unsigned builds for now** (no Apple Developer account yet): the release notes say how to open them
+    (right-click → Open, or System Settings → Privacy & Security → Open Anyway). Signing and notarisation
+    are added when an account exists, as a change to this document.
   - Acceptance: the macOS builds install and open the solar sample on the owner's Mac (Apple silicon) and on
     an Intel Mac or under Rosetta; the Windows and Linux checks are part of the 1.0.0 release.
 
@@ -188,25 +190,21 @@ that completes it, and adds the commit id after the item name.
 - Every approved change is recorded below, with the date and a short reason, and the document version
   goes up (0.2, 0.3 …).
 
-### Open questions for the owner (before approval)
+### Owner's answers to the open questions (2026-11-16)
 
-1. **Desktop shell:** Electron (MIT; carries Node, which the server and the agent CLIs need, so it is the
-   shortest way; packages of about 100–150 MB) or Tauri (MIT / Apache-2.0; smaller window layer, but the
-   Node server must ship as a separate program next to it)? The implementer's recommendation: Electron.
-2. ~~**Systems**~~ — answered 2026-11-16: macOS first; Windows and Linux when the app reaches 1.0.0 (D8).
-3. **Code signing:** is there an Apple Developer account (and a Windows signing certificate) to sign the
-   builds, or are unsigned builds fine for now?
-4. **Project on disk:** a `.hpcb` with a companion folder (proposed, keeps today's files opening), or one
-   folder per project (`<name>/<name>.hpcb` plus its data)?
-5. **Order:** DM1–DM3 right after A1, before AM2 / AM3 of [06-agent-plugins.md](06-agent-plugins.md)
-   (component selection and datasheets), or after them?
+1. Desktop shell: Electron (D5).
+2. Systems: macOS first; Windows and Linux when the app reaches 1.0.0 (D8).
+3. Code signing: no Apple Developer account yet, so unsigned builds for now (D8).
+4. Project on disk: a `.hpcb` with a companion folder (D2).
+5. Order: after every item of [06-agent-plugins.md](06-agent-plugins.md) is done.
 
 ### Change log
 
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 0.1 | 2026-11-16 | First draft | — |
-| 0.2 | 2026-11-16 | Owner's answer on systems: macOS first, Windows and Linux at 1.0.0 (D8, verification). Other open questions still open. | Answer by the owner in chat; approval pending |
+| 0.2 | 2026-11-16 | Owner's answer on systems: macOS first, Windows and Linux at 1.0.0 (D8, verification). Other open questions still open. | Answer by the owner in chat |
+| 0.3 | 2026-11-16 | Owner's answers: Electron (D5), unsigned macOS builds until there is an Apple Developer account (D8), `.hpcb` with a companion folder (D2), work after all of 06 (AM1–AM3). | Answers by the owner in chat; approval pending |
 
 ## Approval
 
