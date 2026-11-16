@@ -544,3 +544,15 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .np-checks { display: flex; gap: 14px; }
 .np-checks label { display: inline-flex; gap: 5px; align-items: center; color: var(--text); }
 .np-summary { font-size: 12.5px; line-height: 1.4; }
+
+/* Whether an agent works on the project (A14). */
+.agent-status { margin: 8px 10px 0; display: flex; flex-direction: column; gap: 4px; }
+.agent-status:empty { display: none; }
+.status-row { display: flex; gap: 6px; align-items: center; font-size: 12px; line-height: 1.35; }
+.status-row.idle { color: var(--dim); }
+.status-row.working { color: var(--text); }
+.status-row .link { margin-left: auto; flex: none; }
+.live-dot.pulse { animation: dot-pulse 1.2s ease-in-out infinite; }
+@keyframes dot-pulse { 50% { opacity: 0.35; } }
+.agent-task.doing.stalled .tick { animation: none; border: 1.5px solid #f0b04a; }
+.tasks-stopped { font-size: 11px; }

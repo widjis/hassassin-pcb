@@ -167,6 +167,23 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   const loginBox = h('div', { class: 'agent-login' });
   const taskBox = h('div', { class: 'agent-tasks' });
   const flowBox = h('div', { class: 'agent-flow' });
+  const statusBox = h('div', { class: 'agent-status' });
+  /**
+   * Agents running on this project, as the server reports them (its mirror of every conversation), so the
+   * panel always says whether an agent works, whose, since when and on what, also after a reload or when
+   * it was started in another tab.
+   */
+  interface Run {
+    by: string;
+    backend: string;
+    since: number;
+    last: string;
+  }
+  const runs = new Map<string, Run>();
+  const ownRunning = () => !!chat && runs.has(chat);
+  /** This conversation's agent is working (started here, or seen running on the server). */
+  const working = () => busy || ownRunning();
+  let statusTimer = 0;
   const pluginBox = h('div', { class: 'agent-plugins' });
   const log = h('div', { class: 'agent-log' });
   const input = h('textarea', { rows: '1', placeholder: 'Ask about the design, or tell the agent what to do…' });
@@ -247,11 +264,11 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
         { class: 'flow-head' },
         h('span', { class: 'flow-badge' }, 'AI Full'),
         h('span', {}, f.done ? 'Every stage done' : `Stage ${n} of ${AI_STAGES.length} · ${STAGE_TITLES[f.stage]}`),
-        h('span', { class: 'dim' }, busy ? '· working' : f.done ? '' : f.waiting ? '· waiting for you' : ''),
+        h('span', { class: 'dim' }, working() ? '· working' : f.done ? '' : f.waiting ? '· waiting for you' : '· stopped'),
       ),
       h('div', { class: 'flow-steps' }, ...AI_STAGES.map((s, i) => h('span', { class: `flow-step${i < n - 1 || f.done || (s === f.stage && f.waiting) ? ' done' : s === f.stage ? ' now' : ''}`, title: STAGE_TITLES[s] }))),
     );
-    if (f.waiting && !f.done && !busy) {
+    if (f.waiting && !f.done && !working()) {
       // The stage's summary folded, so the panel keeps room for the conversation.
       if (f.summary || f.open) {
         const d = h('details', { class: 'flow-details' }, h('summary', {}, `What the AI did in ${STAGE_TITLES[f.stage]}${f.open ? ' · open points' : ''}`));
@@ -262,8 +279,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       const go = h('button', { class: 'btn primary' }, next ? `Continue to ${STAGE_TITLES[next]}` : 'Finish');
       go.addEventListener('click', () => {
         if (!next) return;
-        app.apply(`AI Full: start ${STAGE_TITLES[next]}`, [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: next, waiting: false } }]);
-        void send(`Continue with the ${STAGE_TITLES[next]} stage.`);
+        void send(`Continue with the ${STAGE_TITLES[next]} stage.`, next);
       });
       const change = h('button', { class: 'btn' }, 'Change something');
       change.addEventListener('click', () => {
@@ -333,18 +349,18 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     clear(log);
     nodes.clear();
     const w = viewing ? watched.get(viewing) : null;
-    if (w) {
+    if (w && w.chat !== chat) {
       log.append(
         h(
           'div',
           { class: 'watch-banner' },
           h('span', { class: `live-dot ${w.running ? 'online' : 'offline'}` }),
-          h('span', {}, `${w.by}'s agent · ${w.backend === 'claude' ? 'Claude Code' : w.backend === 'codex' ? 'Codex' : 'Claude API'}${w.running ? ' · working' : ''}`),
-          h('button', { class: 'link', onclick: () => ((viewing = null), drawLog(), drawTasks()) }, 'My chat'),
+          h('span', {}, `Watching ${w.by}'s agent · ${backendName(w.backend)}${w.running ? ' · working' : ''}`),
+          h('button', { class: 'link', onclick: () => ((viewing = null), drawLog(), drawTasks()) }, 'Back to my chat'),
         ),
       );
-    } else if (watched.size) {
-      const others = [...watched.values()];
+    } else if ([...watched.values()].some((o) => o.chat !== chat)) {
+      const others = [...watched.values()].filter((o) => o.chat !== chat);
       log.append(h('div', { class: 'watch-list' }, ...others.map((o) => h('button', { class: 'link', onclick: () => ((viewing = o.chat), drawLog(), drawTasks()) }, `${o.running ? '● ' : ''}Watch ${o.by}'s agent`))));
     }
     const items = curItems();
@@ -371,7 +387,10 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     const done = tasks.filter((t) => t.status === 'done').length;
     const head = h('button', { class: 'tasks-head', onclick: () => ((tasksOpen = !tasksOpen), drawTasks()) }, h('span', {}, tasksOpen ? '▾' : '▸'), h('span', {}, 'Tasks'), h('span', { class: 'dim' }, `${done}/${tasks.length}`), h('span', { class: 'tasks-bar' }, h('span', { style: `width:${(done / tasks.length) * 100}%` })));
     taskBox.append(head);
-    if (tasksOpen) for (const t of tasks) taskBox.append(h('div', { class: `agent-task ${t.status}` }, h('span', { class: 'tick' }, t.status === 'done' ? '✓' : t.status === 'doing' ? '' : t.status === 'blocked' ? '!' : ''), h('span', {}, t.title)));
+    // The step "in progress" spins only while that conversation's agent really works.
+    const live = viewing ? runs.has(viewing) : working();
+    if (!live && tasks.some((t) => t.status === 'doing' || t.status === 'todo')) head.append(h('span', { class: 'dim tasks-stopped' }, '· not running'));
+    if (tasksOpen) for (const t of tasks) taskBox.append(h('div', { class: `agent-task ${t.status}${t.status === 'doing' && !live ? ' stalled' : ''}` }, h('span', { class: 'tick' }, t.status === 'done' ? '✓' : t.status === 'doing' ? '' : t.status === 'blocked' ? '!' : ''), h('span', {}, t.title)));
   };
 
   const drawHints = () => {
@@ -387,11 +406,72 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
 
   const setBusy = (b: boolean) => {
     busy = b;
-    typing.style.display = b ? '' : 'none';
-    sendBtn.style.display = b ? 'none' : '';
-    stopBtn.style.display = b ? '' : 'none';
+    refreshWorking();
+  };
+  /** Composer, status line, stage bar and checklist follow whether the agent works. */
+  const refreshWorking = () => {
+    const w = working();
+    typing.style.display = w && !viewing ? '' : 'none';
+    sendBtn.style.display = w ? 'none' : '';
+    stopBtn.style.display = w ? '' : 'none';
+    input.placeholder = w ? 'The agent is working… you can stop it with ■' : 'Ask about the design, or tell the agent what to do…';
     drawHints();
     drawFlow();
+    drawStatus();
+    drawTasks();
+  };
+  const backendName = (b: string) => (b === 'claude' ? 'Claude Code' : b === 'codex' ? 'Codex' : 'Claude API');
+  const ago = (t: number) => {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
+  };
+  const drawStatus = () => {
+    clear(statusBox);
+    if (!collab.session) return;
+    if (!runs.size) {
+      statusBox.append(h('div', { class: 'status-row idle' }, h('span', { class: 'live-dot offline' }), h('span', {}, 'No agent is working on this project')));
+      clearInterval(statusTimer);
+      statusTimer = 0;
+      return;
+    }
+    for (const [id, r] of runs) {
+      const mine = id === chat;
+      const stop = h('button', { class: 'link', title: 'Stop this agent' }, 'Stop');
+      stop.addEventListener('click', () => collab.session && void fetch(`/api/agent/${collab.session.id}/stop?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', body: JSON.stringify({ chat: id }) }));
+      statusBox.append(
+        h(
+          'div',
+          { class: 'status-row working' },
+          h('span', { class: 'live-dot online pulse' }),
+          h('span', {}, h('b', {}, mine ? 'Your agent is working' : `${r.by}'s agent is working`), ` · ${backendName(r.backend)} · ${ago(r.since)}${r.last ? ` · ${r.last}` : ''}`),
+          mine ? stop : h('button', { class: 'link', onclick: () => ((viewing = id), drawLog(), drawTasks()) }, 'Watch'),
+        ),
+      );
+    }
+    if (!statusTimer) statusTimer = window.setInterval(drawStatus, 1000);
+  };
+  /** Keep `runs` up to date from a conversation's mirrored event. */
+  const noteRun = (id: string, by: string, backend: string, e: Record<string, unknown>) => {
+    if (e.type === 'start') runs.set(id, { by, backend, since: Number(e.at) || Date.now(), last: '' });
+    else if (e.type === 'end') {
+      runs.delete(id);
+      // My own reply, followed after a reload: it becomes my conversation again when it ends.
+      const w = id === chat ? watched.get(id) : undefined;
+      if (w && !busy) {
+        setTimeout(() => {
+          items = [...w.items];
+          tasks = [...w.tasks];
+          watched.delete(id);
+          if (viewing === id) viewing = null;
+          persist();
+          drawLog();
+          drawTasks();
+        }, 0);
+      }
+    }
+    else if (e.type === 'tool' && runs.has(id) && e.name !== 'update_tasks') runs.get(id)!.last = stepLabel(String(e.name));
+    else return;
+    refreshWorking();
   };
 
   // ---------------------------------------------------------------- backend & sign-in
@@ -607,7 +687,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       chat = saved?.chat ?? null;
       if (saved?.backend) backend = saved.backend;
     }
-    root.append(header, loginBox, pluginBox, flowBox, taskBox, log, bottom);
+    root.append(header, loginBox, statusBox, pluginBox, flowBox, taskBox, log, bottom);
     drawFlow();
     drawHeader();
     void loadPlugins();
@@ -641,9 +721,9 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   };
 
   // ---------------------------------------------------------------- sending
-  const send = async (text?: string) => {
+  const send = async (text?: string, advanceTo?: (typeof AI_STAGES)[number]) => {
     const prompt = (text ?? input.value).trim();
-    if (!prompt || busy || !collab.session || (sendBtn.disabled && text === undefined)) return;
+    if (!prompt || working() || !collab.session || (sendBtn.disabled && text === undefined)) return;
     input.placeholder = 'Ask about the design, or tell the agent what to do…';
     if (viewing) {
       viewing = null;
@@ -655,7 +735,9 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     // A typed "lanjut" / "continue" while an AI Full stage waits is the Continue button (A14).
     const flow = aiFlowOf(app.doc);
     const nxt = flow?.mode === 'full' && flow.waiting && !flow.done ? nextStage(flow.stage) : null;
-    if (nxt && isGoAhead(prompt)) app.apply(`AI Full: start ${STAGE_TITLES[nxt]}`, [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: nxt, waiting: false } }]);
+    const stageTo = advanceTo ?? (nxt && isGoAhead(prompt) ? nxt : null);
+    // The next stage starts only if the server takes the message (undone when it refuses it).
+    const advanced = !!stageTo && app.apply(`AI Full: start ${STAGE_TITLES[stageTo]}`, [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: stageTo, waiting: false } }]);
     if (!items.length) clear(log), log.append(typing);
     const user: Item = { kind: 'user', text: prompt };
     items.push(user);
@@ -673,6 +755,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       });
       if (!r.ok || !r.body) {
         const d = await r.json().catch(() => ({}));
+        if (advanced) app.undo();
         throw new Error((d as { error?: string }).error ?? `HTTP ${r.status}`);
       }
       const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -686,7 +769,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
           const raw = buf.slice(0, i).replace(/^data: /, '');
           buf = buf.slice(i + 2);
           const e = JSON.parse(raw);
-          if (e.type === 'chat') chat = e.chat;
+          // Remember the conversation at once, so a reload during the reply still knows it is mine.
+          if (e.type === 'chat') ((chat = e.chat), persist());
           else if (e.type === 'text') {
             stepsItem = null;
             if (!agentItem) push((agentItem = { kind: 'agent', text: '' }));
@@ -753,7 +837,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     if (t === 'user') {
       w.agentItem = null;
       w.stepsItem = null;
-      push({ kind: 'user', text: `${String(e.by ?? w.by)}: ${String(e.text ?? '')}` });
+      push({ kind: 'user', text: w.chat === chat ? String(e.text ?? '') : `${String(e.by ?? w.by)}: ${String(e.text ?? '')}` });
     } else if (t === 'start') w.running = true;
     else if (t === 'end' || t === 'done') w.running = false;
     else if (t === 'text') {
@@ -800,6 +884,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     const c = app.collab;
     if (!c) return;
     unsubscribe = c.on('agent', ({ chat: id, by, backend: b, event }) => {
+      noteRun(id, by, b, event);
       if (id === chat && busy) return; // my own conversation arrives on my request stream
       const fresh = !watched.has(id);
       const w = watch(id, by, b);
@@ -819,17 +904,23 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     const list = await fetch(`/api/agent/${collab.session.id}/chats?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []);
-    for (const c of list as { chat: string; by: string; backend: string; running: boolean; events: Record<string, unknown>[] }[]) {
-      if (c.chat === chat) continue;
+    runs.clear();
+    for (const c of list as { chat: string; by: string; backend: string; running: boolean; since?: number; events: Record<string, unknown>[] }[]) {
+      if (c.running) {
+        const lastTool = [...c.events].reverse().find((e) => e.type === 'tool' && e.name !== 'update_tasks');
+        runs.set(c.chat, { by: c.by, backend: c.backend, since: c.since ?? Date.now(), last: lastTool ? stepLabel(String(lastTool.name)) : '' });
+      }
+      // My own conversation, still running after a reload: followed live like any other.
+      if (c.chat === chat && !c.running) continue;
       watched.delete(c.chat);
       const w = watch(c.chat, c.by, c.backend);
       for (const e of c.events) applyWatched(w, e);
       w.running = c.running;
     }
     const live = [...watched.values()].reverse().find((w) => w.running);
-    if (live && !items.length) viewing = live.chat;
+    if (live && (!items.length || live.chat === chat)) viewing = live.chat;
     drawLog();
-    drawTasks();
+    refreshWorking();
   };
 
   app.on('collab', () => {

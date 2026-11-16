@@ -80,6 +80,8 @@ interface Chat {
   agentUser: string;
   /** Each reply's range of transactions, so its edits can be undone together. */
   turns: Map<string, { from: number; to: number; undone: boolean }>;
+  /** When the reply now running started (for the Agent tab's status line). */
+  startedAt?: number;
   /** Running plugin processes of this chat (API backend), started on first use. */
   pluginClients: Map<string, McpClient>;
 }
@@ -226,7 +228,7 @@ export async function startServer(opts: ServerOptions) {
     if (parts[3] === 'chats') {
       // Recent agent conversations on this project, newest last.
       const list = [...chats.values()].filter((c) => c.project === id).sort((x, y) => x.lastUsed - y.lastUsed).slice(-5);
-      return json(res, 200, list.map((c) => ({ chat: c.id, by: c.by, backend: c.backend, running: !!c.abort, events: c.events.slice(-600) })));
+      return json(res, 200, list.map((c) => ({ chat: c.id, by: c.by, backend: c.backend, running: !!c.abort, ...(c.abort && c.startedAt ? { since: c.startedAt } : {}), events: c.events.slice(-600) })));
     }
     const backend: Backend = isCli(b.backend) ? b.backend : 'api';
     if (backend === 'api' && !agentModel) return json(res, 503, { error: 'The API backend is not configured: put ANTHROPIC_API_KEY in .env and restart the server, or choose Claude Code / Codex (your subscription) in the Agent tab.' });
@@ -273,7 +275,7 @@ export async function startServer(opts: ServerOptions) {
     const pluginCalls = new Map<string, { plugin: string; tool: string; input: unknown }>();
     const pluginLogs: Promise<unknown>[] = [];
     const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend } | { type: 'edits'; turn: string; count: number; labels: string[] }) => {
-      res.write(`data: ${JSON.stringify(e)}\n\n`);
+      if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`);
       if (e.type !== 'chat') mirror(e as Record<string, unknown>);
       if (e.type === 'tool' && e.name.includes('.')) {
         const [plugin, ...rest] = e.name.split('.');
@@ -288,10 +290,12 @@ export async function startServer(opts: ServerOptions) {
     };
     send({ type: 'chat', chat: chatId, mode, backend });
     mirror({ type: 'user', text: prompt, by: c0.by });
-    mirror({ type: 'start' });
+    mirror({ type: 'start', at: Date.now() });
+    chat.startedAt = Date.now();
     const abort = new AbortController();
     chat.abort = abort;
-    req.on('close', () => !res.writableEnded && abort.abort());
+    // Closing or reloading the page does not stop the agent: it works on (every open tab follows it through
+    // the project's mirror, and a reopened tab picks it up); only Stop ends it.
     log(`agent (${backend}, ${mode}) on ${id}: ${prompt.slice(0, 80)}`);
     const turnId = `t${Date.now().toString(36)}`;
     const from = lp.seq;

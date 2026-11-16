@@ -140,3 +140,40 @@ describe('an AI Full project on the collaboration server (A14)', () => {
     expect(proj.meta.aiFlow).toMatchObject({ mode: 'full', stage: 'requirements', waiting: true, summary: 'Requirements complete.' });
   });
 });
+
+describe('an agent keeps working when the page closes (A14)', () => {
+  let srv: Awaited<ReturnType<typeof startServer>>;
+  let base = '';
+  let n = 0;
+  const model: ModelCall = async () => {
+    n++;
+    await new Promise((r) => setTimeout(r, 400));
+    const content = n === 1 ? [{ type: 'tool_use', id: 'tu_1', name: 'add_part', input: { kind: 'resistor', x: 0, y: 0, value: '1k' } }] : [{ type: 'text', text: 'Added R1.', citations: null }];
+    return { id: `m${n}`, type: 'message', role: 'assistant', model: 'claude-opus-5-5', content, stop_reason: n === 1 ? 'tool_use' : 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 } } as never;
+  };
+  beforeAll(async () => {
+    srv = await startServer({ port: 0, dataDir: mkdtempSync(join(tmpdir(), 'hclose-')), kicad: false, agentModel: model, builtinPlugins: null });
+    base = `http://127.0.0.1:${srv.port}`;
+  });
+  afterAll(() => srv.close());
+
+  it('runs to the end after the browser drops the request, and the server reports it running meanwhile', async () => {
+    const r = await fetch(`${base}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'C', doc: toFile(newProject().doc) }) });
+    const { id, tokens } = (await r.json()) as { id: string; tokens: { edit: string } };
+    const ac = new AbortController();
+    const req = fetch(`${base}/api/agent/${id}?token=${tokens.edit}`, { method: 'POST', body: JSON.stringify({ prompt: 'add a resistor', user: { name: 'Ana' } }), signal: ac.signal }).then((x) => x.text()).catch(() => 'aborted');
+    await new Promise((res) => setTimeout(res, 150));
+    ac.abort();
+    expect(await req).toBe('aborted');
+    const chats = async () => (await (await fetch(`${base}/api/agent/${id}/chats?token=${tokens.edit}`, { method: 'POST', body: '{}' })).json()) as { running: boolean; since?: number; events: { type: string; reason?: string }[] }[];
+    const during = await chats();
+    expect(during[0]).toMatchObject({ running: true, since: expect.any(Number) });
+    for (let i = 0; i < 40 && (await chats())[0]!.running; i++) await new Promise((res) => setTimeout(res, 100));
+    const after = (await chats())[0]!;
+    expect(after.running).toBe(false);
+    expect(after.events).toContainEqual(expect.objectContaining({ type: 'done', reason: 'end_turn' }));
+    const proj = (await (await fetch(`${base}/api/projects/${id}/file?token=${tokens.edit}`)).json()) as { nodes: { type: string; name: string }[] };
+    expect(proj.nodes.some((x) => x.type === 'symbol' && x.name === 'R1')).toBe(true);
+  });
+});
+
