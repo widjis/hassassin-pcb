@@ -26,14 +26,16 @@ describe('autoplace + autoroute', () => {
     const pl = (await runTool(p, 'auto_place', {})) as { placed: unknown[]; failed: string[] };
     expect(pl.failed).toEqual([]);
     expect(pl.placed.length).toBe(6);
-    expect(runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.kind !== 'unrouted')).toEqual([]);
+    // Reference texts keep their place on the part; one may now cover a neighbour's pad (a P12 warning).
+    const notText = (v: { kind: string; uids: string[] }) => !(v.kind === 'silkOverPad' && p.doc.nodes.get(v.uids[0]!)?.type === 'text');
+    expect(runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.kind !== 'unrouted' && notText(v))).toEqual([]);
     const before = computeRatsnest(p.doc, p.engine, p.copper).lines.length;
     expect(before).toBeGreaterThan(0);
     const r = (await runTool(p, 'autoroute', {})) as { routed: number; failed: unknown[] };
     expect(r.routed).toBe(before);
     expect(r.failed).toEqual([]);
     expect(computeRatsnest(p.doc, p.engine, p.copper).lines.length).toBe(0);
-    expect(runDrc(p.doc, p.engine, p.copper).violations).toEqual([]);
+    expect(runDrc(p.doc, p.engine, p.copper).violations.filter(notText)).toEqual([]);
     // One undo step removes the whole routing.
     await runTool(p, 'undo', {});
     expect(computeRatsnest(p.doc, p.engine, p.copper).lines.length).toBe(before);
@@ -51,7 +53,9 @@ describe('autoplace + autoroute', () => {
     try {
       const t = (await runTool(p, 'tune_length', { net: short, target, amplitude: 1 })) as { after: number };
       expect(Math.abs(t.after - target)).toBeLessThan(0.05);
-      expect(runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.kind !== 'unrouted')).toEqual([]);
+      // Reference texts keep their place on the part; one may now cover a neighbour's pad (a P12 warning).
+    const notText = (v: { kind: string; uids: string[] }) => !(v.kind === 'silkOverPad' && p.doc.nodes.get(v.uids[0]!)?.type === 'text');
+    expect(runDrc(p.doc, p.engine, p.copper).violations.filter((v) => v.kind !== 'unrouted' && notText(v))).toEqual([]);
     } catch (e) {
       // Allowed outcome on a cramped board: refused, with the board left as it was.
       expect(String(e)).toMatch(/too short|clearance|at most/);

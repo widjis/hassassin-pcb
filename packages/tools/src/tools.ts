@@ -46,6 +46,9 @@ import {
   setErcOptionOp,
   waiveOp,
   unwaiveOp,
+  waiveDrcOp,
+  unwaiveDrcOp,
+  drcWaivers,
   ERC_PIN_TYPES,
   ERC_LABEL,
   type ErcLevel,
@@ -825,17 +828,23 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'waive_violation',
-    description: 'Accept one ERC violation (its id from run_erc) with a reason; it no longer counts as a problem, and Review lists it as waived with the reason. Only waive what is intended, never to hide a mistake.',
+    description: 'Accept one ERC or DRC violation (its id from run_erc or run_drc) with a reason; it no longer counts as a problem, and Review lists it as waived with the reason. Only waive what is intended, never to hide a mistake.',
     mutates: true,
     input: { type: 'object', properties: { id: { type: 'string' }, reason: { type: 'string' } }, required: ['id', 'reason'] },
     run: (p, a, ctx) => {
       const id = str(a.id, 'id');
       const reason = str(a.reason, 'reason').trim();
       if (!reason) throw new ToolError('A waiver needs a reason');
-      const v = runErc(p.doc, p.engine).violations.find((x) => x.id === id);
-      if (!v) throw new ToolError(`No current ERC violation with id ${id} (run_erc lists them)`);
-      apply(p, `Waive ${v.kind}`, [waiveOp(p.doc, id, reason, undefined, v.message)]);
-      return { waived: id, kind: v.kind, message: v.message, reason };
+      const hasSch = [...p.doc.nodes.values()].some((n) => n.type === 'sheet');
+      const v = hasSch ? runErc(p.doc, p.engine).violations.find((x) => x.id === id) : undefined;
+      if (v) {
+        apply(p, `Waive ${v.kind}`, [waiveOp(p.doc, id, reason, undefined, v.message)]);
+        return { waived: id, check: 'erc', kind: v.kind, message: v.message, reason };
+      }
+      const d = runDrc(p.doc, p.engine, p.copper).violations.find((x) => x.id === id);
+      if (!d) throw new ToolError(`No current ERC or DRC violation with id ${id} (run_erc and run_drc list them)`);
+      apply(p, `Waive ${d.kind}`, [waiveDrcOp(p.doc, id, reason, undefined, d.message)]);
+      return { waived: id, check: 'drc', kind: d.kind, message: d.message, reason };
     },
   },
   {
@@ -845,20 +854,26 @@ export const TOOLS: ToolDef[] = [
     input: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
     run: (p, a) => {
       const id = str(a.id, 'id');
-      if (!ercSettings(p.doc).waivers[id]) throw new ToolError(`No waiver for ${id}`);
-      apply(p, 'Remove waiver', [unwaiveOp(p.doc, id)]);
+      if (ercSettings(p.doc).waivers[id]) apply(p, 'Remove waiver', [unwaiveOp(p.doc, id)]);
+      else if (drcWaivers(p.doc)[id]) apply(p, 'Remove waiver', [unwaiveDrcOp(p.doc, id)]);
+      else throw new ToolError(`No waiver for ${id}`);
       return { unwaived: id };
     },
   },
   {
     name: 'run_drc',
-    description: 'Design rule check of the board (shorts, clearance, edge clearance, copper outside the board, trace width, hole size, unrouted connections). Limits come from the layout rules.',
+    description: 'Design rule check of the board (shorts, clearance, edge clearance, copper outside the board, trace width, hole size, annular ring, hole-to-hole distance, courtyard overlap, keep-out areas, unrouted connections; warnings for silkscreen over pads, traces with an unconnected end, vias not connected on two layers, parts outside the board). Limits come from the layout rules (annularRingMin, holeToHoleMin, silkClearance …). Each violation has an id; waive_violation accepts one with a reason, and waived ones are listed apart.',
     mutates: false,
     input: { type: 'object', properties: { limit: { type: 'number', description: 'Max violations listed (default 50)' } } },
     run: (p, a) => {
       const r = runDrc(p.doc, p.engine, p.copper);
       const limit = optNum(a.limit, 'limit') ?? 50;
-      return { errors: r.violations.filter((v) => v.severity === 'error').length, byKind: countBy(r.violations), violations: r.violations.slice(0, limit).map((v) => ({ kind: v.kind, severity: v.severity, message: v.message, layer: v.layer, at: { x: +v.at.x.toFixed(3), y: +v.at.y.toFixed(3) }, objects: v.uids })) };
+      return {
+        errors: r.violations.filter((v) => v.severity === 'error').length,
+        byKind: countBy(r.violations),
+        violations: r.violations.slice(0, limit).map((v) => ({ id: v.id, kind: v.kind, severity: v.severity, message: v.message, layer: v.layer, at: { x: +v.at.x.toFixed(3), y: +v.at.y.toFixed(3) }, objects: v.uids })),
+        ...(r.waived.length ? { waived: r.waived.map((v) => ({ id: v.id, kind: v.kind, message: v.message, reason: v.waiver.reason, ...(v.waiver.by ? { by: v.waiver.by } : {}) })) } : {}),
+      };
     },
   },
   {

@@ -1,9 +1,14 @@
-import { ERC_LABEL, unwaiveOp, VIOLATION_LABEL, waiveOp, type ErcKind, type ErcViolation, type Violation, type ViolationKind } from '@hassassin/core';
+import { ERC_LABEL, unwaiveDrcOp, unwaiveOp, VIOLATION_LABEL, waiveDrcOp, waiveOp, type ErcKind, type ErcViolation, type Violation, type ViolationKind } from '@hassassin/core';
 import { openErcSettings } from './ercSettings.ts';
 import type { App } from '../app.ts';
 import { clear, h } from './dom.ts';
 
-const ORDER: ViolationKind[] = ['short', 'clearance', 'outsideBoard', 'edgeClearance', 'traceWidth', 'holeSize', 'unrouted', 'noOutline'];
+// Every kind is listed (VIOLATION_LABEL has them all); errors first, in this order.
+const ORDER = [
+  'short', 'clearance', 'outsideBoard', 'edgeClearance', 'traceWidth', 'holeSize', 'annularRing', 'holeToHole', 'courtyardOverlap', 'keepout', 'unrouted',
+  'noOutline', 'partOutsideBoard', 'silkOverPad', 'danglingTrace', 'unusedVia',
+] as const satisfies readonly ViolationKind[];
+const ALL_KINDS: ViolationKind[] = [...ORDER, ...(Object.keys(VIOLATION_LABEL) as ViolationKind[]).filter((k) => !(ORDER as readonly string[]).includes(k))];
 
 export function mountReview(app: App, root: HTMLElement, badge: HTMLElement, focusErc: (v: ErcViolation) => void): void {
   const open = new Set<string>(['short', 'clearance', 'erc:unconnectedPin', 'erc:driverConflict', 'erc:powerNotDriven']);
@@ -99,7 +104,7 @@ export function mountReview(app: App, root: HTMLElement, badge: HTMLElement, foc
       root.append(h('div', { class: 'section-title', style: 'margin-top:10px' }, h('span', {}, 'Board (DRC)')));
     }
     if (!groups.size) root.append(h('div', { class: 'empty' }, 'The board passes every check.'));
-    for (const kind of ORDER) {
+    for (const kind of ALL_KINDS) {
       const list = groups.get(kind);
       if (!list) continue;
       const isOpen = open.has(kind);
@@ -116,16 +121,39 @@ export function mountReview(app: App, root: HTMLElement, badge: HTMLElement, foc
       );
       if (!isOpen) continue;
       for (const v of list.slice(0, 300)) {
+        const waive = h('button', { class: 'waive', title: 'Accept this one with a reason: it no longer counts, and the reason is kept in the project' }, 'Waive');
+        waive.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const reason = prompt(`Why is this acceptable?\n\n${v.message}`)?.trim();
+          if (reason && app.doc) app.apply(`Waive ${VIOLATION_LABEL[kind].toLowerCase()}`, [waiveDrcOp(app.doc, v.id, reason, undefined, v.message)]);
+        });
         root.append(
           h(
             'div',
             { class: `rv-item${app.focusedViolation === v.id ? ' selected' : ''}`, title: 'Show on the board', onclick: () => app.focusViolation(v) },
+            waive,
             h('div', {}, v.message),
             v.layer ? h('div', { class: 'dim', style: 'font-size:11px' }, `${v.layer} · ${v.at.x.toFixed(2)}, ${v.at.y.toFixed(2)} mm`) : null,
           ),
         );
       }
       if (list.length > 300) root.append(h('div', { class: 'dim', style: 'padding:4px 8px' }, `…and ${list.length - 300} more`));
+    }
+    // Waived DRC violations: listed with their reason, and can be counted again.
+    const waived = r.waived ?? [];
+    if (waived.length) {
+      const key = 'drc:waived';
+      const isOpen = open.has(key);
+      root.append(h('div', { class: 'rv-group', onclick: () => (isOpen ? open.delete(key) : open.add(key), render()) }, h('span', { class: 'twisty' }, isOpen ? '▾' : '▸'), h('span', {}, 'Waived'), h('span', { class: 'count' }, String(waived.length))));
+      if (isOpen)
+        for (const v of waived) {
+          const undo = h('button', { class: 'waive', title: 'Count this violation again' }, 'Unwaive');
+          undo.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (app.doc) app.apply('Remove waiver', [unwaiveDrcOp(app.doc, v.id)]);
+          });
+          root.append(h('div', { class: 'rv-item waived', title: 'Show on the board', onclick: () => app.focusViolation(v) }, undo, h('div', {}, `${VIOLATION_LABEL[v.kind]}: ${v.message}`), h('div', { class: 'reason' }, `Waived: ${v.waiver.reason}${v.waiver.by ? ` — ${v.waiver.by}` : ''}`)));
+        }
     }
   };
   app.on('drc', render);

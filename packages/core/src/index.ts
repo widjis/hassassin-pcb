@@ -56,3 +56,4 @@ export * from './measure.ts';
 export * from './netColors.ts';
 export * from './drawBend.ts';
 export * from './unroute.ts';
+export * from './drcChecks.ts';

@@ -79,6 +79,7 @@ import { HOLES, highlightTris, netColorTris, SceneCache } from './render/scene.t
 import { RouteTool } from './tools/route.ts';
 import { DrawTool } from './tools/draw.ts';
 import { MeasureTool } from './tools/measure.ts';
+import type { DrcReply, DrcRequest } from './drcWorker.ts';
 import { circle, polyline } from './render/geometry.ts';
 import { library } from './library.ts';
 
@@ -125,6 +126,11 @@ export class App {
   focusedComment: string | null = null;
   focusedViolation: string | null = null;
   private drcTimer = 0;
+  /** DRC runs in a Web Worker (P12); one run at a time, asked again when the board changed meanwhile. */
+  private drcWorker: Worker | null | undefined;
+  private drcJob: { seq: number; version: number } | null = null;
+  private drcAgain = false;
+  private drcSeq = 0;
   visible = new Set<string>();
   selection = new Set<string>();
   queryMatches = new Set<string>();
@@ -556,8 +562,54 @@ export class App {
     if (!this.doc || !this.engine) return;
     const hasSch = [...this.doc.nodes.values()].some((n) => n.type === 'sheet');
     this.erc = hasSch ? runErc(this.doc, this.engine) : null;
-    this.drc = runDrc(this.doc, this.engine, this.copper, { ratsnest: this.ratsnest });
-    if (this.focusedViolation && !this.drc.violations.some((v) => v.id === this.focusedViolation) && !this.erc?.violations.some((v) => v.id === this.focusedViolation)) this.focusedViolation = null;
+    const worker = this.drcWorkerOf();
+    if (!worker) return this.setDrc(runDrc(this.doc, this.engine, this.copper, { ratsnest: this.ratsnest }));
+    // The schematic check is shown at once; the board check follows from the worker.
+    this.emit('drc');
+    if (this.drcJob) return void (this.drcAgain = true);
+    this.drcJob = { seq: ++this.drcSeq, version: this.docVersion };
+    worker.postMessage({ seq: this.drcJob.seq, doc: stringifyDoc(this.doc), copper: this.copper } satisfies DrcRequest);
+  }
+
+  private drcWorkerOf(): Worker | null {
+    if (this.drcWorker !== undefined) return this.drcWorker;
+    try {
+      const w = new Worker(new URL('./drcWorker.ts', import.meta.url), { type: 'module' });
+      w.onmessage = (e: MessageEvent<DrcReply>) => this.onDrcReply(e.data);
+      w.onerror = () => {
+        // No worker after all: check on the main thread from now on.
+        w.terminate();
+        this.drcWorker = null;
+        this.drcJob = null;
+        this.runDrcNow();
+      };
+      this.drcWorker = w;
+    } catch {
+      this.drcWorker = null;
+    }
+    return this.drcWorker;
+  }
+
+  private onDrcReply(m: DrcReply): void {
+    const job = this.drcJob;
+    if (!job || m.seq !== job.seq) return;
+    this.drcJob = null;
+    // The board changed while it was checked: check the new one (the old result would point at old copper).
+    if (this.drcAgain || job.version !== this.docVersion) {
+      this.drcAgain = false;
+      return this.runDrcNow();
+    }
+    if ('error' in m) {
+      this.say(`Design rule check failed: ${m.error}`);
+      if (this.doc && this.engine) this.setDrc(runDrc(this.doc, this.engine, this.copper, { ratsnest: this.ratsnest }));
+      return;
+    }
+    this.setDrc(m.result);
+  }
+
+  private setDrc(r: DrcResult): void {
+    this.drc = r;
+    if (this.focusedViolation && !r.violations.some((v) => v.id === this.focusedViolation) && !this.erc?.violations.some((v) => v.id === this.focusedViolation)) this.focusedViolation = null;
     this.emit('drc');
     this.requestRender();
   }

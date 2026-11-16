@@ -10,6 +10,9 @@ import { keepoutHits } from './keepout.ts';
 import { computeRatsnest, type Ratsnest } from './connectivity.ts';
 import { formatLength } from './units.ts';
 import { frameOf, toWorld } from './frames.ts';
+import { moreDrcChecks } from './drcChecks.ts';
+import type { Op } from './commands.ts';
+import type { ErcWaiver } from './ercSettings.ts';
 
 export type Severity = 'error' | 'warning';
 
@@ -23,7 +26,13 @@ export type ViolationKind =
   | 'holeSize'
   | 'noOutline'
   | 'partOutsideBoard'
-  | 'keepout';
+  | 'keepout'
+  | 'courtyardOverlap'
+  | 'silkOverPad'
+  | 'annularRing'
+  | 'holeToHole'
+  | 'danglingTrace'
+  | 'unusedVia';
 
 export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   short: 'Short circuit',
@@ -36,6 +45,12 @@ export const VIOLATION_LABEL: Record<ViolationKind, string> = {
   noOutline: 'Board outline missing',
   partOutsideBoard: 'Part outside board',
   keepout: 'Keep-out area',
+  courtyardOverlap: 'Courtyards overlap',
+  silkOverPad: 'Silkscreen over pad',
+  annularRing: 'Annular ring too small',
+  holeToHole: 'Holes too close',
+  danglingTrace: 'Trace with an unconnected end',
+  unusedVia: 'Via not connected on two layers',
 };
 
 export interface Violation {
@@ -51,8 +66,14 @@ export interface Violation {
   required?: number;
 }
 
+export interface WaivedDrcViolation extends Violation {
+  waiver: ErcWaiver;
+}
+
 export interface DrcResult {
   violations: Violation[];
+  /** Violations accepted with a reason (`drcWaivers` in the project); they no longer count. */
+  waived: WaivedDrcViolation[];
   ms: number;
   checkedShapes: number;
 }
@@ -130,7 +151,8 @@ export function runDrc(doc: Doc, engine: StyleEngine, copper: string[], opts: Dr
   };
   const L = (mm: number) => formatLength(mm);
 
-  const shapes = collectCopper(doc, engine, copper).filter((s) => s.layer !== '__npth' && (!opts.skipFills || s.kind !== 'fill'));
+  const all = collectCopper(doc, engine, copper);
+  const shapes = all.filter((s) => s.layer !== '__npth' && (!opts.skipFills || s.kind !== 'fill'));
 
   // ---- clearance & shorts ----
   const byLayer = new Map<string, number[]>();
@@ -282,5 +304,37 @@ export function runDrc(doc: Doc, engine: StyleEngine, copper: string[], opts: Dr
     );
   }
 
-  return { violations: v, ms: performance.now() - t0, checkedShapes: shapes.length };
+  // ---- courtyards, silkscreen, annular ring, holes, dangling copper (P12) ----
+  if (!opts.skipFills) for (const { id, ...x } of moreDrcChecks(doc, engine, copper, all)) push(x, id);
+
+  // ---- waivers ----
+  const waivers = drcWaivers(doc);
+  const waived: WaivedDrcViolation[] = [];
+  const violations = v.filter((x) => {
+    const w = waivers[x.id];
+    if (w) waived.push({ ...x, waiver: w });
+    return !w;
+  });
+  return { violations, waived, ms: performance.now() - t0, checkedShapes: shapes.length };
+}
+
+// ---------------------------------------------------------------- waivers (P12)
+
+/** DRC violations accepted with a reason, by violation id (project meta `drcWaivers`). */
+export function drcWaivers(doc: Doc): Record<string, ErcWaiver> {
+  const w = doc.meta?.drcWaivers;
+  return w && typeof w === 'object' ? (w as Record<string, ErcWaiver>) : {};
+}
+
+/** Op that accepts one DRC violation (by its id) with a reason; it then no longer counts. */
+export function waiveDrcOp(doc: Doc, id: string, reason: string, by?: string, message?: string): Op {
+  if (!reason.trim()) throw new Error('A waiver needs a reason');
+  const w = { ...drcWaivers(doc), [id]: { reason: reason.trim(), ...(by ? { by } : {}), at: new Date().toISOString(), ...(message ? { message } : {}) } };
+  return { op: 'setMeta', key: 'drcWaivers', value: w };
+}
+
+export function unwaiveDrcOp(doc: Doc, id: string): Op {
+  const w = { ...drcWaivers(doc) };
+  delete w[id];
+  return { op: 'setMeta', key: 'drcWaivers', value: Object.keys(w).length ? w : null };
 }

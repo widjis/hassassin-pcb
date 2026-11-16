@@ -89,6 +89,9 @@ const defs: RuleDef[] = [
   { name: 'tuneSectionMax', label: 'Tuning section max', kind: 'length', inheritable: true, help: 'Longest tuning section (a run of serpentine bumps along one trace, P10); more length is spread over other traces of the net. No limit by default.' },
   { name: 'tuneSpacing', label: 'Tuning spacing', kind: 'length', inheritable: true, help: 'Edge-to-edge spacing between the legs of a serpentine (default 3 × the trace width), so it does not couple to itself.' },
   { name: 'diffPairClearance', label: 'Pair clearance', kind: 'length', inheritable: true, help: 'Autorouter: edge-to-edge clearance from a differential pair\'s traces and vias to other nets\' traces and vias, for crosstalk (P10). classify_nets sets 2 × the trace width (3 W centre to centre). Not applied to pads. The larger of the two nets\' values wins.' },
+  { name: 'annularRingMin', label: 'Annular ring minimum', kind: 'length', inheritable: true, help: 'DRC: narrowest copper ring allowed round a plated hole (via or pad), (diameter − drill) / 2 (P12).' },
+  { name: 'holeToHoleMin', label: 'Hole to hole minimum', kind: 'length', inheritable: true, help: 'DRC: smallest distance allowed between the edges of two drilled holes (P12).' },
+  { name: 'silkClearance', label: 'Silkscreen to pad clearance', kind: 'length', inheritable: true, help: 'DRC: distance silkscreen must keep from pads (0 = only silkscreen on a pad is reported) (P12).' },
 ];
 
 export const RULE_DEFS: ReadonlyMap<string, RuleDef> = new Map(defs.map((d) => [d.name, d]));

@@ -1301,13 +1301,52 @@ Findings in the v0.0.3 code that the items above answer:
 
 ### Milestone PM3 — manufacturing confidence
 
-- [ ] **P12. More DRC checks and waivers.**
+- [x] **P12. More DRC checks and waivers.**
   - New checks: courtyard overlap, silkscreen over pads / exposed copper, annular ring minimum,
     hole-to-hole distance, dangling traces and unused vias (warnings), keep-out areas (P6).
   - Every limit comes from editable rules, as today; a violation can be waived with a recorded reason
     (shown in Review and kept in the project).
   - DRC runs in a Web Worker in the editor, so the canvas stays responsive.
   - The solar MPPT board (KiCad-clean) still gives 0 errors; each new check has a test board that fails it.
+  - *Done (2026-11-16).* Reference: the KiCad 8 manual (Board Setup > Violation Severity, which names the
+    checks); the method is our own, in `packages/core/src/drcChecks.ts`.
+    - **Courtyard overlap** (error): the courtyard graphics of each part per `*.CrtYd` layer (rectangles,
+      polygons, circles, and lines / arcs joined into loops; pieces that do not close stand as their convex
+      hull); two parts overlap when the shared area is over 0.001 mm² (touching is fine).
+    - **Silkscreen over pad** (warning): silkscreen strokes and filled shapes against the pads of the same
+      side; a text stands as its box (font height, 0.7 × height per character) until P13 gives the stroke
+      font. New rule `silkClearance` (default 0: only silkscreen on a pad is reported).
+    - **Annular ring** (error): (diameter − drill) / 2 of vias and plated pads (custom pads skipped), rule
+      `annularRingMin` (default 0.1 mm).
+    - **Hole to hole** (error): edge-to-edge distance of all drills (vias, plated and unplated pads, slots
+      as a segment with a radius), rule `holeToHoleMin` (default 0.25 mm), of any nets.
+    - **Trace with an unconnected end** (warning): a trace end whose round end touches no other copper of its
+      net on its layer. **Via not connected on two layers** (warning): a via joined to its net's copper on
+      fewer than two layers.
+    - **Waivers:** `drcWaivers` in the project meta (reason, time, the message at the time), as the ERC
+      waivers; Review has Waive / Unwaive on every DRC item and a Waived group with the reasons; `run_drc`
+      lists ids and waived items, `waive_violation` / `unwaive_violation` take ERC or DRC ids.
+    - **Web Worker:** `apps/web/src/drcWorker.ts`; the editor keeps one worker, checks the newest board again
+      when a run ends after the board changed, and falls back to the main thread without workers. The quick
+      clash check while dragging stays on the main thread.
+    - **Found on the way:** the keep-out check counted a pour whose hole follows a keep-out's edge exactly (as
+      KiCad fills them) as inside it, so the solar board had 8 keep-out errors as read; with the geometry
+      engine the copper inside the area must now have some area. Review did not list keep-out and part
+      outside board violations (missing from its order); all kinds are listed now. The QFN footprint
+      generator put the pin-1 dot on pad 1; it now sits beyond the pad's end. The autorouter now keeps
+      `holeToHoleMin` between a new via and every other drill, its own net's included.
+    - **Benchmark boards** (copies, `apps/cli/bench/drc.ts`): solar MPPT (sample and benchmark copy, as read
+      and after a full re-route): 0 errors, 0 warnings. RGB lamp as read: 4 errors that the new checks find
+      in the board itself: two pairs of stacked vias (GND at 109.9, 136.8 / 136.9; SDA, two vias at 149.3,
+      168.9) and two slight courtyard overlaps (R3 / R4 0.11 mm², U2 / C7 0.07 mm²), plus 3 silkscreen
+      warnings. After a re-route the SDA pair is gone; the GND pair belongs to the poured net, which the
+      benchmark keeps. They are left for the owner to fix or waive in the project (working rule 1 is about
+      regressions; these were there before and were not checked).
+    - Limit: the autoplacer moves parts with their reference texts where the footprint put them, so a text
+      may end up over a neighbour's pad (a warning; `phase7.test.ts` allows those). Placing reference texts
+      clear of pads is left for later.
+    - Tests: `packages/tools/test/drc-p12.test.ts` (8 tests: the solar sample is clean, a routed test board
+      passes, one failing board per check, waivers through the tools).
 - [ ] **P13. Silkscreen text in the Gerbers and a third-party check.**
   - Reference and free texts are drawn with a vector stroke font written from scratch (or a permissively
     licensed one) and exported to the silkscreen Gerbers.

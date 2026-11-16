@@ -15,7 +15,7 @@ function def(id: string, selector: string, description: string, rules: Record<st
 
 export function systemDefaults(): Ruleset[] {
   return [
-    def('Root', 'root', 'Project-wide settings', { displayUnit: 'mm', gridSpacing: '0.5mm', enabled: 'true', visible: 'true', holeSizeMin: '0.2mm' }),
+    def('Root', 'root', 'Project-wide settings', { displayUnit: 'mm', gridSpacing: '0.5mm', enabled: 'true', visible: 'true', holeSizeMin: '0.2mm', annularRingMin: '0.1mm', holeToHoleMin: '0.25mm', silkClearance: '0mm' }),
     def('Layout', 'layout', 'Every board', { boardEdgeClearance: '0.3mm' }),
     def('Element', 'element', 'Every component', { rotation: '0deg', side: 'top', keepOut: '0.2mm' }),
     def('Pad', 'pad', 'Every pad', {

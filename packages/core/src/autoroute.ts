@@ -833,7 +833,7 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
   // ripped up: capsules in buckets of BK mm per layer; a capsule is filed in every bucket within `reach`
   // of it, so the bucket of a point holds every capsule that can matter there.
   interface Cap { li: number; a: Vec2; b: Vec2; r: number; id: number; cl: number; route: number }
-  interface Route { key: number; conn: number; net: string; id: number; caps: Cap[]; segs: { li: number; a: Vec2; b: Vec2; w: number; mid?: Vec2 }[]; vias: Vec2[]; length: number; deps: Set<number> }
+  interface Route { key: number; conn: number; net: string; id: number; caps: Cap[]; segs: { li: number; a: Vec2; b: Vec2; w: number; mid?: Vec2 }[]; vias: Vec2[]; length: number; deps: Set<number>; viaHoleR?: number }
   const BK = Math.max(1, reach * 2);
   const BW = Math.ceil((maxX - minX) / BK) + 2;
   const buckets = layers.map(() => new Map<number, Cap[]>());
@@ -863,12 +863,22 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
     return [...out];
   };
 
+  // Drilled holes already on the board (pads, vias that stay): a new via keeps holeToHoleMin from each, its
+  // own net's included, so no via lands on or next to another one (DRC holeToHole, P12).
+  const fixedHoles: { c: Vec2; r: number }[] = [];
+  {
+    const seen = new Set<string>();
+    for (const sh of shapes) if (sh.hole && !seen.has(sh.uid)) (seen.add(sh.uid), fixedHoles.push({ c: sh.hole.center, r: Math.max(sh.hole.size.x, sh.hole.size.y) / 2 }));
+  }
+
   /** Try one connection. `pres` = cost per run-route in the way (Infinity: only free room). */
   const routeConn = (r: (typeof rats)[number], pres: number, hist: Float32Array, noLane = false): { ok: true; route: Route; victims: Set<number>; contested: number[] } | { ok: false; reason: string; joined?: boolean } => {
     const lane = noLane ? undefined : lanes.get(r);
     const id = netId(r.net);
     const width = netRule(r.net, 'traceWidth', 0.25);
     const viaD = netRule(r.net, 'viaDiameter', 0.6);
+    const viaHoleR = netRule(r.net, 'viaHole', 0.3) / 2;
+    const holeGap = netRule(r.net, 'holeToHoleMin', 0.25);
     const cn = netClear(r.net);
     const viaR = Math.ceil((viaD / 2 + cn - width / 2) / g);
     const soft = pres !== Infinity;
@@ -984,6 +994,13 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
         const k = core[li]![c]!;
         if ((k !== 0 && k !== id) || !clear(li, c, viaD / 2, 0)) ok = false;
         else if (!soft && dynHits(li, { x: cx(i), y: cy(j) }, viaD / 2, 0)) ok = false;
+      }
+      // Room from every other drilled hole: those on the board, and the vias of the routes held so far.
+      if (ok) {
+        const q = { x: cx(i), y: cy(j) };
+        const far = (h: Vec2, r: number) => Math.hypot(q.x - h.x, q.y - h.y) >= viaHoleR + r + holeGap - 1e-6;
+        ok = fixedHoles.every((h) => far(h.c, h.r));
+        if (ok) for (const rt of routes.values()) if (rt.vias.length && !rt.vias.every((v) => far(v, rt.viaHoleR ?? viaHoleR))) (ok = false);
       }
       // A via never sits on or touches a pad, the net's own included, except inside a thermal pad of its net.
       const inThermal = thermal[c] === id;
@@ -1507,7 +1524,7 @@ function planAutorouteOnce(doc: Doc, engine: StyleEngine, copper: string[], opts
     if (atStub(fb, cur.pts[cur.pts.length - 1], cur.layer) && fb !== fa) cur.pts.push(fb!.a);
     raw.push(cur);
     const key = ++routeKey;
-    const route: Route = { key, conn: -1, net: r.net, id, caps: [], segs: [], vias, length: 0, deps: new Set() };
+    const route: Route = { key, conn: -1, net: r.net, id, caps: [], segs: [], vias, length: 0, deps: new Set(), viaHoleR };
     // ---- Clean-up (P8e): smooth the grid path into long 0° / 45° / 90° runs, then soften its corners
     // by style. Every new piece is checked against the real copper before it replaces the old ones.
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;

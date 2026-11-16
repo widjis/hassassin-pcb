@@ -200,7 +200,8 @@ function qfn(n: number, body: number, pitch: number, ep: number | null): Footpri
   }
   if (ep) pads.push({ ...smd(String(n + 1), 0, 0, ep, ep, 'rect'), layers: ['F.Cu', 'F.Mask', 'F.Paste'] });
   const name = `qfn-${n}-${body}x${body}-p${pitch}${ep ? `-ep${ep}` : ''}`;
-  return finish(name, `QFN, ${n} pins, ${body}×${body} mm, ${pitch} mm pitch${ep ? `, exposed pad ${ep} mm (pad ${n + 1})` : ''}`, pads, { w: body, h: body }, { pin1: { x: r2(-body / 2 - 0.5), y: r2(off(0)) }, tags: ['qfn', 'smd'] });
+  // The pin-1 dot sits beyond the end of pad 1, clear of its copper (DRC silkOverPad, P12).
+  return finish(name, `QFN, ${n} pins, ${body}×${body} mm, ${pitch} mm pitch${ep ? `, exposed pad ${ep} mm (pad ${n + 1})` : ''}`, pads, { w: body, h: body }, { pin1: { x: r2(-(reach + pl / 2 + 0.35)), y: r2(off(0)) }, tags: ['qfn', 'smd'] });
 }
 
 function dip(n: number, wide = false): FootprintSpec {

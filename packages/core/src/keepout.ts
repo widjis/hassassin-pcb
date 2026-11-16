@@ -5,6 +5,7 @@
  * autoplacer, the pour fill and DRC read them through this module.
  */
 import { componentExtent } from './autoplace.ts';
+import { difference, fromIPath, hasClipper, intersect, toIAreas } from './clip.ts';
 import type { CopperShape } from './copper.ts';
 import { padGeom } from './frames.ts';
 import { distToSegment, emptyBox, growBox, pointInPolygon, segSegDist } from './geom.ts';
@@ -57,6 +58,13 @@ export function polygonsOverlap(q: Vec2[], poly: Vec2[]): boolean {
 export function areaOverlaps(area: Vec2[][], poly: Vec2[]): boolean {
   const [outer, ...holes] = area;
   if (!outer) return false;
+  // With the geometry engine: the copper inside the area must have some area (0.001 mm²), so a pour whose
+  // hole follows the keep-out's edge exactly (as KiCad fills them) does not count as inside it.
+  if (hasClipper()) {
+    const inside = difference(intersect(toIAreas([outer]), toIAreas([poly])), toIAreas(holes));
+    const mm2 = inside.reduce((s, r) => s + polyArea(fromIPath(r)), 0);
+    return Math.abs(mm2) > 1e-3;
+  }
   const inCopper = (p: Vec2) => pointInPolygon(p, outer) && !holes.some((h) => pointInPolygon(p, h));
   if (poly.some(inCopper)) return true;
   for (const ring of area) {
@@ -64,6 +72,17 @@ export function areaOverlaps(area: Vec2[][], poly: Vec2[]): boolean {
     for (let i = 0; i < ring.length; i++) for (let j = 0; j < poly.length; j++) if (segSegDist(ring[i]!, ring[(i + 1) % ring.length]!, poly[j]!, poly[(j + 1) % poly.length]!) < 1e-9) return true;
   }
   return false;
+}
+
+/** Signed area (shoelace). */
+function polyArea(p: Vec2[]): number {
+  let a = 0;
+  for (let i = 0; i < p.length; i++) {
+    const q = p[i]!;
+    const r = p[(i + 1) % p.length]!;
+    a += q.x * r.y - r.x * q.y;
+  }
+  return a / 2;
 }
 
 /**
