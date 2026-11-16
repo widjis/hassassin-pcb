@@ -400,6 +400,14 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .workspace.no-insp { grid-template-columns: var(--left-w, 270px) minmax(0, 1fr) 0; }
 .workspace.no-insp .sidebar.right, .workspace.no-insp .resizer.right { display: none; }
 .sidebar.left > .tab-body { padding: 0; }
+/* The left (agent) panel hidden: the canvas takes its room; the rail's top button brings it back. */
+.workspace.no-left { grid-template-columns: 0 minmax(0, 1fr) var(--right-w, 320px); }
+.workspace.no-left.no-insp { grid-template-columns: 0 minmax(0, 1fr) 0; }
+/* Kept in the grid (its column is 0 wide) so the canvas stays in the middle column. */
+.workspace.no-left .sidebar.left { visibility: hidden; overflow: hidden; min-width: 0; border: none; padding: 0; }
+.workspace.no-left .resizer.left { display: none; }
+/* The inspector button only where there is an inspector to hide. */
+.workspace.no-insp .insp-toggle { display: none; }
 
 .viewbar { position: absolute; top: 8px; left: 0; right: 0; z-index: 7; display: flex; justify-content: center; pointer-events: none; }
 .viewbar .seg { pointer-events: auto; background: rgba(21, 23, 29, 0.94); }
@@ -457,3 +465,10 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .rv-item .waive { float: right; font-size: 11px; padding: 0 6px; margin-left: 6px; }
 .rv-item.waived { opacity: 0.75; }
 .rv-item .reason { color: var(--dim); font-size: 11px; }
+.workspace.no-left .rail-btn[data-rail='panel'] { color: var(--accent); }
+.workspace.no-left .rail-btn[data-rail='panel'] svg { transform: scaleX(-1); }
+/* Icon buttons of the layout toolbar (names in the tooltips). */
+.layout-tools button.ico { display: inline-flex; align-items: center; justify-content: center; gap: 1px; padding: 4px 7px; min-height: 28px; }
+.layout-tools button.ico svg { display: block; }
+.layout-tools button.ico .caret { font-size: 9px; opacity: 0.7; margin-left: 1px; }
+.layout-tools .seg.tools button.ico { padding: 4px 9px; }

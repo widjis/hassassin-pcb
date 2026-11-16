@@ -325,6 +325,23 @@ document before work on a measured item starts.
     box that draws even from copper, All but the poured nets, All); tool `unroute`. Tests:
     `unroute.test.ts`. In the browser on a copy of the solar board: U on J3 took 16 traces, Shift+U its two
     nets, an area 16 traces, "all but the poured nets" 297 traces and 32 vias with GND kept and 0 DRC errors.
+    Owner's findings while routing: Esc did nothing after a route option (corner, mode, width, via) had been
+    picked, because the control kept the focus and the board keys were skipped; the route and draw bars now
+    hand the focus back once used, and Esc on them still stops the route. Live ratsnest while routing (KiCad,
+    EAGLE): `netIslands` in `connectivity.ts` gives a net's islands and which one a point touches; the router
+    draws a line from the route's head to the nearest copper of the net not yet joined to it, and the board's
+    ratsnest lines leaving the route's own copper give way to it. Test: `live-ratsnest.test.ts`.
+    Unfill pours (owner: "how do I unpour?"), as KiCad's Unfill All Zones (Ctrl+B) and EAGLE's RIPUP @:
+    Unpour button and Ctrl+B take the copper out of the selected pours, or of all, keeping their outlines and
+    rules; edits do not refill unfilled pours, B fills them again. The left (agent) panel can be hidden for
+    room (the rail's top button, the « in the agent header, Ctrl+\); the inspector button ◨ shows only when
+    there is an inspector to hide. Checked in the browser on a copy of the solar board.
+    Autoroute on the toolbar (owner: "where is the autoroute button?"), next to Unroute: runs the Board
+    panel's autorouter, shows its progress on the status line, and becomes "Stop autoroute" while it runs.
+    Refill, unfill and autoroute no longer report success when the change was refused (a view-only link).
+    The layout toolbar as icons (owner: "all text gets confusing"): line icons drawn for this app in the
+    rail's style (`apps/web/src/ui/toolIcons.ts`), the name first in each tooltip and as aria-label, ▾ on
+    menus; the active layer stays text. Approved by the owner from a screenshot ("Keep them").
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

@@ -28,7 +28,14 @@ import type { App } from '../app.ts';
 import { clear, h } from './dom.ts';
 import type { RouteMessage, RouteRequest } from '../routeWorker.ts';
 
-export function mountBoard(app: App, root: HTMLElement): void {
+/** What the toolbar needs of the autorouter, which lives in this panel. */
+export interface BoardApi {
+  autoroute(): void;
+  cancel(): void;
+  readonly routing: boolean;
+}
+
+export function mountBoard(app: App, root: HTMLElement, onRouting?: (running: boolean) => void): BoardApi {
   let calc = { layer: '', width: 0.25, gap: 0.15, target: 50, diff: false };
   // The autorouter runs in a Web Worker (P8g); the panel is redrawn on every change, so its state lives here.
   let job: { worker: Worker; changed: boolean } | null = null;
@@ -37,17 +44,21 @@ export function mountBoard(app: App, root: HTMLElement): void {
   const setMsg = (m: string) => {
     routeMsg = m;
     if (statusEl) statusEl.textContent = m;
+    // Also on the status line, for a run started from the toolbar with the panel closed.
+    app.say(m);
   };
   const stopJob = () => {
     job?.worker.terminate();
     job = null;
     app.setLivePreview(null);
+    onRouting?.(false);
   };
   const startRoute = () => {
     const doc = app.doc;
     if (!doc || job) return;
     const worker = new Worker(new URL('../routeWorker.ts', import.meta.url), { type: 'module' });
     job = { worker, changed: false };
+    onRouting?.(true);
     const t0 = performance.now();
     setMsg('Routing…');
     worker.onmessage = (e: MessageEvent<RouteMessage>) => {
@@ -68,7 +79,8 @@ export function mountBoard(app: App, root: HTMLElement): void {
       const key = newUid('ar');
       let pours = 0;
       if (m.ops.length) {
-        app.apply('Autoroute', m.ops as Op[], key);
+        // Refused (a view-only link): apply has said why.
+        if (!app.apply('Autoroute', m.ops as Op[], key)) return void render();
         pours = app.refillPours({ mergeKey: key, quiet: true });
       }
       const reasons = Object.entries(r.reasons).map(([k, n]) => `${n} × ${k}`).join('; ');
@@ -307,4 +319,16 @@ export function mountBoard(app: App, root: HTMLElement): void {
   });
   render();
   (root as HTMLElement & { refresh?: () => void }).refresh = render;
+  return {
+    autoroute: startRoute,
+    cancel: () => {
+      if (!job) return;
+      stopJob();
+      setMsg('Autoroute cancelled; nothing changed.');
+      render();
+    },
+    get routing() {
+      return job !== null;
+    },
+  };
 }

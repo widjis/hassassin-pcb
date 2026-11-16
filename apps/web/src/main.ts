@@ -13,7 +13,8 @@ import { mountProject } from './ui/project.ts';
 import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
 import { mountBoard } from './ui/board.ts';
-import { initResizers } from './ui/resize.ts';
+import { initResizers, toggleLeft } from './ui/resize.ts';
+import { iconize, TOOL_ICONS } from './ui/toolIcons.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -36,6 +37,7 @@ mountInspector(app, $('inspector'), $('helpPanel'), (shown) => {
 mountProject(app, $('projectPanel'));
 // ---- tool rail (panels open as flyouts over the canvas) ----
 const rail = mountRail($('rail'), $('flyout'), [
+  { id: 'panel', title: 'Hide / show the left (agent) panel (Ctrl+\\)', action: () => toggleLeft() },
   { id: 'project', title: 'Project' },
   { id: 'parts', title: 'Parts' },
   { id: 'board', title: 'Board' },
@@ -607,7 +609,26 @@ $('undoBtn').addEventListener('click', () => app.undo());
 $('redoBtn').addEventListener('click', () => app.redo());
 $('saveBtn').addEventListener('click', save);
 $('pourBtn').addEventListener('click', () => app.refillPours());
-mountBoard(app, $('boardPanel'));
+$('unpourBtn').addEventListener('click', () => app.unfillPours());
+const autorouteBtn = $<HTMLButtonElement>('autorouteBtn');
+const board = mountBoard(app, $('boardPanel'), (running) => {
+  iconize(autorouteBtn, running ? 'stop' : 'autoroute', running ? 'Stop autoroute' : 'Autoroute');
+  autorouteBtn.classList.toggle('on', running);
+});
+// The layout toolbar as icons (owner: "all text is confusing"); names in the tooltips.
+for (const b of $('tools').querySelectorAll<HTMLButtonElement>('button')) {
+  const m = b.dataset.mode as 'select' | 'route' | 'measure';
+  if (m in TOOL_ICONS) iconize(b, m, b.textContent ?? m);
+}
+iconize($('drawBtn'), 'draw', 'Draw', true);
+iconize($('unrouteBtn'), 'unroute', 'Unroute', true);
+iconize(autorouteBtn, 'autoroute', 'Autoroute');
+iconize($('flipBtn'), 'flip', 'View from the other side');
+iconize($('fitBtn'), 'fit', 'Fit');
+iconize($('pourBtn'), 'pour', 'Pour');
+iconize($('unpourBtn'), 'unpour', 'Unpour');
+iconize($('pickBtn'), 'pick', 'Pick', true);
+autorouteBtn.addEventListener('click', () => (autorouteBtn.blur(), board.routing ? board.cancel() : board.autoroute()));
 
 // ---- 3D view (three.js is loaded on first use) ----
 let board3d: import('./render/view3d.ts').Board3D | null = null;
@@ -835,6 +856,11 @@ for (const b of BEND_STYLES) bendSel.append(new Option(`Bend ${b.n}: ${b.label}`
 bendSel.addEventListener('change', () => ((app.drawing.bend = Number(bendSel.value)), app.requestRender()));
 const miterInp = $<HTMLInputElement>('miterInp');
 miterInp.addEventListener('change', () => ((app.drawing.miter = Number(miterInp.value) || 0), app.requestRender()));
+// Once used, a bar control hands the focus back, so the board keys (Esc, V, W, /…) work at once.
+for (const bar of [routeBar, drawBar]) {
+  bar.addEventListener('change', (e) => (e.target as HTMLElement).tagName === 'SELECT' && (e.target as HTMLElement).blur());
+  bar.addEventListener('click', (e) => (e.target as HTMLElement).closest('button')?.blur());
+}
 const syncModeBars = () => {
   routeBar.hidden = app.mode !== 'route';
   drawBar.hidden = app.mode !== 'draw' || ['text', 'hole', 'fiducial', 'outline-rect'].includes(app.drawing.kind);
@@ -884,7 +910,11 @@ const syncToolbar = () => {
   $('docTitle').textContent = app.fileName ? `${app.fileName}${app.dirty ? ' •' : ''}` : 'No board';
 };
 for (const ev of ['mode', 'change', 'doc'] as const) app.on(ev, syncToolbar);
-app.on('view', () => ($('flipBtn').textContent = app.view.flipped ? 'Bottom' : 'Top'));
+app.on('view', () => {
+  // The icon stays; the side seen is in the tooltip and the button is lit from below.
+  $('flipBtn').classList.toggle('on', app.view.flipped);
+  $('flipBtn').title = `View from the other side (F) — now seen from the ${app.view.flipped ? 'bottom' : 'top'}`;
+});
 syncToolbar();
 
 // ---- canvas interaction ----
@@ -1077,7 +1107,13 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return save();
   }
-  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  // Ctrl+\ hides / shows the left (agent) panel, also from the chat box.
+  if (mod && e.key === '\\') return void (e.preventDefault(), toggleLeft());
+  const tgt = e.target as HTMLElement;
+  // A tool option (a select or button of the route and draw bars) keeps the focus after use; the keys still
+  // belong to the board, so give the focus back rather than swallow them (Escape stops the route).
+  if (tgt.closest('#routeBar, #drawBar') && (e.key === 'Escape' || (!tgt.closest('input, textarea') && !e.key.startsWith('Arrow') && e.key !== 'Enter' && e.key !== ' '))) tgt.blur();
+  else if (tgt.closest('input, select, textarea')) return;
   // The shortcut list (KiCad's List Hotkeys is Ctrl+F1).
   if ((e.key === '?' && !mod) || (mod && e.key === 'F1')) return void (e.preventDefault(), toggleShortcuts());
   if (e.key === 'Escape' && closeShortcuts()) return void e.preventDefault();
@@ -1099,6 +1135,8 @@ window.addEventListener('keydown', (e) => {
     }
     // Ctrl+/ steps the corner mode while routing (KiCad); with Shift backwards.
     if ((e.key === '/' || e.key === '?') && app.mode === 'route') return void (e.preventDefault(), app.route.cycleCorner(e.shiftKey));
+    // Ctrl+B unfills the pours (KiCad "Unfill All Zones"); B fills them.
+    if (k === 'b' && !e.shiftKey) return void (e.preventDefault(), app.unfillPours());
     if (k === 'c') return void (e.preventDefault(), app.copyBoard());
     if (k === 'v') return void (e.preventDefault(), app.pasteBoard());
     if (k === 'd') return void (e.preventDefault(), app.duplicateBoard());

@@ -70,6 +70,7 @@
             </div>
             <button id="drawBtn" title="Draw the board outline, pours, keep-out areas, silkscreen, mounting holes and fiducials">Draw ▾</button>
             <button id="unrouteBtn" title="Take routed copper off: the selection (U), the selection's nets (Shift+U), an area, or everything">Unroute ▾</button>
+            <button id="autorouteBtn" title="Autoroute: route every unrouted connection (45°, vias, clearances kept), checked with DRC before it is applied; runs in the background, one undo step. Click again to stop. Options in the Board panel.">Autoroute</button>
             <div class="mode-bar" id="routeBar" hidden>
               <div class="seg" id="cornerSeg" title="Corner style of new traces (right mouse button or Ctrl+/ steps through them)"></div>
               <select id="routeModeSel" title="Walkaround: go round other copper · Shove: push other traces aside · Free: no checks (M)"></select>
@@ -83,7 +84,8 @@
             <button id="layerBtn" title="Active copper layer (L)">F.Cu</button>
             <button id="flipBtn" title="View from the other side (F)">Top</button>
             <button id="fitBtn" title="Zoom to fit (Home)">Fit</button>
-            <button id="pourBtn" title="Refill copper pours (B)">Pour</button>
+            <button id="pourBtn" title="Fill / refill the copper pours (B)">Pour</button>
+            <button id="unpourBtn" title="Unfill the copper pours, keeping their outlines: the selected pours, or all (Ctrl+B)">Unpour</button>
             <button id="pickBtn" title="What a selection box picks: kinds of item, and the active layer only or every layer">Pick ▾</button>
             <select id="layoutGridSelect" title="Layout grid: where parts, traces and drawings snap"></select>
             <select id="layoutAlignSelect" title="Align or spread the selected parts (traces follow)">

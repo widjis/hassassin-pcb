@@ -12,7 +12,7 @@ import type { App } from '../app.ts';
 import type { Collab } from '../collab.ts';
 import { clear, h } from './dom.ts';
 import { renderMarkdown } from './markdown.ts';
-import { toggleRight, toggleWideLeft } from './resize.ts';
+import { toggleLeft, toggleRight, toggleWideLeft } from './resize.ts';
 
 interface Step {
   id: string;
@@ -372,7 +372,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       { class: 'head-actions' },
       h('button', { title: 'New chat', onclick: () => ((chat = null), (items = []), (tasks = []), (usage = { input: 0, output: 0, cacheRead: 0 }), persist(), drawLog(), drawTasks(), drawHints()) }, '＋'),
       h('button', { title: 'Wider panel for the chat (toggle)', onclick: () => toggleWideLeft() }, '⇔'),
-      h('button', { title: 'Hide / show the inspector on the right', onclick: () => toggleRight() }, '◨'),
+      h('button', { class: 'insp-toggle', title: 'Hide / show the inspector on the right', onclick: () => toggleRight() }, '◨'),
+      h('button', { title: 'Hide this panel for more room (Ctrl+\\); the top button of the rail brings it back', onclick: () => toggleLeft() }, '«'),
     );
     const state = h('div', { class: 'agent-backend' }, h('span', { class: `live-dot ${cur.ready ? 'online' : 'offline'}` }), h('span', { class: 'dim ellipsis' }, cur.note));
     if (!cur.ready && backend !== 'api' && cur.installed) state.append(h('button', { class: 'btn primary', onclick: () => void signIn(backend as Cli['id']) }, 'Sign in'));

@@ -580,10 +580,34 @@ export class App {
       if (!opts.quiet) this.say('No pours yet. Select a net and set its “Pour layers” rule (e.g. F.Cu B.Cu), then refill.');
       return 0;
     }
-    this.apply('Refill pours', ops, key);
+    if (!this.apply('Refill pours', ops, key)) return 0;
     this.history?.seal();
     if (!opts.quiet) this.say(`Refilled ${pours} pour${pours > 1 ? 's' : ''} in ${Math.round(ms)} ms.`);
     return pours;
+  }
+
+  /** Whether some pour holds copper (edits refill then; unfilled pours stay unfilled until B, as KiCad). */
+  poursFilled(): boolean {
+    if (!this.doc) return false;
+    for (const n of this.doc.nodes.values()) if (n.type === 'fill' && Object.values((n.data?.fills ?? {}) as Record<string, unknown[]>).some((l) => l.length)) return true;
+    return false;
+  }
+
+  /**
+   * Take the copper out of the pours, keeping their outlines and rules (KiCad "Unfill All Zones" Ctrl+B,
+   * EAGLE RIPUP @): the selected pours, or every pour when none is selected. B fills them again.
+   */
+  unfillPours(): number {
+    if (!this.doc) return 0;
+    const all = [...this.doc.nodes.values()].filter((n) => n.type === 'fill');
+    const sel = all.filter((n) => this.selection.has(n.uid));
+    const pick = (sel.length ? sel : all).filter((n) => Object.values((n.data?.fills ?? {}) as Record<string, unknown[]>).some((l) => l.length));
+    if (!pick.length) return (this.say(all.length ? 'The pours are already unfilled. B fills them.' : 'No pours on the board.'), 0);
+    // Refused (a view-only link, say): apply has said why; do not claim it was done.
+    if (!this.apply('Unfill pours', pick.map((n) => ({ op: 'setData', uid: n.uid, key: 'fills', value: {} }) as Op))) return 0;
+    this.history?.seal();
+    this.say(`Unfilled ${pick.length} pour${pick.length > 1 ? 's' : ''}${sel.length ? ' (selected)' : ''}; outlines kept. B fills them again.`);
+    return pick.length;
   }
 
   exportFab(): { blob: Blob; name: string; notes: string[] } | null {
@@ -680,7 +704,7 @@ export class App {
       const fix = rubberbandOps(m.rubber, (v: Vec2) => ({ x: v.x + d.x, y: v.y + d.y }), { fix45: true, doc: this.doc });
       if (fix.length) this.apply('Move', fix, m.key);
       // Pours are filled again around the moved copper, in the same undo step.
-      if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: m.key, quiet: true });
+      if (this.poursFilled()) this.refillPours({ mergeKey: m.key, quiet: true });
       if (this.moveClash) this.say('This move makes a short or breaks clearance (see Review).');
     }
     if (m) this.history?.seal();
@@ -749,7 +773,7 @@ export class App {
       this.apply('Replicate layout', r.ops, key);
       done.push(`${b.block} (${r.pairs.map((x) => x[1]).join(' ')})`);
     }
-    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    if (this.poursFilled()) this.refillPours({ mergeKey: key, quiet: true });
     this.history?.seal();
     this.say(`Replicated onto ${done.join('; ')}.`);
   }
@@ -784,7 +808,7 @@ export class App {
     }
     const key = newUid('rot');
     if (!this.apply('Rotate', ops, key)) return;
-    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    if (this.poursFilled()) this.refillPours({ mergeKey: key, quiet: true });
     this.history?.seal();
   }
 
@@ -799,7 +823,7 @@ export class App {
     if (!r.ops.length) return this.say(r.locked ? `Nothing to unroute: ${r.locked} locked item(s) stay.` : `Nothing routed in ${what}.`);
     const key = newUid('unroute');
     if (!this.apply(`Unroute ${what}`, r.ops, key)) return;
-    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    if (this.poursFilled()) this.refillPours({ mergeKey: key, quiet: true });
     this.history?.seal();
     this.select([...this.selection].filter((u) => this.doc!.nodes.has(u)));
     const nets = r.nets.length > 3 ? `${r.nets.length} nets` : r.nets.join(', ');
@@ -869,7 +893,7 @@ export class App {
       const plan = rubberbandPlan(this.doc, this.engine, this.copper, [u]);
       this.apply('Flip', [...flipPartOps(this.doc, this.engine, u), ...rubberbandOps(plan, (p: Vec2) => ({ x: 2 * at.x - p.x, y: p.y }), { fix45: true, doc: this.doc })], key);
     }
-    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    if (this.poursFilled()) this.refillPours({ mergeKey: key, quiet: true });
     this.history?.seal();
     this.say(locked.length ? `${locked.length} locked part(s) left as they are.` : `Flipped ${parts.length} part${parts.length > 1 ? 's' : ''}.`);
     this.emit('inspect');
@@ -900,7 +924,7 @@ export class App {
       const d = { x: m.to.x - from.x, y: m.to.y - from.y };
       this.apply('Align', [{ op: 'setRule', uid: m.uid, name: 'position', decl: { name: 'position', value: m.to } }, ...rubberbandOps(plan, (p: Vec2) => ({ x: p.x + d.x, y: p.y + d.y }), { fix45: true, doc: this.doc })], key);
     }
-    if ([...this.doc.nodes.values()].some((n) => n.type === 'fill')) this.refillPours({ mergeKey: key, quiet: true });
+    if (this.poursFilled()) this.refillPours({ mergeKey: key, quiet: true });
     this.history?.seal();
   }
 
@@ -1256,6 +1280,8 @@ export class App {
     ctx.beginPath();
     const coloured: typeof this.ratsnest.lines = [];
     for (const l of this.ratsnest.lines) {
+      // While routing, the lines from the route's own copper give way to the live one (drawn by the router).
+      if (this.mode === 'route' && this.route.replacesRat(l)) continue;
       if (this.netColors.has(l.net)) {
         coloured.push(l);
         continue;

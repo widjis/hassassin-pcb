@@ -63,6 +63,11 @@ export function initResizers(workspace: HTMLElement): void {
       handle.addEventListener('pointercancel', up, { once: true });
     });
   }
+  try {
+    if (localStorage.getItem(`${KEY}:leftHidden`)) workspace.classList.add('no-left');
+  } catch {
+    /* ignore */
+  }
   apply();
 }
 
@@ -93,3 +98,19 @@ export function toggleRight(): boolean {
   apply();
   return rightBefore !== null;
 }
+
+/** Hide / show the left (agent) panel, for more room on the canvas; the rail's top button brings it back. */
+export function toggleLeft(): boolean {
+  if (!ws) return false;
+  const hidden = ws.classList.toggle('no-left');
+  try {
+    localStorage.setItem(`${KEY}:leftHidden`, hidden ? '1' : '');
+  } catch {
+    /* ignore */
+  }
+  window.dispatchEvent(new Event('resize'));
+  window.dispatchEvent(new CustomEvent('leftpanel', { detail: hidden }));
+  return hidden;
+}
+
+export const leftHidden = (): boolean => !!ws?.classList.contains('no-left');

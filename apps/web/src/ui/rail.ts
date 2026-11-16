@@ -19,6 +19,7 @@ const ICONS: Record<string, string> = {
   review: svg('<path d="M10 3 4 5.5V10c0 3.5 2.6 6 6 7 3.4-1 6-3.5 6-7V5.5z"/><path d="m7.5 10 1.8 1.8L12.8 8"/>'),
   comments: svg('<path d="M4 5h12v8H9l-3 3v-3H4z"/>'),
   history: svg('<circle cx="10" cy="10" r="6.5"/><path d="M10 6.5V10l2.5 1.5"/>'),
+  panel: svg('<rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M8 4v12"/><path d="m13.3 8.5-1.8 1.5 1.8 1.5"/>'),
   help: svg('<circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 2.8 1.8c-.5.3-.8.7-.8 1.2v.5"/><circle cx="10" cy="14" r="0.4" fill="currentColor"/>'),
 };
 
@@ -29,6 +30,8 @@ export interface RailEntry {
   badge?: string;
   /** Placed at the bottom of the rail. */
   bottom?: boolean;
+  /** A plain button (no flyout): runs this instead. */
+  action?: () => void;
 }
 
 export interface Rail {
@@ -44,10 +47,11 @@ export function mountRail(rail: HTMLElement, flyout: HTMLElement, entries: RailE
   const top = h('div', { class: 'rail-group' });
   const bottom = h('div', { class: 'rail-group' });
   for (const e of entries) {
-    const b = h('button', { class: 'rail-btn', title: e.title, 'aria-label': e.title, onclick: () => (open === e.id ? api.close() : api.show(e.id)) });
+    const b = h('button', { class: 'rail-btn', title: e.title, 'aria-label': e.title, onclick: () => (e.action ? e.action() : open === e.id ? api.close() : api.show(e.id)) });
     b.innerHTML = ICONS[e.id] ?? '';
     if (e.badge) b.append(h('span', { id: e.badge, class: 'badge rail-badge' }));
-    buttons.set(e.id, b);
+    if (!e.action) buttons.set(e.id, b);
+    b.dataset.rail = e.id;
     (e.bottom ? bottom : top).append(b);
   }
   rail.append(top, bottom);

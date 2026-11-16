@@ -24,6 +24,7 @@ import {
   roundCorners,
   type PathPiece,
   dist,
+  netIslands,
   netPads,
   netRouteRules,
   newUid,
@@ -105,6 +106,8 @@ export class RouteTool {
   private width0: number | null = null;
   private via0: { d: number; h: number } | null = null;
   private worldCache: { key: string; w: RouteWorld }[] = [];
+  /** The net's copper already joined to the route (own) and the rest (others), for the live ratsnest. */
+  private isl: { key: string; own: Set<string>; others: Vec2[] } | null = null;
   private shoveTimer = 0;
   private drag: { uid: string; from: Vec2; nrm: Vec2; plan: DragPlan | null } | null = null;
 
@@ -160,6 +163,7 @@ export class RouteTool {
   cancel(): void {
     const was = this.active;
     this.net = this.netUid = this.last = this.startUid = null;
+    this.isl = null;
     this.target = null;
     this.preview = [];
     this.partnerPreview = [];
@@ -720,10 +724,56 @@ export class RouteTool {
     app.apply('Drag trace', ops);
   }
 
+  private islands(): { own: Set<string>; others: Vec2[] } | null {
+    const app = this.app;
+    if (!this.net || !this.last || !app.doc) return null;
+    const key = `${this.net}|${app.docVersion}|${this.last.x},${this.last.y}|${app.activeLayer}`;
+    if (this.isl?.key !== key) {
+      const r = netIslands(app.doc, app.engine!, app.copper, this.net, { p: this.last, layer: app.activeLayer });
+      const k = (q: Vec2) => `${q.x},${q.y}`;
+      this.isl = { key, own: new Set((r.groups[r.probe] ?? []).map(k)), others: r.groups.filter((_, i) => i !== r.probe).flat() };
+    }
+    return this.isl;
+  }
+
+  /**
+   * The live ratsnest line (KiCad, EAGLE): from the route's head (the end of the preview, or the cursor) to
+   * the nearest copper of the net that the route is not yet joined to. Null when it is all joined.
+   */
+  liveRat(): { net: string; a: Vec2; b: Vec2 } | null {
+    const isl = this.islands();
+    if (!isl || !isl.others.length || !this.net) return null;
+    const head = this.preview.at(-1) ?? this.target?.p ?? this.app.cursor;
+    let best: Vec2 | null = null;
+    for (const q of isl.others) if (!best || dist(head, q) < dist(head, best)) best = q;
+    return best && dist(head, best) > 1e-6 ? { net: this.net, a: head, b: best } : null;
+  }
+
+  /** Whether a ratsnest line of the board is replaced by the live one (it leaves the route's own copper). */
+  replacesRat(l: { net: string; a: Vec2; b: Vec2 }): boolean {
+    if (!this.active || l.net !== this.net) return false;
+    const isl = this.islands();
+    return !!isl && (isl.own.has(`${l.a.x},${l.a.y}`) || isl.own.has(`${l.b.x},${l.b.y}`));
+  }
+
   drawOverlay(ctx: CanvasRenderingContext2D, S: (p: Vec2) => Vec2): void {
     if (this.app.mode !== 'route') return;
     const p = this.target?.p ?? this.app.cursor;
     const s = S(p);
+    const rat = this.liveRat();
+    if (rat) {
+      const a = S(rat.a);
+      const b = S(rat.b);
+      ctx.strokeStyle = this.app.netColors.get(rat.net) ?? 'rgba(255, 255, 255, 0.95)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     // The part the preview could not reach, in red.
     if (this.blocked && this.preview.length) {
       const e = S(this.preview[this.preview.length - 1]!);

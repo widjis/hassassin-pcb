@@ -72,6 +72,7 @@ export const SHORTCUTS: { group: string; items: Shortcut[] }[] = [
       { keys: 'Ctrl+Z · Ctrl+Shift+Z · Ctrl+Y', what: 'Undo · redo', as: 'KiCad' },
       { keys: 'Ctrl+S', what: 'Save', as: 'KiCad' },
       { keys: 'B', what: 'Refill the pours', as: 'KiCad' },
+      { keys: 'Ctrl+B', what: 'Unfill the pours (the selected ones, or all); outlines stay', as: 'KiCad', note: 'Unfill All Zones' },
     ],
   },
   {
@@ -83,6 +84,7 @@ export const SHORTCUTS: { group: string; items: Shortcut[] }[] = [
       { keys: 'Space + drag · middle drag · two-finger scroll', what: 'Pan' },
       { keys: 'Wheel · pinch', what: 'Zoom' },
       { keys: 'Home · 0', what: 'Fit the board' },
+      { keys: 'Ctrl+\\', what: 'Hide / show the left (agent) panel', as: 'own', note: 'Ctrl+B unfills the pours here' },
       { keys: '3', what: '3D view' },
       { keys: 'Tab', what: 'Schematic' },
       { keys: 'C', what: 'Comment mode' },
