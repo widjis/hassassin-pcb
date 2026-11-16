@@ -50,6 +50,7 @@ import {
   type Clip,
   itemsInRect,
   symbolBounds,
+  freeSymbolSpot,
   placePartOps,
   type PartDef,
   arcPoints,
@@ -331,10 +332,10 @@ export class SchematicView {
     const s = this.sheet();
     const doc = this.app.doc;
     if (!s || !doc) return this.app.say('Open or create a schematic first.');
-    const at = this.snap({ x: this.view.cx, y: this.view.cy });
-    // Step right until the new symbol's outline (body and pins, plus a margin) is clear of the others.
+    const start = this.snap({ x: this.view.cx, y: this.view.cy });
+    // The nearest place where the new symbol's outline (body and pins, plus a margin) touches nothing on
+    // the sheet: no other symbol, wire, label or block, so no pin connects by landing on existing wiring.
     const e = this.app.engine;
-    const taken = e ? s.children.map((c) => doc.nodes.get(c)).filter((n) => n?.type === 'symbol').map((n) => symbolBounds(doc, e, n!.uid)) : [];
     const u0 = part.units[0];
     let ext = { minX: -5, minY: -5, maxX: 5, maxY: 5 };
     if (u0) {
@@ -342,8 +343,7 @@ export class SchematicView {
       const ys = [...u0.pins.map((q) => q.at.y), ...u0.graphics.flatMap((g) => (g.t === 'rect' ? [g.a.y, g.b.y] : []))];
       if (xs.length) ext = { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs) + 8, maxY: Math.max(...ys) };
     }
-    const hits = () => taken.some((b) => at.x + ext.minX - 2.54 < b.maxX && at.x + ext.maxX + 2.54 > b.minX && at.y + ext.minY - 2.54 < b.maxY && at.y + ext.maxY + 2.54 > b.minY);
-    for (let i = 0; i < 80 && hits(); i++) at.x += 5.08;
+    const at = e ? this.snap(freeSymbolSpot(doc, e, s.uid, ext, start)) : start;
     // A multi-unit part starts with unit A; the inspector offers the other units.
     const multi = part.units.length > 1;
     const { ops, ref, uids } = placePartOps(doc, s.uid, part, at, multi ? { units: [1] } : {});

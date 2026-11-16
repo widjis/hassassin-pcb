@@ -897,6 +897,27 @@ export function itemsInRect(doc: Doc, engine: StyleEngine, sheetUid: string, r: 
 }
 
 /**
+ * A free place for a new symbol near `start`: the symbol's extent `ext` (relative to its origin) plus
+ * `margin` touches nothing on the sheet — no symbol, wire, label, junction, no-connect, sub-sheet block,
+ * group box or note — so none of its pins lands on existing wiring and connects by accident. Positions
+ * are tried ring by ring around `start` in steps of `step` (nearest first); `start` itself when nothing is
+ * free within `rings` steps.
+ */
+export function freeSymbolSpot(doc: Doc, engine: StyleEngine, sheetUid: string, ext: Rect, start: Vec2, opts: { step?: number; margin?: number; rings?: number } = {}): Vec2 {
+  const step = opts.step ?? 5.08;
+  const margin = opts.margin ?? 2.54;
+  const rings = opts.rings ?? 40;
+  const free = (at: Vec2) => !itemsInRect(doc, engine, sheetUid, { minX: at.x + ext.minX - margin, minY: at.y + ext.minY - margin, maxX: at.x + ext.maxX + margin, maxY: at.y + ext.maxY + margin }, 'touch').length;
+  for (let r = 0; r <= rings; r++) {
+    const ring: Vec2[] = [];
+    for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) if (Math.max(Math.abs(i), Math.abs(j)) === r) ring.push(round({ x: start.x + i * step, y: start.y + j * step }));
+    ring.sort((p, q) => Math.hypot(p.x - start.x, p.y - start.y) - Math.hypot(q.x - start.x, q.y - start.y));
+    for (const at of ring) if (free(at)) return at;
+  }
+  return start;
+}
+
+/**
  * Rotate (90° counter-clockwise on screen) or mirror a selection as one piece around its centre
  * (snapped to `grid`). Selected wires, labels, junctions and no-connects turn with it; wires
  * outside the selection that end on its pins follow as in moveSymbolsOps. A single symbol on
