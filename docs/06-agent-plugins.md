@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
 | Version | 0.2 |
-| Status | **Draft 0.2 with the owner's answers, waiting for approval; work starts after PM3 is closed (P13)** |
+| Status | **Approved on 2026-11-16 (0.2); work starts after PM3 is closed (P13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -288,7 +288,7 @@ that completes it, and adds the commit id after the item name.
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 0.1 | 2026-11-16 | First draft | — |
-| 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Answers by the owner in chat; approval pending |
+| 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Owner (widjis), in chat: "Setuju" |
 
 ## Approval
 
@@ -296,4 +296,7 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 
 | Role | Name | Date | Version approved |
 |---|---|---|---|
-| Owner | | | |
+| Owner | widjis | 2026-11-16 | 0.2 |
+
+Approval was given by the owner in the working chat ("Setuju" — "Agreed") and recorded here by the
+implementer.
