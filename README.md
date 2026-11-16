@@ -43,7 +43,7 @@ Part of the [Hassassin Mechatronics](https://github.com/widjis/hassassin-mechatr
 - [docs/04-schematic-improvements.md](docs/04-schematic-improvements.md) — the current work agreement for the schematic editor (milestones M1–M3) and its progress.
 - [docs/05-pcb-improvements.md](docs/05-pcb-improvements.md) — the work agreement for the PCB layout (milestones PM1–PM3) and its progress.
 - [docs/06-agent-plugins.md](docs/06-agent-plugins.md) — work agreement (approved, after PM3): agent plugins, component selection from trusted sources, and checked datasheet reading.
-- [docs/07-desktop-app.md](docs/07-desktop-app.md) — draft work agreement: desktop app, local-first projects with their agent chats on disk.
+- [docs/07-desktop-app.md](docs/07-desktop-app.md) — work agreement (approved, after 06): desktop app, local-first projects with their agent chats on disk.
 
 ## Running it
 
