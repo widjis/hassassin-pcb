@@ -543,6 +543,15 @@ $('newBtn').addEventListener('click', () => {
 // ---- collaboration ----
 const collab = new Collab(app);
 (window as unknown as { collab: Collab }).collab = collab;
+// New project / Open: the shared project stays as it was on the server; this tab leaves it (its link, its
+// agent chats), so neither edits nor the agent reach the old project. Share again to work with others.
+app.on('opened', () => {
+  if (!collab.session && !app.collab) return;
+  const was = app.fileName;
+  collab.leave();
+  history.replaceState(null, '', location.pathname);
+  setTimeout(() => app.say(`Left the shared project “${was}”. This project is local: Share it to work with others or with the agent.`), 0);
+});
 mountCollabBar(app, collab, $('collabBar'), () => openShareDialog(app, collab));
 const focusComment = (c: DocNode) => {
   app.focusedComment = c.uid;

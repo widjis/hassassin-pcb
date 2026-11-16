@@ -85,7 +85,7 @@ import { library } from './library.ts';
 
 export type Inspected = { kind: 'node'; uid: string } | { kind: 'ruleset'; id: string } | { kind: 'none' };
 export type Mode = 'select' | 'route' | 'draw' | 'measure';
-type Event = 'parts' | 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet' | 'collab' | 'presence' | 'comments';
+type Event = 'opened' | 'parts' | 'doc' | 'change' | 'selection' | 'layers' | 'rules' | 'query' | 'view' | 'inspect' | 'mode' | 'status' | 'drc' | 'space' | 'sheet' | 'collab' | 'presence' | 'comments';
 export type Space = 'layout' | 'schematic';
 
 const DEFAULT_HIDDEN = new Set(['paste', 'mask', 'adhesive', 'courtyard', 'fab', 'user']);
@@ -313,6 +313,9 @@ export class App {
   }
 
   private setDoc(doc: Doc, layers: LayerInfo[], name: string, stats: Record<string, number>, keepView = false): void {
+    // A project opened or created here (not a copy from the collaboration server): listeners leave the
+    // shared project first, before this document takes the old one's place.
+    if (!keepView) this.emit('opened');
     const keep = keepView && this.doc ? { view: { ...this.view }, space: this.space, visible: new Set(this.visible), selection: [...this.selection] } : null;
     this.doc = doc;
     this.layers = layers;
