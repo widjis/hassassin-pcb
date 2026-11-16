@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
 | Version | 0.3 |
-| Status | **Approved on 2026-11-16 (0.2); revision 0.3 (A12 plugin catalog, A13 autonomy levels) waiting for approval** |
+| Status | **Approved on 2026-11-16 (0.3)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -330,7 +330,7 @@ that completes it, and adds the commit id after the item name.
 |---|---|---|---|
 | 0.1 | 2026-11-16 | First draft | — |
 | 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Owner (widjis), in chat: "Setuju" |
-| 0.3 | 2026-11-16 | Added A12, a catalog of trusted plugins the agent can install on demand (pinned versions, SHA-256, never anything outside the catalog), and A13, autonomy levels per project (Ask every time / Automatic within limits / Full) with gates that always ask. Reason: the owner asked for an agent that chooses and installs the tools it needs by itself, as desktop coding agents do. | Owner (widjis), in chat: "Ya, tulis revisinya" (to write it); approval pending |
+| 0.3 | 2026-11-16 | Added A12, a catalog of trusted plugins the agent can install on demand (pinned versions, SHA-256, never anything outside the catalog), and A13, autonomy levels per project (Ask every time / Automatic within limits / Full) with gates that always ask. Reason: the owner asked for an agent that chooses and installs the tools it needs by itself, as desktop coding agents do. | Owner (widjis), in chat: "Ya, tulis revisinya", then "Setuju" |
 
 ## Approval
 
@@ -339,6 +339,7 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 | Role | Name | Date | Version approved |
 |---|---|---|---|
 | Owner | widjis | 2026-11-16 | 0.2 |
+| Owner | widjis | 2026-11-16 | 0.3 |
 
 Approval was given by the owner in the working chat ("Setuju" — "Agreed") and recorded here by the
 implementer.
