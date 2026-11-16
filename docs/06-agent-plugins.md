@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
-| Version | 0.3 |
-| Status | **Approved on 2026-11-16 (0.3); A1 done, AM1 continues (A2, A3, A12, A13)** |
+| Version | 0.4 |
+| Status | **Approved on 2026-11-16 (0.3); revision 0.4 (A14) waiting for approval; A1 and A2 done, AM1 continues (A14, A3, A12, A13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -63,8 +63,9 @@ so the bar is the same as for DRC: the agent proposes, deterministic checks and 
 ## 3. Scope
 
 Three milestones, in order: AM1 builds the plugin system and safe access to sources, AM2 the
-component selection, AM3 the datasheet reading with verification. Within AM1 the order is A1, A2, A3, A12,
-A13 (A12 and A13 were added in revision 0.3, numbered after the others so references stay valid). Work starts after milestone PM3 of
+component selection, AM3 the datasheet reading with verification. Within AM1 the order is A1, A2, A14, A3, A12,
+A13 (A12 and A13 were added in revision 0.3, A14 in revision 0.4, numbered after the others so references
+stay valid). Work starts after milestone PM3 of
 [05-pcb-improvements.md](05-pcb-improvements.md) is closed (P13's third-party Gerber check). Each item has acceptance criteria that
 can be checked; an item is done only when all of them pass.
 
@@ -228,6 +229,33 @@ can be checked; an item is done only when all of them pass.
   - Acceptance: datasheets of ten parts from five manufacturers fetched, stored and read; the pin table
     page of each is found by `find_in_datasheet`; a second request uses the stored copy.
 
+- [ ] **A14. New project: AI Full or AI Assisted.**
+  - *File → New project* (and the start screen) asks how to work, with two choices:
+    - **AI Full:** a wizard, then the agent takes the project through its stages.
+    - **AI Assisted:** the schematic opens, as today; the agent is in its panel when the user wants it.
+  - **Wizard** (AI Full), one page per step, back and forth, nothing created until *Start*:
+    1. What to build: a short description (for example "a USB-C powered sensor node with an ESP32-C3 and a
+       humidity sensor").
+    2. Requirements: the project's spec fields (supply, current, interfaces, size, environment, quantity,
+       budget …), each optional, with "let the AI propose" for the ones left empty.
+    3. Limits for the agent's choices (A6): preferred distributors (LCSC, Mouser), smallest package sizes,
+       budget per board, copper layers, board size or shape if known, and the autonomy level (A13).
+    4. Summary, then *Start*.
+  - *Start* creates the project on the collaboration server (a private link, as *Share* does), records the
+    requirements and limits in the project, switches on the plugins the work needs that are installed (web,
+    A2), and sends the agent a first message built from the wizard.
+  - **Stage gates:** the agent works one stage at a time (requirements → schematic → components → layout →
+    review) and stops at the end of each with a summary of what it did and what is open, and two buttons:
+    *Continue to <next stage>* and *Change something* (a message to the agent). The Project panel's stage
+    list shows where it is. Nothing of a later stage is started before the user continues.
+  - The choice is kept in the project (`aiMode`: full / assisted) and can be changed in the Project panel; a
+    project opened from a file or KiCad keeps AI Assisted.
+  - Without a reachable collaboration server or a ready agent backend, AI Full is shown as unavailable with
+    the reason (the server is not running, or no backend is signed in) and AI Assisted is offered.
+  - Acceptance: browser check of both paths (screenshots for the owner); the wizard's answers land in the
+    project's requirements and limits; the agent stops after every stage with the two buttons and does not
+    start the next stage on its own; *Change something* reaches the agent; switching the mode later works;
+    AI Full works with Claude Code and with the Claude API backend (a scripted model in the tests).
 - [ ] **A12. Plugin catalog and installing on demand.**
   - A **catalog** of trusted plugins, kept by the owner in a repository they choose (a JSON file): per
     plugin its manifest (A1), version, download address (a GitHub release file or tag), SHA-256 of the
@@ -435,6 +463,7 @@ that completes it, and adds the commit id after the item name.
 | 0.1 | 2026-11-16 | First draft | — |
 | 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Owner (widjis), in chat: "Setuju" |
 | 0.3 | 2026-11-16 | Added A12, a catalog of trusted plugins the agent can install on demand (pinned versions, SHA-256, never anything outside the catalog), and A13, autonomy levels per project (Ask every time / Automatic within limits / Full) with gates that always ask. Reason: the owner asked for an agent that chooses and installs the tools it needs by itself, as desktop coding agents do. | Owner (widjis), in chat: "Ya, tulis revisinya", then "Setuju" |
+| 0.4 | 2026-11-16 | Added A14, a choice at *New project* between AI Full (a wizard, then the agent works stage by stage, stopping for the user's go-ahead after each stage) and AI Assisted (the schematic, the agent on demand); two choices only; done after A2, before A3. Reason: the owner wants the AI-first start of Flux next to working by hand. | Pending (owner's choices in chat: stop after each stage, two choices, after A2) |
 
 ## Approval
 
