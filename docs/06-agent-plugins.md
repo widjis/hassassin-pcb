@@ -283,6 +283,15 @@ can be checked; an item is done only when all of them pass.
       / AI Assisted; switching to AI Full starts at the first stage not done) and the stage.
     - **Found on the way:** *Stop* ended only the launcher of Claude Code / Codex, leaving the program
       running; the CLI now runs in its own process group and *Stop* ends the whole group.
+    - **Whether an agent works** (after the owner found the panel confusing): a status line from the server
+      says, for every agent running on the project, whose it is, the backend, how long, the last step, with
+      *Stop* for the user's own agents and *Watch* for others'; the send button, the stage bar and the
+      checklist follow it, also after a reload or from another tab (the step in progress spins only while
+      the agent works; otherwise "not running"). *Continue* is off while an agent works, and the next stage
+      is undone if the server refuses the message. Closing or reloading the page no longer stops the agent.
+    - **Several agents at once** (owner's choice): each conversation may run its agent at the same time on
+      one project; each agent is told which others are working, for whom and on what, and to stay within
+      its task without undoing their changes.
     - **Browser check** (test server with a copy of the data folder, Claude Code on the owner's
       subscription): the dialog, the wizard, *Start* → project shared, the bar "Stage 1 of 5 ·
       Requirements · working", the checklist; the agent researched the key parts with the web plugin,

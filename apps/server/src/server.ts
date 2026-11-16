@@ -80,8 +80,9 @@ interface Chat {
   agentUser: string;
   /** Each reply's range of transactions, so its edits can be undone together. */
   turns: Map<string, { from: number; to: number; undone: boolean }>;
-  /** When the reply now running started (for the Agent tab's status line). */
+  /** When the reply now running started (for the Agent tab's status line), and what it was asked. */
   startedAt?: number;
+  lastPrompt?: string;
   /** Running plugin processes of this chat (API backend), started on first use. */
   pluginClients: Map<string, McpClient>;
 }
@@ -292,6 +293,7 @@ export async function startServer(opts: ServerOptions) {
     mirror({ type: 'user', text: prompt, by: c0.by });
     mirror({ type: 'start', at: Date.now() });
     chat.startedAt = Date.now();
+    chat.lastPrompt = prompt;
     const abort = new AbortController();
     chat.abort = abort;
     // Closing or reloading the page does not stop the agent: it works on (every open tab follows it through
@@ -304,7 +306,16 @@ export async function startServer(opts: ServerOptions) {
       const { plugins: active, skipped } = await pluginHost.active(lp.doc.meta.agentPlugins, mode);
       for (const s of skipped) send({ type: 'note', text: `Plugin ${s.id} ${s.reason}.` });
       // The plugins, and for an AI Full project its stage and limits (A14).
-      const note = [pluginNote(active, skipped), aiFlowNote(lp.doc)].filter(Boolean).join('\n\n');
+      // Other agents working on this project at the same time (several may run at once).
+      const others = [...chats.values()].filter((c) => c.project === id && c.id !== chatId && c.abort);
+      const together = others.length
+        ? [
+            `Other agents are working on this project at the same time; their edits appear live:`,
+            ...others.map((c) => `- ${c.agentUser}, asked by ${c.by}: "${(c.lastPrompt ?? '').slice(0, 200)}"`),
+            'Stay within your own task, do not undo or redo their changes, and avoid editing the same parts or nets they are working on; say so if your task needs them.',
+          ].join('\n')
+        : '';
+      const note = [pluginNote(active, skipped), aiFlowNote(lp.doc), together].filter(Boolean).join('\n\n');
       if (chat.session instanceof CliAgentSession) {
         chat.session.plugins = active;
         chat.session.pluginNote = note;

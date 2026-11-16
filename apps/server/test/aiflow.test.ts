@@ -177,3 +177,36 @@ describe('an agent keeps working when the page closes (A14)', () => {
   });
 });
 
+describe('several agents on one project (A14)', () => {
+  let srv: Awaited<ReturnType<typeof startServer>>;
+  let base = '';
+  const seen: string[] = [];
+  const model: ModelCall = async (params) => {
+    const first = JSON.stringify(params.messages[0]);
+    seen.push(first);
+    // The first agent takes a while, so the second one starts while it works.
+    if (first.includes('draw the power block')) await new Promise((r) => setTimeout(r, 700));
+    return { id: 'm', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok', citations: null }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0 } } as never;
+  };
+  beforeAll(async () => {
+    srv = await startServer({ port: 0, dataDir: mkdtempSync(join(tmpdir(), 'hmulti-')), kicad: false, agentModel: model, builtinPlugins: null });
+    base = `http://127.0.0.1:${srv.port}`;
+  });
+  afterAll(() => srv.close());
+
+  it('run at the same time, each told what the others are doing', async () => {
+    const r = await fetch(`${base}/api/projects`, { method: 'POST', body: JSON.stringify({ name: 'M', doc: toFile(newProject().doc) }) });
+    const { id, tokens } = (await r.json()) as { id: string; tokens: { edit: string } };
+    const ask = (prompt: string, name: string) => fetch(`${base}/api/agent/${id}?token=${tokens.edit}`, { method: 'POST', body: JSON.stringify({ prompt, user: { name } }) }).then((x) => x.text());
+    const a = ask('draw the power block', 'Ana');
+    await new Promise((res) => setTimeout(res, 200));
+    const b = await ask('check the sensor wiring', 'Budi');
+    expect(b).toContain('"type":"done"');
+    await a;
+    const second = seen.find((x) => x.includes('check the sensor wiring'))!;
+    expect(second).toContain('Other agents are working on this project at the same time');
+    expect(second).toContain('asked by Ana: \\"draw the power block\\"');
+    expect(seen.find((x) => x.includes('draw the power block'))).not.toContain('Other agents');
+  });
+});
+

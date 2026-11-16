@@ -435,7 +435,9 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       return;
     }
     for (const [id, r] of runs) {
-      const mine = id === chat;
+      const here = id === chat;
+      // Several agents may work at once: mine (this chat or another of my chats) can be stopped here.
+      const mine = here || r.by === collab.user.name;
       const stop = h('button', { class: 'link', title: 'Stop this agent' }, 'Stop');
       stop.addEventListener('click', () => collab.session && void fetch(`/api/agent/${collab.session.id}/stop?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', body: JSON.stringify({ chat: id }) }));
       statusBox.append(
@@ -443,8 +445,9 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
           'div',
           { class: 'status-row working' },
           h('span', { class: 'live-dot online pulse' }),
-          h('span', {}, h('b', {}, mine ? 'Your agent is working' : `${r.by}'s agent is working`), ` · ${backendName(r.backend)} · ${ago(r.since)}${r.last ? ` · ${r.last}` : ''}`),
-          mine ? stop : h('button', { class: 'link', onclick: () => ((viewing = id), drawLog(), drawTasks()) }, 'Watch'),
+          h('span', {}, h('b', {}, here ? 'Your agent is working' : mine ? 'Your other agent is working' : `${r.by}'s agent is working`), ` · ${backendName(r.backend)} · ${ago(r.since)}${r.last ? ` · ${r.last}` : ''}`),
+          here ? null : h('button', { class: 'link', onclick: () => ((viewing = id), drawLog(), drawTasks()) }, 'Watch'),
+          mine ? stop : null,
         ),
       );
     }

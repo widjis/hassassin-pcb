@@ -160,6 +160,10 @@ Notes:
   stage at a time (requirements, schematic, components, layout, review) and stops after each with
   `finish_stage`; the Agent tab shows *Continue to <next stage>* and *Change something*. The mode is in the
   Project panel.
+- The status line at the top of the Agent tab says whether an agent works on the project (whose, which
+  backend, how long, its last step) with *Stop* or *Watch*. Several agents may work on one project at once
+  (one per conversation, *＋* starts another); each is told what the others are doing. Closing or reloading
+  the page does not stop an agent; only *Stop* does.
 
 ## Plugins
 
