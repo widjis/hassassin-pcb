@@ -342,6 +342,12 @@ document before work on a measured item starts.
     The layout toolbar as icons (owner: "all text gets confusing"): line icons drawn for this app in the
     rail's style (`apps/web/src/ui/toolIcons.ts`), the name first in each tooltip and as aria-label, ▾ on
     menus; the active layer stays text. Approved by the owner from a screenshot ("Keep them").
+    Tool palette (owner: "a toolbar as in EAGLE or KiCad, symbols, not words"), after the KiCad 8 PCB
+    Editor manual's right toolbar ("Placement and drawing operations"): a column of icons on the right of
+    the board with Select and Route, the drawing tools (copper pour, keep-out, board outline as polygon or
+    rectangle, silkscreen line, text, mounting hole, fiducial), Measure and Delete; the lit icon is the
+    active tool. The Draw menu is gone (bend and miter stay in the drawing bar); the toolbar's Pour button
+    became a paint bucket so it is not taken for drawing a pour. Approved from a screenshot ("Keep it").
 - [x] **P17. Copper coloured by net (revision 0.6).** References: KiCad 8 manual (Appearance panel, net and
   net class colours, net display option "All" / "Ratsnest" / "None"), Pulsonix help (Colours > Nets,
   "Use Own Colour", apply to a net class; Pulsonix shares its lineage with Easy-PC, which the owner

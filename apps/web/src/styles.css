@@ -472,3 +472,6 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .layout-tools button.ico svg { display: block; }
 .layout-tools button.ico .caret { font-size: 9px; opacity: 0.7; margin-left: 1px; }
 .layout-tools .seg.tools button.ico { padding: 4px 9px; }
+/* The tool palette on the right of the board (KiCad 8's right toolbar), styled as the rail. */
+.rail.palette { left: auto; right: 8px; justify-content: flex-start; gap: 6px; }
+.rail.palette.hidden { display: none; }

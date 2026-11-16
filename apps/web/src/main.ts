@@ -2,7 +2,7 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { describeBackChange, kicadNetlist, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
-import { DRAW_KEYS, DRAW_KINDS } from './tools/draw.ts';
+import type { DrawKind } from './tools/draw.ts';
 import { closeShortcuts, toggleShortcuts } from './ui/shortcuts.ts';
 import { CORNER_MODES, VIA_PRESETS, WIDTH_PRESETS, type RouteMode } from './tools/route.ts';
 import { isTrackpadScroll, SchematicView } from './sch/view.ts';
@@ -14,7 +14,7 @@ import { mountParts } from './ui/parts.ts';
 import { mountAgent } from './ui/agent.ts';
 import { mountBoard } from './ui/board.ts';
 import { initResizers, toggleLeft } from './ui/resize.ts';
-import { iconize, TOOL_ICONS } from './ui/toolIcons.ts';
+import { iconize, PALETTE_NAMES, TOOL_ICONS, type ToolIcon } from './ui/toolIcons.ts';
 import { mountInspector } from './ui/inspector.ts';
 import { mountLayers } from './ui/layers.ts';
 import { mountRules } from './ui/rules.ts';
@@ -197,10 +197,16 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 // ---- toolbar ----
-const tools = $('tools');
+// The tool palette on the right of the board (KiCad 8's right toolbar): modes, drawing tools, measure, delete.
+const tools = $('palette');
 tools.addEventListener('click', (e) => {
-  const m = (e.target as HTMLElement).closest('button')?.dataset.mode as Mode | undefined;
-  if (m === 'measure') app.measure.start();
+  const b = (e.target as HTMLElement).closest('button');
+  if (!b) return;
+  b.blur();
+  const m = b.dataset.mode as Mode | undefined;
+  if (b.dataset.draw) app.drawing.start(b.dataset.draw as DrawKind);
+  else if (b.dataset.act === 'delete') app.deleteSelection();
+  else if (m === 'measure') app.measure.start();
   else if (m) app.setMode(m);
 });
 // ---- layout / schematic spaces ----
@@ -223,6 +229,7 @@ const syncSpace = () => {
   app.overlay.classList.toggle('hidden', schMode);
   wrap.classList.toggle('sch-mode', schMode);
   $('layoutTools').classList.toggle('hidden', schMode || is3d());
+  tools.classList.toggle('hidden', schMode || is3d());
   $('schTools').classList.toggle('hidden', !schMode || is3d());
   // sheet list
   sheetSelect.replaceChildren(
@@ -616,16 +623,15 @@ const board = mountBoard(app, $('boardPanel'), (running) => {
   autorouteBtn.classList.toggle('on', running);
 });
 // The layout toolbar as icons (owner: "all text is confusing"); names in the tooltips.
-for (const b of $('tools').querySelectorAll<HTMLButtonElement>('button')) {
-  const m = b.dataset.mode as 'select' | 'route' | 'measure';
-  if (m in TOOL_ICONS) iconize(b, m, b.textContent ?? m);
+for (const b of $('palette').querySelectorAll<HTMLButtonElement>('button')) {
+  const k = (b.dataset.mode ?? b.dataset.draw ?? b.dataset.act) as ToolIcon;
+  if (k in TOOL_ICONS) iconize(b, k, PALETTE_NAMES[k] ?? k);
 }
-iconize($('drawBtn'), 'draw', 'Draw', true);
 iconize($('unrouteBtn'), 'unroute', 'Unroute', true);
 iconize(autorouteBtn, 'autoroute', 'Autoroute');
 iconize($('flipBtn'), 'flip', 'View from the other side');
 iconize($('fitBtn'), 'fit', 'Fit');
-iconize($('pourBtn'), 'pour', 'Pour');
+iconize($('pourBtn'), 'fill', 'Pour');
 iconize($('unpourBtn'), 'unpour', 'Unpour');
 iconize($('pickBtn'), 'pick', 'Pick', true);
 autorouteBtn.addEventListener('click', () => (autorouteBtn.blur(), board.routing ? board.cancel() : board.autoroute()));
@@ -698,54 +704,6 @@ $('netExportBtn').addEventListener('click', () => {
   if (r.unresolved.length) notes.push(`no KiCad footprint for ${r.unresolved.map((u) => u.ref).join(', ')}`);
   app.say(`Exported ${base}.net — ${notes.join(' · ')}`);
 });
-// Drawing tools (P6): a menu under the Draw button.
-const drawBtn = $<HTMLButtonElement>('drawBtn');
-let drawMenu: HTMLElement | null = null;
-const closeDraw = () => {
-  drawMenu?.remove();
-  drawMenu = null;
-};
-drawBtn.addEventListener('click', (ev) => {
-  ev.stopPropagation();
-  if (drawMenu) return closeDraw();
-  const r = drawBtn.getBoundingClientRect();
-  const menu = document.createElement('div');
-  Object.assign(menu.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 4}px`, zIndex: '60', background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: '8px', padding: '6px', fontSize: '12px', display: 'grid', gap: '2px', minWidth: '210px', boxShadow: '0 6px 24px rgba(0,0,0,.4)' });
-  for (const d of DRAW_KINDS) {
-    const b = document.createElement('button');
-    b.textContent = d.label;
-    const key = DRAW_KEYS[d.kind];
-    if (key) {
-      const kb = document.createElement('span');
-      kb.textContent = /Mac/.test(navigator.platform) ? key.replace('Ctrl+', '⌘').replace('Shift+', '⇧') : key;
-      Object.assign(kb.style, { float: 'right', opacity: '0.55', marginLeft: '14px', fontFamily: 'var(--mono)' });
-      b.append(kb);
-    }
-    b.title = d.hint;
-    Object.assign(b.style, { textAlign: 'left', border: 'none', background: app.mode === 'draw' && app.drawing.kind === d.kind ? 'var(--panel-2)' : 'transparent' });
-    b.addEventListener('click', () => (closeDraw(), app.drawing.start(d.kind)));
-    menu.append(b);
-  }
-  // Bend style and miter (EAGLE SET WIRE_BEND and MITER); the right mouse button steps through the styles.
-  const sep = document.createElement('div');
-  sep.style.borderTop = '1px solid var(--line)';
-  const bend = document.createElement('select');
-  bend.title = 'Bend style (EAGLE wire bend); the right mouse button steps through them while drawing';
-  for (const b of BEND_STYLES) bend.append(new Option(`Bend ${b.n}: ${b.label}`, String(b.n), false, b.n === app.drawing.bend));
-  bend.addEventListener('change', () => (app.drawing.bend = Number(bend.value)));
-  const miterRow = document.createElement('label');
-  Object.assign(miterRow.style, { display: 'flex', gap: '6px', alignItems: 'center' });
-  const miter = document.createElement('input');
-  Object.assign(miter, { type: 'number', step: '0.1', value: String(app.drawing.miter), title: 'Miter radius at the corner of the 90° and 45° bends: positive rounds, negative cuts straight (90° only), 0 sharp' });
-  miter.style.width = '64px';
-  miter.addEventListener('change', () => (app.drawing.miter = Number(miter.value) || 0));
-  miterRow.append('Miter', miter, 'mm');
-  menu.append(sep, bend, miterRow);
-  menu.addEventListener('click', (e) => e.stopPropagation());
-  document.body.append(menu);
-  drawMenu = menu;
-});
-window.addEventListener('click', closeDraw);
 
 // Unroute (EAGLE RIPUP, KiCad Unroute Selected): a menu under the Unroute button.
 const unrouteBtn = $<HTMLButtonElement>('unrouteBtn');
@@ -897,8 +855,8 @@ layoutAlignSelect.addEventListener('change', () => {
 $('fitBtn').addEventListener('click', () => app.fit());
 $('flipBtn').addEventListener('click', () => app.flip());
 const syncToolbar = () => {
-  for (const b of tools.querySelectorAll<HTMLButtonElement>('button')) b.classList.toggle('on', b.dataset.mode === app.mode);
-  drawBtn.classList.toggle('on', app.mode === 'draw');
+  for (const b of tools.querySelectorAll<HTMLButtonElement>('button'))
+    b.classList.toggle('on', b.dataset.draw ? app.mode === 'draw' && app.drawing.kind === b.dataset.draw : b.dataset.mode === app.mode);
   wrap.classList.toggle('route', app.mode === 'route');
   layerBtn.textContent = app.activeLayer;
   layerBtn.style.borderColor = app.activeLayer === 'B.Cu' ? '#3d8bff' : '#ef6a4c';

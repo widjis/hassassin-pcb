@@ -45,6 +45,26 @@
           </div>
         </div>
         <nav class="rail" id="rail"></nav>
+        <nav class="rail palette" id="palette" aria-label="Board tools">
+          <div class="rail-group">
+            <button class="rail-btn" data-mode="select" title="Select and move (S, Esc)"></button>
+            <button class="rail-btn" data-mode="route" title="Route tracks (X); while routing the right button or Ctrl+/ steps the corner mode"></button>
+          </div>
+          <div class="rail-group">
+            <button class="rail-btn" data-draw="pour" title="Copper pour (Ctrl+Shift+F): click the corners, drag for a rectangle; Enter or double-click closes"></button>
+            <button class="rail-btn" data-draw="keepout" title="Keep-out area (Ctrl+Shift+K): click the corners; then what it forbids"></button>
+            <button class="rail-btn" data-draw="outline-poly" title="Board outline, polygon (Ctrl+Shift+P): click the corners; Enter closes"></button>
+            <button class="rail-btn" data-draw="outline-rect" title="Board outline, rectangle: drag from corner to corner"></button>
+            <button class="rail-btn" data-draw="line" title="Silkscreen line (Ctrl+Shift+L): click the start, then each bend"></button>
+            <button class="rail-btn" data-draw="text" title="Text (T): click where it goes"></button>
+            <button class="rail-btn" data-draw="hole" title="Mounting hole: click where it goes"></button>
+            <button class="rail-btn" data-draw="fiducial" title="Fiducial: click where it goes"></button>
+          </div>
+          <div class="rail-group">
+            <button class="rail-btn" data-mode="measure" title="Measure (Q, Ctrl+Shift+M); select two objects to see their clearance"></button>
+            <button class="rail-btn" data-act="delete" title="Delete the selection (Delete)"></button>
+          </div>
+        </nav>
         <div class="flyout hidden" id="flyout">
           <div class="flyout-head"><span id="flyoutTitle"></span><button id="flyoutClose" title="Close (Esc)">×</button></div>
           <section class="tab-body hidden" data-body="project" id="projectPanel"></section>
@@ -63,12 +83,6 @@
         </div>
         <div class="spacebar">
           <div class="layout-tools" id="layoutTools">
-            <div class="seg tools" id="tools">
-              <button data-mode="select" class="on" title="Select and move (Esc)">Select</button>
-              <button data-mode="route" title="Route traces (X); while routing the right button or Ctrl+/ steps the corner mode">Route</button>
-              <button data-mode="measure" title="Measure distances; select two objects to see their clearance (Q, Ctrl+Shift+M)">Measure</button>
-            </div>
-            <button id="drawBtn" title="Draw the board outline, pours, keep-out areas, silkscreen, mounting holes and fiducials">Draw ▾</button>
             <button id="unrouteBtn" title="Take routed copper off: the selection (U), the selection's nets (Shift+U), an area, or everything">Unroute ▾</button>
             <button id="autorouteBtn" title="Autoroute: route every unrouted connection (45°, vias, clearances kept), checked with DRC before it is applied; runs in the background, one undo step. Click again to stop. Options in the Board panel.">Autoroute</button>
             <div class="mode-bar" id="routeBar" hidden>
