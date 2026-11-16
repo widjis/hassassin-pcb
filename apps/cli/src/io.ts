@@ -37,6 +37,8 @@ export async function readProject(paths: string[]): Promise<Project> {
   }
   const proj = openProject(files);
   if (isHpcb(paths[0]!)) proj.name = basename(paths[0]!).replace(/\.hpcb$/i, '');
+  // KiCad files are read by their full path; the project is named after the board (or first) file only.
+  else proj.name = basename(pcb ?? paths[0]!).replace(/\.kicad_(pcb|sch)$/i, '');
   return proj;
 }
 

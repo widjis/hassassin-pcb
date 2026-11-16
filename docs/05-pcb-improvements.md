@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/05-pcb-improvements.md` |
 | Version | 0.6 |
-| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-15 (0.6) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (`v0.3.0`; P6b and P17 in `v0.3.1`, 2026-11-15); PM3 to do** |
+| Status | **Approved on 2026-11-12 (0.4), revised 2026-11-15 (0.6) — PM2 done (`v0.2.0`, 2026-11-14); PM1 done (`v0.3.0`; P6b and P17 in `v0.3.1`, 2026-11-15); PM3 done (`v0.4.0`, P13's check after it, 2026-11-16)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.0.3 (tag `v0.0.3`) |
@@ -1347,13 +1347,13 @@ Findings in the v0.0.3 code that the items above answer:
       clear of pads is left for later.
     - Tests: `packages/tools/test/drc-p12.test.ts` (8 tests: the solar sample is clean, a routed test board
       passes, one failing board per check, waivers through the tools).
-- [ ] **P13. Silkscreen text in the Gerbers and a third-party check.** — `c4ee81d` (font)
+- [x] **P13. Silkscreen text in the Gerbers and a third-party check.** — `c4ee81d` (font), this commit (check)
   - Reference and free texts are drawn with a vector stroke font written from scratch (or a permissively
     licensed one) and exported to the silkscreen Gerbers.
   - The Gerbers of both benchmark boards open in a third-party Gerber viewer installed on the owner's
     machine (for example `gerbv` or KiCad's Gerber viewer) with every layer aligned; screenshots attached.
-  - *Progress (2026-11-16), not ticked yet:* the font and its use are done; the third-party check waits for
-    the owner (access to KiCad's GerbView was not given to the agent).
+  - *Done (2026-11-16).* The font and its use came first (`c4ee81d`); the third-party check was made with
+    v0.4.0 once the owner gave the agent access to KiCad's GerbView.
     - **Font:** `packages/core/src/strokeFont.ts`, drawn for this project: every printable ASCII character
       plus Ω, µ, ° and ±, single strokes on a 4 × 6 grid (descenders to −2), slashed zero; an unknown
       character shows as a box. A text of size h has capitals h tall, characters h apart, lines 1.6 h apart.
@@ -1366,8 +1366,24 @@ Findings in the v0.0.3 code that the items above answer:
       place of P12's text box.
     - **KiCad import:** a text's stroke thickness becomes `strokeWidth`, `justify left / right` becomes
       `justify`.
-    - **Gerbers for the check:** both benchmark boards exported (solar sample, RGB lamp copy) to the scratch
-      folder `p13-gerbers/`; the owner opens them in GerbView.
+    - **Third-party check** (KiCad 10.0.7 GerbView on the owner's machine): the Gerbers and drill files of
+      both benchmark boards, exported with v0.4.0 (solar sample; RGB lamp copy with its pours refilled), all
+      ten files of each opened together. GerbView reads the X2 file functions of every file (Copper L1 / L2,
+      Legend Top / Bot, Soldermask, Paste, Profile, the plated and unplated drills) and every layer lines up
+      with the others: pads with their drills and mask openings, the outline around everything, the
+      legend texts in the stroke font at their parts. What shows is the boards as they are: on the lamp a
+      connector's legend runs past the top edge (the part-outside-board warning) and a few references of
+      packed resistors overlap their neighbours (the autoplacer limit noted in P12).
+
+      | Solar: all layers | Solar: legend, outline and drills |
+      |---|---|
+      | ![GerbView with the ten solar MPPT files: top copper and the ground pour in red, bottom copper in green, the four mounting holes, all aligned inside the outline](media/pm3-gerbview-solar-all.jpg) | ![The same in GerbView with only the legend, outline and drills shown: SOLAR MPPT, PV 1+ 2-, BAT 1+ 2-, NTC, UPDI 3V, JP1 OPEN, LFP 1S / r4 REVIEW and the part references in the stroke font, around the drill holes](media/pm3-gerbview-solar-silk.jpg) |
+
+      | RGB lamp: all layers | RGB lamp: legend, outline and drills |
+      |---|---|
+      | ![GerbView with the ten RGB lamp files: copper of both sides and the ground pour, aligned inside the rounded outline](media/pm3-gerbview-lamp-all.jpg) | ![The lamp's legend in GerbView: every part reference, turned with its part, next to the drill holes and inside the outline](media/pm3-gerbview-lamp-silk.jpg) |
+    - **Fixed on the way:** the CLI named a project opened from KiCad files after the file's whole path, so
+      the files in an `export_fab` ZIP carried the path in their names; it now uses the board file's name.
     - Tests: `packages/tools/test/silk-text-p13.test.ts` (glyph set and grid, size / justify / rotation /
       mirror / upright, a part flipped to the bottom has its reference mirrored, every top text of the solar
       board is in its legend Gerber at its place).

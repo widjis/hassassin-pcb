@@ -523,8 +523,8 @@ output a fabricator and KiCad can trust. Each editor action is also a tool for a
   in a Web Worker, so the editor stays responsive on large boards.
 - **Silkscreen text (P13):** a stroke font drawn for this project (printable ASCII plus Ω µ ° ±) gives
   board texts one geometry in the editor, the legend Gerbers and DRC; justify, rotation, mirrored on the
-  bottom, part texts kept upright. The third-party Gerber check (KiCad's GerbView) is still to do, so P13
-  stays open.
+  bottom, part texts kept upright. Checked after the release in KiCad's GerbView: every layer of both
+  benchmark boards lines up, the legend texts at their parts (PM3 closed).
 - **Teardrops and via stitching (P14):** teardrops on vias, plated pads or all pads per net class, filled
   as copper of the net and made again on every refill; stitching vias on a grid inside a net's pour on two
   layers, clear of its edge, other copper and keep-outs.
@@ -549,7 +549,6 @@ courtyard overlaps), left for the owner to fix or waive.
 | ![KiCad's 3D render of the solar MPPT board exported from Hassassin: parts, pours, the legend texts and the four mounting holes](media/pm3-kicad-solar.jpg) | ![A close KiCad render around U2 and the charger IC: traces flaring into their vias, and stitching vias in the ground pour](media/pm3-kicad-teardrops.jpg) |
 
 Known limitations:
-- P13's third-party Gerber check (GerbView) is not done yet.
 - Teardrops only on straight traces; a trace moved on a board without pours keeps its old teardrop until the
   next refill.
 - The export is checked with KiCad 10 only (KiCad 9 is not installed here); footprints are not linked to
