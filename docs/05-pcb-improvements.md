@@ -1301,7 +1301,7 @@ Findings in the v0.0.3 code that the items above answer:
 
 ### Milestone PM3 — manufacturing confidence
 
-- [x] **P12. More DRC checks and waivers.**
+- [x] **P12. More DRC checks and waivers.** — `a60415d`
   - New checks: courtyard overlap, silkscreen over pads / exposed copper, annular ring minimum,
     hole-to-hole distance, dangling traces and unused vias (warnings), keep-out areas (P6).
   - Every limit comes from editable rules, as today; a violation can be waived with a recorded reason
@@ -1352,6 +1352,25 @@ Findings in the v0.0.3 code that the items above answer:
     licensed one) and exported to the silkscreen Gerbers.
   - The Gerbers of both benchmark boards open in a third-party Gerber viewer installed on the owner's
     machine (for example `gerbv` or KiCad's Gerber viewer) with every layer aligned; screenshots attached.
+  - *Progress (2026-11-16), not ticked yet:* the font and its use are done; the third-party check waits for
+    the owner (access to KiCad's GerbView was not given to the agent).
+    - **Font:** `packages/core/src/strokeFont.ts`, drawn for this project: every printable ASCII character
+      plus Ω, µ, ° and ±, single strokes on a 4 × 6 grid (descenders to −2), slashed zero; an unknown
+      character shows as a box. A text of size h has capitals h tall, characters h apart, lines 1.6 h apart.
+    - **Placement:** centred on its position, or `justify` left / right (new rule); rotation as every
+      rotation; texts on a bottom layer are mirrored (read from below), or as their `mirror` rule says; texts
+      of a part stay upright (turned half round past 90°), as KiCad does.
+    - **One geometry everywhere:** the legend Gerbers plot the strokes with a round aperture of the text's
+      stroke width (the README note "texts are not in the legend Gerbers" is gone); the editor draws board
+      texts with the same strokes (and they can be picked); DRC's silkscreen-over-pad check uses them in
+      place of P12's text box.
+    - **KiCad import:** a text's stroke thickness becomes `strokeWidth`, `justify left / right` becomes
+      `justify`.
+    - **Gerbers for the check:** both benchmark boards exported (solar sample, RGB lamp copy) to the scratch
+      folder `p13-gerbers/`; the owner opens them in GerbView.
+    - Tests: `packages/tools/test/silk-text-p13.test.ts` (glyph set and grid, size / justify / rotation /
+      mirror / upright, a part flipped to the bottom has its reference mirrored, every top text of the solar
+      board is in its legend Gerber at its place).
 - [ ] **P14. Teardrops and via stitching.**
   - Optional teardrops on pad and via entries (rule per net class), filled as copper and checked by DRC.
   - Via stitching for a pour (grid pitch, edge distance), avoiding other copper and keep-out areas.

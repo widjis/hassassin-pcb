@@ -12,6 +12,7 @@ import { fromIPath, hasClipper, intersect, toIAreas } from './clip.ts';
 import type { Doc, Vec2 } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { formatLength } from './units.ts';
+import { boardTextStrokes } from './strokeFont.ts';
 
 /** A violation found here, in the shape `runDrc` reports (it adds the id when none is given). */
 export interface FoundViolation {
@@ -195,10 +196,7 @@ interface SilkItem {
   what: string;
 }
 
-/**
- * Silkscreen items as strokes and areas. A text stands as its box (height = font size, about 0.7 × height
- * per character), centred on its position.
- */
+/** Silkscreen items as strokes and areas; texts as the strokes of the vector font. */
 export function silkItems(doc: Doc, engine: StyleEngine): SilkItem[] {
   const out: SilkItem[] = [];
   for (const n of doc.nodes.values()) {
@@ -211,19 +209,13 @@ export function silkItems(doc: Doc, engine: StyleEngine): SilkItem[] {
     let path: Vec2[] = [];
     let closed = false;
     if (n.type === 'text') {
-      if (engine.get(n.uid, 'visible')?.value === false) continue;
-      const pos = vec(engine.get(n.uid, 'position')?.value);
-      const text = String(engine.get(n.uid, 'text')?.value ?? n.name ?? '');
-      if (!pos || !text) continue;
-      const h = num(engine, n.uid, 'fontSize', 1);
-      const w = h * 0.7 * text.length;
-      const rot = num(engine, n.uid, 'rotation', 0);
-      const corner = (x: number, y: number) => {
-        const r = (rot * Math.PI) / 180;
-        return W({ x: pos.x + x * Math.cos(r) + y * Math.sin(r), y: pos.y - x * Math.sin(r) + y * Math.cos(r) });
-      };
-      const box = [corner(-w / 2, -h / 2), corner(w / 2, -h / 2), corner(w / 2, h / 2), corner(-w / 2, h / 2)];
-      out.push({ uid: n.uid, layer, edges: box.map((p, i) => [p, box[(i + 1) % 4]!, 0]), areas: [box], box: boxOf(box), what: `text "${text}"` });
+      // The strokes of the vector font, as in the legend Gerbers (P13).
+      const t = boardTextStrokes(doc, engine, n);
+      if (!t) continue;
+      const edges: [Vec2, Vec2, number][] = [];
+      for (const st of t.strokes) for (let k = 1; k < st.length; k++) edges.push([st[k - 1]!, st[k]!, t.width / 2]);
+      if (!edges.length) continue;
+      out.push({ uid: n.uid, layer, edges, areas: [], box: boxOf(t.strokes.flat(), t.width / 2), what: `text "${String(engine.get(n.uid, 'text')?.value ?? n.name)}"` });
       continue;
     }
     const s = vec(engine.get(n.uid, 'start')?.value);

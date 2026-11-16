@@ -4,6 +4,7 @@
  */
 import {
   arcPoints,
+  boardTextStrokes,
   distToSegment,
   emptyBox,
   frameOf,
@@ -231,20 +232,14 @@ export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string
       return;
     }
     case 'text': {
-      if (!geom || e.get(uid, 'visible')?.value === false) return;
-      const local = v2(e, uid, 'position');
-      const text = strOf(e, uid, 'text', node.name);
-      if (!local || !text) return;
-      const f = frameOf(doc, e, node);
-      geom.texts.push({
-        uid,
-        layer: strOf(e, uid, 'layer', 'F.SilkS'),
-        pos: toWorld(f, local),
-        rot: f.rot + numOf(e, uid, 'rotation', 0),
-        text,
-        size: numOf(e, uid, 'fontSize', 1),
-        kind: 'text',
-      });
+      // Drawn with the project's stroke font (P13): the same strokes as in the legend Gerbers.
+      const t = boardTextStrokes(doc, e, node);
+      if (!t) return;
+      const out = sink(t.layer);
+      if (out) for (const s of t.strokes) polyline(out, s, t.width, false);
+      const box = emptyBox();
+      for (const s of t.strokes) for (const p of s) growBox(box, p.x, p.y, t.width / 2);
+      reg([t.layer], 1, box, (p, tol) => t.strokes.some((s) => s.some((q, i) => i > 0 && distToSegment(p, s[i - 1]!, q) <= t.width / 2 + tol)));
       return;
     }
     default:

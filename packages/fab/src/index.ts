@@ -94,9 +94,6 @@ export function buildFab(doc: Doc, engine: StyleEngine, layerNames: string[], ti
   files.push({ name: `${base}-BOM.csv`, data: bomCsv(doc), kind: 'bom' });
   files.push({ name: `${base}-placement.csv`, data: placementCsv(doc, engine), kind: 'placement' });
 
-  let texts = 0;
-  for (const n of doc.nodes.values()) if (n.type === 'text' && engine.get(n.uid, 'visible')?.value !== false) texts++;
-  if (texts) notes.push(`${texts} silkscreen text item(s) are not in the legend Gerbers yet (no vector font).`);
   notes.push('Vias are tented (covered by solder mask).');
   files.push({
     name: 'README.txt',

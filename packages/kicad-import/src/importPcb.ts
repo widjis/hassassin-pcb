@@ -238,8 +238,12 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
         const at = child(g, 'at');
         const p = xy(at);
         if (!p) return;
-        const font = child(child(g, 'effects') ?? [], 'font');
+        const effects = child(g, 'effects') ?? [];
+        const font = child(effects, 'font');
         const size = child(font ?? [], 'size');
+        const thick = num(child(font ?? [], 'thickness')?.[1]);
+        const justify = child(effects, 'justify') ?? [];
+        const jx = justify.slice(1).map((x) => str(x)).find((x) => x === 'left' || x === 'right');
         const text = g[0] && str(g[0]) === 'property' ? str(g[2]) : str(g[0]) === 'fp_text' ? str(g[2]) : str(g[1]);
         if (!text) return;
         const node = mk(
@@ -249,6 +253,9 @@ export function importKicadPcb(text: string, fileName = 'board.kicad_pcb'): Impo
             rule('rotation', (num(at?.[3]) ?? 0) + rotOffset),
             rule('text', text),
             ...(num(size?.[1]) !== undefined ? [rule('fontSize', num(size?.[1])!)] : []),
+            // Stroke width and alignment of the text (P13; mirroring follows the layer side).
+            ...(thick !== undefined && thick > 0 ? [rule('strokeWidth', thick)] : []),
+            ...(jx ? [rule('justify', jx)] : []),
           ],
           text,
         );

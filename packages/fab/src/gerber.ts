@@ -4,6 +4,7 @@
  */
 import {
   arcPoints,
+  boardTextStrokes,
   frameOf,
   toWorld,
   type CopperShape,
@@ -151,6 +152,12 @@ export function graphicsGerber(input: GerberInput, spec: GerberLayerSpec, defaul
     return v && typeof v === 'object' && 'x' in v ? (v as Vec2) : undefined;
   };
   for (const n of doc.nodes.values()) {
+    // Texts: the strokes of the project's vector font (P13), plotted with a round aperture of their width.
+    if (n.type === 'text') {
+      const t = boardTextStrokes(doc, engine, n);
+      if (t && t.layer === spec.layer) for (const s of t.strokes) w.stroke(s, t.width);
+      continue;
+    }
     if (!['line', 'arc', 'circle', 'polygon', 'rectangle'].includes(n.type)) continue;
     if (engine.get(n.uid, 'layer')?.value !== spec.layer) continue;
     if (engine.get(n.uid, 'visible')?.value === false) continue;

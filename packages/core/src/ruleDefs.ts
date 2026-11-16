@@ -92,6 +92,7 @@ const defs: RuleDef[] = [
   { name: 'annularRingMin', label: 'Annular ring minimum', kind: 'length', inheritable: true, help: 'DRC: narrowest copper ring allowed round a plated hole (via or pad), (diameter − drill) / 2 (P12).' },
   { name: 'holeToHoleMin', label: 'Hole to hole minimum', kind: 'length', inheritable: true, help: 'DRC: smallest distance allowed between the edges of two drilled holes (P12).' },
   { name: 'silkClearance', label: 'Silkscreen to pad clearance', kind: 'length', inheritable: true, help: 'DRC: distance silkscreen must keep from pads (0 = only silkscreen on a pad is reported) (P12).' },
+  { name: 'justify', label: 'Justify', kind: 'enum', inheritable: false, options: ['center', 'left', 'right'], help: 'Where a board text sits on its position: centred (default), or starting / ending there (P13).' },
 ];
 
 export const RULE_DEFS: ReadonlyMap<string, RuleDef> = new Map(defs.map((d) => [d.name, d]));
