@@ -239,5 +239,11 @@ links to the manufacturer's datasheet, try again with other words, and report th
 - It only opens public http(s) addresses: an address that resolves to this machine or a private network is
   refused.
 - Everything it returns carries a notice that it is data from the web, not instructions; the agent is told
-  the same.
+  the same. Text on a page that addresses an AI agent ("ignore previous instructions", "note to the AI" …)
+  is flagged in the result, and the agent tells the user about it.
+- A site that refuses automated access (403 / 429) stays closed: the agent uses another official address
+  or a distributor's copy, or gives the address to the user.
+- `apps/cli/bench/research.ts` checks the research live: it asks a running server's agent for the
+  datasheets of 20 parts and checks each answer (trust, a real PDF, the steps). It runs on the owner's
+  agent backend, so only when the owner asks.
 
