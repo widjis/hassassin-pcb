@@ -188,6 +188,8 @@ export function emitNode(doc: Doc, e: StyleEngine, node: DocNode, copper: string
     case 'circle':
     case 'polygon':
     case 'rectangle': {
+      // A teardrop whose trace or pad / via is gone is left out until the next refill makes them again (P14).
+      if (node.props.teardrop === true && (!doc.nodes.has(String(node.props.trace)) || !doc.nodes.has(String(node.props.of)))) return;
       const f = frameOf(doc, e, node);
       const W = (p: Vec2) => toWorld(f, p);
       const layer = strOf(e, uid, 'layer', 'F.SilkS');

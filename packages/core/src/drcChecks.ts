@@ -388,7 +388,7 @@ function danglingChecks(doc: Doc, engine: StyleEngine, shapes: CopperShape[]): F
   }
   const vias = new Map<string, CopperShape[]>();
   for (const s of shapes) {
-    if (s.kind === 'trace') {
+    if (s.kind === 'trace' && !s.areas.length) {
       // Trace ends: on the net's other copper, or the end of another piece of the same trace (an arc).
       const path = s.edges.map((e) => e[0]).concat([s.edges[s.edges.length - 1]![1]]);
       for (const end of [path[0]!, path[path.length - 1]!]) {

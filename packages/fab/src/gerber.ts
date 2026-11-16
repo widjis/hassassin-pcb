@@ -118,7 +118,9 @@ export function copperGerber(input: GerberInput, spec: GerberLayerSpec): string 
   for (const s of on) {
     if (s.kind === 'pad') for (const a of s.areas) w.region(a[0]!);
     else if (s.kind === 'trace') {
-      for (const [a, b, r] of s.edges) w.stroke([a, b], r * 2);
+      // A teardrop (P14) is an area; a trace is its strokes.
+      if (s.areas.length) for (const a of s.areas) w.region(a[0]!);
+      else for (const [a, b, r] of s.edges) w.stroke([a, b], r * 2);
     } else if (s.kind === 'via') {
       const [c, , r] = s.edges[0]!;
       w.flashCircle(c, r * 2);

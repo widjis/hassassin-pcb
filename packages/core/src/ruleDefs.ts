@@ -2,7 +2,8 @@
  * Registry of every layout rule: its value kind, whether it inherits from the parent,
  * and how to parse/format it. Names, labels and the set of rules are our own design.
  */
-import type { KeepOut, RuleValue, Vec2 } from './model.ts';
+import { newUid, type Doc, type KeepOut, type RuleValue, type Vec2 } from './model.ts';
+import type { Op } from './commands.ts';
 import { formatAngle, formatLength, parseAngle, parseLength, trimNumber } from './units.ts';
 
 export type RuleKind =
@@ -64,7 +65,7 @@ const defs: RuleDef[] = [
   { name: 'keepoutOf', label: 'Forbids', kind: 'flags', inheritable: false, options: ['traces', 'vias', 'pours', 'parts'], help: 'What a keep-out area forbids on its layers (P6; default traces vias pours).' },
   { name: 'thermalRelief', label: 'Thermal relief', kind: 'enum', inheritable: true, options: ['spokes', 'solid', 'none'], help: 'How pads join a pour.' },
   { name: 'thermalSpokeWidth', label: 'Thermal spoke width', kind: 'length', inheritable: true, help: 'Width of relief spokes.' },
-  { name: 'stitchSpacing', label: 'Stitching via spacing', kind: 'length', inheritable: true, help: 'Grid pitch for stitching vias in a pour (0 = off).' },
+  { name: 'stitchSpacing', label: 'Stitching via spacing', kind: 'length', inheritable: true, help: 'Via stitching: grid pitch of the stitching vias in a pour (stitch_pour, Board panel; 0 = not set, P14).' },
   { name: 'text', label: 'Text', kind: 'string', inheritable: false, help: 'Text content.' },
   { name: 'fontSize', label: 'Font size', kind: 'length', inheritable: true, help: 'Text height.' },
   { name: 'boardEdgeClearance', label: 'Board edge clearance', kind: 'length', inheritable: true, help: 'Keep copper this far from the board edge.' },
@@ -93,6 +94,9 @@ const defs: RuleDef[] = [
   { name: 'holeToHoleMin', label: 'Hole to hole minimum', kind: 'length', inheritable: true, help: 'DRC: smallest distance allowed between the edges of two drilled holes (P12).' },
   { name: 'silkClearance', label: 'Silkscreen to pad clearance', kind: 'length', inheritable: true, help: 'DRC: distance silkscreen must keep from pads (0 = only silkscreen on a pad is reported) (P12).' },
   { name: 'justify', label: 'Justify', kind: 'enum', inheritable: false, options: ['center', 'left', 'right'], help: 'Where a board text sits on its position: centred (default), or starting / ending there (P13).' },
+  { name: 'teardrops', label: 'Teardrops', kind: 'enum', inheritable: true, options: ['off', 'vias', 'through', 'all'], help: 'Teardrops where traces of this net enter copper (P14): off (default), vias, through (vias and plated pads), all (every pad too). Made again on every pour refill (B).' },
+  { name: 'teardropLength', label: 'Teardrop length', kind: 'length', inheritable: true, help: 'Longest teardrop past the pad or via edge (default 1 mm; otherwise half the pad / via size).' },
+  { name: 'stitchEdge', label: 'Stitching edge distance', kind: 'length', inheritable: true, help: 'Via stitching: distance a stitching via keeps from the edge of its pour copper (default 0.5 mm, P14).' },
 ];
 
 export const RULE_DEFS: ReadonlyMap<string, RuleDef> = new Map(defs.map((d) => [d.name, d]));
@@ -237,4 +241,19 @@ export function formatRuleValue(name: string, value: RuleValue, unit = 'mm'): st
     default:
       return String(value);
   }
+}
+
+/**
+ * An op that sets one rule in the project ruleset of `selector` (made when missing), as set_rule does with
+ * scope "ruleset": it applies to everything matching, now and later.
+ */
+export function projectRuleOp(doc: Doc, selector: string, name: string, value: RuleValue): Op {
+  const next = structuredClone(doc.rulesets);
+  let rs = next.find((r) => r.selector === selector && r.origin === 'project');
+  if (!rs) next.push((rs = { id: newUid('rs'), name: `Rule: ${selector}`, selector, rules: [], enabled: true, origin: 'project' }));
+  const decl = { name, value: parseRuleValue(name, value) };
+  const i = rs.rules.findIndex((r) => r.name === name);
+  if (i >= 0) rs.rules[i] = decl;
+  else rs.rules.push(decl);
+  return { op: 'setRulesets', rulesets: next };
 }

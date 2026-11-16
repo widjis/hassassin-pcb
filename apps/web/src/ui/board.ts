@@ -4,7 +4,12 @@
  */
 import {
   defaultStackup,
+  isTeardrop,
   newUid,
+  parseRuleValue,
+  projectRuleOp,
+  stitchOps,
+  TEARDROP_MODES,
   diffImpedance,
   diffPairs,
   withCoupling,
@@ -136,6 +141,49 @@ export function mountBoard(app: App, root: HTMLElement, onRouting?: (running: bo
       ),
       status,
     );
+
+    // ---- teardrops and via stitching (P14)
+    {
+      const tdStatus = h('div', { class: 'dim', style: 'font-size:11.5px;min-height:1em;flex-shrink:0' });
+      const rs = doc.rulesets.find((r) => r.selector === 'net' && r.origin === 'project');
+      const cur = String(rs?.rules.find((r) => r.name === 'teardrops')?.value ?? 'off');
+      const mode = h('select', { title: 'Where traces of every net get a teardrop (a net or class can set its own with the teardrops rule)' }, ...TEARDROP_MODES.map((m) => h('option', { value: m }, { off: 'Off', vias: 'Vias', through: 'Vias + plated pads', all: 'All pads and vias' }[m])));
+      mode.value = (TEARDROP_MODES as readonly string[]).includes(cur) ? cur : 'off';
+      mode.addEventListener('change', () => {
+        mode.blur();
+        const key = newUid('td');
+        if (!app.apply('Teardrops', [projectRuleOp(doc, 'net', 'teardrops', mode.value)], key)) return;
+        app.refillPours({ mergeKey: key, quiet: true });
+        const n = [...(app.doc?.nodes.values() ?? [])].filter(isTeardrop).length;
+        tdStatus.textContent = mode.value === 'off' ? 'Teardrops off.' : `${n} teardrop(s); made again on every refill (B).`;
+        app.say(tdStatus.textContent);
+      });
+      const poured = [...doc.nodes.values()].filter((n) => n.type === 'net' && n.children.some((c) => doc.nodes.get(c)?.type === 'fill'));
+      const net = h('select', { title: 'The net whose pours get stitching vias' }, ...poured.map((n) => h('option', { value: n.name }, n.name)));
+      const pitch = h('input', { type: 'text', value: '5mm', style: 'width:64px', title: 'Grid pitch of the stitching vias' });
+      const stitch = h('button', { title: 'Vias on a grid wherever the net\'s pour covers two layers, clear of its edge (stitchEdge, 0.5 mm), other copper, pads, holes and via keep-outs. Again: replaces them.' }, 'Stitch');
+      stitch.addEventListener('click', () => {
+        if (!app.doc || !app.engine) return;
+        try {
+          const r = stitchOps(app.doc, app.engine, app.copper, net.value, { pitch: Number(parseRuleValue('traceWidth', pitch.value.trim())) });
+          const key = newUid('st');
+          if (!app.apply(`Stitch ${net.value}`, r.ops, key)) return;
+          app.refillPours({ mergeKey: key, quiet: true });
+          tdStatus.textContent = `${r.added} stitching via(s) on ${net.value}, ${r.pitch} mm grid${r.removed ? ` (replacing ${r.removed})` : ''}${r.blocked ? `; ${r.blocked} grid point(s) had no room` : ''}.`;
+        } catch (e) {
+          tdStatus.textContent = (e as Error).message;
+        }
+        app.say(tdStatus.textContent ?? '');
+      });
+      root.append(
+        h('div', { class: 'section-title', style: 'margin-top:12px' }, h('span', {}, 'Teardrops & stitching')),
+        h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;align-items:center' }, h('span', { class: 'dim', style: 'font-size:12px' }, 'Teardrops'), mode),
+        poured.length
+          ? h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;align-items:center' }, h('span', { class: 'dim', style: 'font-size:12px' }, 'Stitch'), net, pitch, stitch)
+          : h('div', { class: 'dim', style: 'font-size:11.5px' }, 'Via stitching: give a net a pour first (Pour layers rule, then refill).'),
+        tdStatus,
+      );
+    }
 
     // ---- signal classes (P16)
     const st = stackupOf(doc, app.copper);

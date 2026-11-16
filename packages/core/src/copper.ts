@@ -116,6 +116,19 @@ export function collectCopper(doc: Doc, engine: StyleEngine, copper: string[]): 
           edgeClearance: edgeCl(n.uid), probe: c, hole: { center: c, size: { x: hd, y: hd }, rot: 0, plated: true },
         });
       }
+    } else if (n.type === 'polygon' && n.props.teardrop === true) {
+      // A teardrop (P14): filled copper of its net, as long as its trace and its pad / via are there.
+      if (!doc.nodes.has(String(n.props.trace ?? '')) || !doc.nodes.has(String(n.props.of ?? ''))) continue;
+      const layer = String(engine.get(n.uid, 'layer')?.value ?? '');
+      const pts = engine.get(n.uid, 'points')?.value as Vec2[] | undefined;
+      if (!cu.has(layer) || !Array.isArray(pts) || pts.length < 3) continue;
+      const box = emptyBox();
+      for (const p of pts) growBox(box, p.x, p.y);
+      let cx = 0;
+      let cy = 0;
+      for (const p of pts) (cx += p.x / pts.length), (cy += p.y / pts.length);
+      const edges: [Vec2, Vec2, number][] = pts.map((p, i) => [p, pts[(i + 1) % pts.length]!, 0]);
+      out.push({ uid: n.uid, kind: 'trace', net, layer, edges, areas: [[pts]], box, keepOut: keepOutOf(engine, String(n.props.trace)), edgeClearance: edgeCl(String(n.props.trace)), probe: pointInPolygon({ x: cx, y: cy }, pts) ? { x: cx, y: cy } : pts[0]! });
     } else if (n.type === 'fill') {
       const fills = (n.data?.fills ?? {}) as Record<string, PolyWithHoles[]>;
       for (const [layer, polys] of Object.entries(fills)) {

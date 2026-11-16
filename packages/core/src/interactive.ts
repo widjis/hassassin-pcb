@@ -102,12 +102,13 @@ export function routeWorld(doc: Doc, engine: StyleEngine, copper: string[], net:
   };
   for (const s of collectCopper(doc, engine, copper)) {
     if (s.kind === 'fill' || s.net === net || opts.ignore?.has(s.uid) || (s.net && opts.own?.includes(s.net))) continue;
-    if (opts.shove && s.kind === 'trace') continue;
+    // Traces are shoved; teardrops (areas, P14) stay where they are.
+    if (opts.shove && s.kind === 'trace' && !s.areas.length) continue;
     // The larger of what the new trace demands of this copper and what this copper demands of a trace.
     const cl = Math.max(clearanceFor(rules.keepOut, s.kind), clearanceFor(s.keepOut, 'trace'));
     for (const [a, b, r] of s.edges) {
       const rr = r + cl + half;
-      file(s.layer, { uid: s.uid, net: s.net, kind: s.kind, a, b, r: rr, ...(s.kind === 'pad' ? { area: s.areas[0] } : {}), minX: Math.min(a.x, b.x) - rr, minY: Math.min(a.y, b.y) - rr, maxX: Math.max(a.x, b.x) + rr, maxY: Math.max(a.y, b.y) + rr });
+      file(s.layer, { uid: s.uid, net: s.net, kind: s.kind, a, b, r: rr, ...(s.areas.length ? { area: s.areas[0] } : {}), minX: Math.min(a.x, b.x) - rr, minY: Math.min(a.y, b.y) - rr, maxX: Math.max(a.x, b.x) + rr, maxY: Math.max(a.y, b.y) + rr });
     }
   }
   // Keep-out areas (P6): those that forbid traces are obstacles on their layers (no clearance of their own);

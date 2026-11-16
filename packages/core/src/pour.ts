@@ -17,6 +17,7 @@ import { newUid } from './model.ts';
 import type { StyleEngine } from './style.ts';
 import { boardOutline, clearanceFor, collectCopper, inArea, netNameOf, type CopperShape, type PolyWithHoles } from './copper.ts';
 import { place, pointInPolygon } from './geom.ts';
+import { teardropOps } from './teardrops.ts';
 import { keepoutAreas, type KeepoutArea } from './keepout.ts';
 import { ARC_MARGIN, difference, fromIPath, intersect, isOuter, offsetAreas, offsetLine, toIAreas, toIPath, union, type IPaths } from './clip.ts';
 
@@ -74,7 +75,8 @@ function circleAround(c: Vec2, r: number): IPaths {
 }
 
 function grow(shape: CopperShape, by: number): IPaths {
-  if (shape.kind === 'pad') return offsetAreas(toIAreas(shape.areas.map((a) => a[0]!)), by);
+  // Pads, and copper given as an area (teardrops, P14): the area grown.
+  if (shape.kind === 'pad' || (shape.kind === 'trace' && shape.areas.length)) return offsetAreas(toIAreas(shape.areas.map((a) => a[0]!)), by);
   const out: IPaths = [];
   for (const [a, b, r] of shape.edges) {
     if (a.x === b.x && a.y === b.y) out.push(...circleAround(a, r + by));
@@ -192,9 +194,12 @@ export function fillPour(doc: Doc, engine: StyleEngine, pour: DocNode, copper: s
   return { fills, ms: performance.now() - t0 };
 }
 
-/** Ops that create/remove automatic pours so they match each net's `pourLayers` rule. */
+/**
+ * Ops that create/remove automatic pours so they match each net's `pourLayers` rule, and make the teardrops
+ * again from the nets' `teardrops` rule (P14), so the pours are then filled around them.
+ */
 export function planPours(doc: Doc, engine: StyleEngine, copper: string[]): Op[] {
-  const ops: Op[] = [];
+  const ops: Op[] = [...teardropOps(doc, engine, copper).ops];
   for (const n of doc.nodes.values()) {
     if (n.type !== 'net') continue;
     const c = engine.get(n.uid, 'pourLayers');

@@ -58,3 +58,5 @@ export * from './drawBend.ts';
 export * from './unroute.ts';
 export * from './drcChecks.ts';
 export * from './strokeFont.ts';
+export * from './teardrops.ts';
+export * from './stitch.ts';

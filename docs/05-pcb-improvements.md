@@ -1347,7 +1347,7 @@ Findings in the v0.0.3 code that the items above answer:
       clear of pads is left for later.
     - Tests: `packages/tools/test/drc-p12.test.ts` (8 tests: the solar sample is clean, a routed test board
       passes, one failing board per check, waivers through the tools).
-- [ ] **P13. Silkscreen text in the Gerbers and a third-party check.**
+- [ ] **P13. Silkscreen text in the Gerbers and a third-party check.** — `c4ee81d` (font)
   - Reference and free texts are drawn with a vector stroke font written from scratch (or a permissively
     licensed one) and exported to the silkscreen Gerbers.
   - The Gerbers of both benchmark boards open in a third-party Gerber viewer installed on the owner's
@@ -1371,9 +1371,40 @@ Findings in the v0.0.3 code that the items above answer:
     - Tests: `packages/tools/test/silk-text-p13.test.ts` (glyph set and grid, size / justify / rotation /
       mirror / upright, a part flipped to the bottom has its reference mirrored, every top text of the solar
       board is in its legend Gerber at its place).
-- [ ] **P14. Teardrops and via stitching.**
+- [x] **P14. Teardrops and via stitching.**
   - Optional teardrops on pad and via entries (rule per net class), filled as copper and checked by DRC.
   - Via stitching for a pour (grid pitch, edge distance), avoiding other copper and keep-out areas.
+  - *Done (2026-11-16).* Reference: the KiCad 8 manual (teardrops: where they go, length and width as a
+    share of the pad size with a maximum); the shape and the methods are our own.
+    - **Teardrops** (`packages/core/src/teardrops.ts`): net rule `teardrops` = off (default) / vias /
+      through (vias and plated pads) / all (every pad), and `teardropLength` (default 1 mm). Where a straight
+      trace leaves a via or pad of its net, a flare from 0.9 × the pad / via size (at most 2 mm, kept inside
+      the pad) at the trace end to the trace width at half the size past the pad edge (at most
+      `teardropLength`, leaving some bare trace), its sides two concave curves. A teardrop that would come
+      closer than the clearance to other nets' copper (pours left out; they are refilled around it) or into
+      a keep-out that forbids traces is tried shorter, then left out (counted as skipped).
+    - **As copper:** a filled `polygon` under the net (props `teardrop`, `of`, `trace`); `collectCopper`
+      gives it as copper of its net with an area, so DRC, the pours (filled around it), the routers (an
+      obstacle, not shoved) and the copper Gerbers (a region) take it in. Teardrops are made again on every
+      pour refill (`planPours`), so they follow the routing; one whose trace or pad / via is gone is left out
+      of the copper and the drawing until then.
+    - **Via stitching** (`packages/core/src/stitch.ts`): grid points every `pitch` (argument or rule
+      `stitchSpacing`), aligned to the origin; a via goes where it lies in the net's filled pour on two or
+      more layers, `stitchEdge` (default 0.5 mm) plus its radius from every edge of that copper, with its
+      clearance from other nets' copper, off every pad, `holeToHoleMin` from every drill, and out of
+      keep-outs that forbid vias. Stitching vias are marked `stitch` and replaced by the next run; the pours
+      are refilled.
+    - **Editor:** Board panel, "Teardrops & stitching": a teardrop mode for every net (a project ruleset on
+      `net`; a class or net can set its own), and Stitch with a net and a pitch. **Tools:** `set_teardrops`
+      (mode, target selector, length) and `stitch_pour` (net, pitch, edge). The CLI loads the polygon engine
+      for them, and for `run_drc` and `project_status` (without it, P12's area tests fall back to rougher
+      ones).
+    - **Solar board** (copy): teardrops on vias 65, vias + plated pads 80, all pads 189 (34 / 34 / 92 left
+      out for lack of room); 0 DRC errors in each case. GND stitched at 5 mm in the editor: 19 vias, DRC clean.
+    - Limits: teardrops only on straight traces (not arcs, not across a bend); a trace moved on a board
+      without pours keeps its old teardrop until the next refill (B).
+    - Tests: `packages/tools/test/p14.test.ts` (shape, modes per class, DRC, Gerber regions, refill, a
+      deleted trace, the solar board, stitching grid / edge / keep-out / replace).
 - [ ] **P15. `.kicad_pcb` export.**
   - A board made in Hassassin opens in KiCad 9 / 10 with the same parts, footprints, traces, vias, pours
     and outline; KiCad's DRC on it agrees with ours for the benchmark boards (differences listed and

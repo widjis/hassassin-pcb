@@ -5,8 +5,12 @@ import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } fr
 import { ensureGeometry, Library, openProject, saveProject, type InputFile, type Project, type ToolContext } from '@hassassin/tools';
 import { kicadSystemLibrary } from '../../../packages/tools/src/nodeLib.ts';
 
-/** Tools that fill pours (the polygon engine must be loaded first): autoroute checks its result on refilled pours (P8g). */
-export const NEEDS_GEOMETRY = new Set(['refill_pours', 'autoroute']);
+/**
+ * Tools that need the polygon engine loaded first: those that fill pours (autoroute checks its result on
+ * refilled pours, P8g; teardrops and stitching refill them, P14), and DRC (shared areas of courtyards and of
+ * pours against keep-outs, P12).
+ */
+export const NEEDS_GEOMETRY = new Set(['refill_pours', 'autoroute', 'run_drc', 'set_teardrops', 'stitch_pour', 'add_pour', 'add_keepout', 'project_status']);
 export const loadGeometry = () => ensureGeometry(() => loadNativeClipperLibInstanceAsync(NativeClipperLibRequestedFormat.WasmOnly));
 
 export const isHpcb = (p: string) => extname(p).toLowerCase() === '.hpcb';

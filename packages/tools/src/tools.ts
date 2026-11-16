@@ -47,6 +47,10 @@ import {
   waiveOp,
   unwaiveOp,
   waiveDrcOp,
+  projectRuleOp,
+  teardropOps,
+  stitchOps,
+  TEARDROP_MODES,
   unwaiveDrcOp,
   drcWaivers,
   ERC_PIN_TYPES,
@@ -2422,6 +2426,44 @@ export const TOOLS: ToolDef[] = [
       const { ops, ms, pours } = refillOps(p.doc, p.engine, p.copper);
       apply(p, 'Refill pours', ops);
       return { pours, ms: Math.round(ms) };
+    },
+  },
+  {
+    name: 'set_teardrops',
+    description: 'Teardrops where traces enter vias and pads (P14): sets the teardrops rule (off, vias, through = vias and plated pads, all = every pad) for the nets matching `target` (default every net; e.g. "net[signal=power]"), with an optional maximum length, then makes the teardrops again and refills the pours. Teardrops are copper of their net, checked by DRC; a teardrop that would come too close to other copper is left out (counted as skipped). They are made again on every refill.',
+    mutates: true,
+    input: { type: 'object', properties: { mode: { type: 'string', enum: [...TEARDROP_MODES] }, target: { type: 'string', description: 'Net selector (default "net": every net)' }, length: { type: 'string', description: 'Longest teardrop past the pad edge, e.g. "1mm"' } }, required: ['mode'] },
+    run: (p, a) => {
+      const mode = str(a.mode, 'mode');
+      if (!(TEARDROP_MODES as readonly string[]).includes(mode)) throw new ToolError(`mode: one of ${TEARDROP_MODES.join(', ')}`);
+      const target = typeof a.target === 'string' && a.target.trim() ? a.target.trim() : 'net';
+      apply(p, 'Set teardrops', [projectRuleOp(p.doc, target, 'teardrops', mode)]);
+      if (typeof a.length === 'string' && a.length.trim()) apply(p, 'Set teardrop length', [projectRuleOp(p.doc, target, 'teardropLength', a.length.trim())]);
+      const plan = planPours(p.doc, p.engine, p.copper);
+      const td = teardropOps(p.doc, p.engine, p.copper);
+      apply(p, 'Teardrops', plan);
+      const { ops, pours } = refillOps(p.doc, p.engine, p.copper);
+      if (pours) apply(p, 'Refill pours', ops);
+      return { mode, target, teardrops: td.added, skipped: td.skipped, pours };
+    },
+  },
+  {
+    name: 'stitch_pour',
+    description: 'Via stitching for the pours of a net (P14): vias on a square grid (pitch, or the net\'s stitchSpacing rule) wherever the net\'s filled pour covers two or more layers, at least `edge` (or the stitchEdge rule, default 0.5 mm) from the pour edge, clear of other copper, pads, holes (holeToHoleMin) and via keep-outs. Stitching again replaces the earlier stitching vias; pours are refilled.',
+    mutates: true,
+    input: { type: 'object', properties: { net: { type: 'string' }, pitch: { type: 'string', description: 'Grid pitch, e.g. "5mm"' }, edge: { type: 'string', description: 'Distance from the pour edge, e.g. "0.5mm"' } }, required: ['net'] },
+    run: (p, a) => {
+      const net = str(a.net, 'net');
+      const len = (k: string) => (typeof a[k] === 'string' && (a[k] as string).trim() ? Number(parseRuleValue('traceWidth', (a[k] as string).trim())) : typeof a[k] === 'number' ? (a[k] as number) : undefined);
+      let r: ReturnType<typeof stitchOps>;
+      try {
+        r = stitchOps(p.doc, p.engine, p.copper, net, { ...(len('pitch') !== undefined ? { pitch: len('pitch')! } : {}), ...(len('edge') !== undefined ? { edge: len('edge')! } : {}) });
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
+      apply(p, `Stitch ${net}`, r.ops);
+      apply(p, 'Refill pours', refillOps(p.doc, p.engine, p.copper).ops);
+      return { net, vias: r.added, replaced: r.removed, blocked: r.blocked, pitch: r.pitch, edge: r.edge };
     },
   },
   {
