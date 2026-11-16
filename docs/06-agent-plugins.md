@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
-| Version | 0.1 |
-| Status | **Draft, waiting for the owner's approval** |
+| Version | 0.2 |
+| Status | **Draft 0.2 with the owner's answers, waiting for approval; work starts after PM3 is closed (P13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -63,7 +63,8 @@ so the bar is the same as for DRC: the agent proposes, deterministic checks and 
 ## 3. Scope
 
 Three milestones, in order: AM1 builds the plugin system and safe access to sources, AM2 the
-component selection, AM3 the datasheet reading with verification. Each item has acceptance criteria that
+component selection, AM3 the datasheet reading with verification. Work starts after milestone PM3 of
+[05-pcb-improvements.md](05-pcb-improvements.md) is closed (P13's third-party Gerber check). Each item has acceptance criteria that
 can be checked; an item is done only when all of them pass.
 
 ### Milestone AM1 — plugins and trusted sources
@@ -85,20 +86,30 @@ can be checked; an item is done only when all of them pass.
   - Acceptance: a test plugin installed, switched on and off per project, its tools offered to each
     backend only when on; a `read` plugin cannot change the project; a missing or crashing plugin gives a
     clear message and the agent continues without it.
-- [ ] **A2. Source trust and web access.**
+- [ ] **A2. Agentic web research with source trust.**
+  - The agent researches on its own, as a person would: it searches the web, opens results, follows links
+    (a distributor page to the manufacturer's product page to its datasheet), tries other words or
+    sources when a search gives nothing useful, and reports the steps it took. It reads freely; what it
+    may **cite** for a part's values is governed by the trust list.
+  - Each backend uses its own web tools where it has them (Claude Code's web search and fetch, the
+    Claude API's web search and fetch tools, Codex's web search), switched on only for this plugin and
+    read-only; a first-party `web` plugin gives `web_search` (through a search API the owner configures)
+    and `fetch_document` (HTML or PDF, size and time limits) to backends without them and to the CLI.
   - A trust list, editable by the owner, ranks sources: (1) the project and installed libraries;
     (2) distributor APIs used under their published terms; (3) manufacturer domains (for example ti.com,
     st.com, analog.com, microchip.com, nxp.com, onsemi.com, infineon.com, renesas.com, espressif.com,
-    nordicsemi.com); (4) anything else, shown as unverified. Datasheet mirror sites are never treated as
-    trusted.
-  - A first-party `web` plugin with `fetch_document` (a URL on an allowed host; HTML or PDF; size and
-    time limits) and, optionally, `web_search` through a search API the owner configures.
+    nordicsemi.com); (4) anything else, shown as unverified. Datasheet mirror sites are never trusted; a
+    value that only an untrusted source gives is shown as such and needs the user's approval.
+  - Limits per task, tunable: number of searches and fetches, time, total download size; the agent says
+    when it stops at a limit.
   - Everything fetched is returned as quoted data with its source and trust level. Text in a fetched
-    document that tells the agent to do something is never acted on; the agent's instructions and the
-    tool results say so.
-  - Acceptance: a fetch from a host not on the list is refused with the reason; a PDF containing
-    instructions to the agent ("ignore previous instructions …") in a recorded fixture does not change what
-    the agent does; trust level shown with every result.
+    page or document that tells the agent to do something is never acted on; the agent's instructions and
+    the tool results say so.
+  - Acceptance: for 20 MPNs (several manufacturers, some not sold by the configured distributors) the
+    agent finds the manufacturer's datasheet by itself, with its steps listed; a datasheet taken from a
+    mirror site is never marked trusted; a page containing instructions to the agent ("ignore previous
+    instructions …") in a recorded fixture does not change what the agent does; trust level shown with
+    every result; the limits stop a search that goes on too long.
 - [ ] **A3. Datasheet store.**
   - `get_datasheet` (by MPN, or by URL): finds the datasheet URL (distributor data first, then the
     manufacturer's site), downloads it, keeps it in the project's own storage (not in the repository) under
@@ -115,16 +126,19 @@ can be checked; an item is done only when all of them pass.
 ### Milestone AM2 — component selection
 
 - [ ] **A4. Distributor search plugins.**
-  - Plugins for distributor catalogues that offer an API under terms that allow this use, chosen by the
-    owner (candidates: DigiKey, Mouser, LCSC / JLCPCB, Farnell; Nexar / Octopart as a paid option). No
-    scraping of pages whose terms forbid it.
+  - Plugins for distributor catalogues that offer an API under terms that allow this use. **First LCSC
+    and Mouser** (owner's choice); others (DigiKey, Farnell, Nexar / Octopart) later. Before each one is
+    built, the implementer checks how API access is granted and its terms, and reports to the owner
+    (working rule 4). No scraping of pages whose terms forbid it.
   - One common result shape: MPN, manufacturer, description, parameters (as given by the distributor),
     package, lifecycle status, stock, price breaks with currency, datasheet URL, product URL, source and
     retrieval time.
   - Results are cached per project for a time the owner sets; offers go into the existing supplier offers,
     so `bom` shows them.
+  - The agent may pick which configured distributor to search and buy from per part (stock, price,
+    shipping to the owner's region), within the limits of A6.
   - Acceptance: with the owner's API keys, a search for "LDO 3.3 V 500 mA SOT-23-5" returns parts with the
-    common shape from each configured distributor; without keys the plugin says what is missing; recorded
+    common shape from LCSC and Mouser; without keys the plugin says what is missing; recorded
     responses make the tests run without network access.
 - [ ] **A5. Candidates from the requirements.**
   - A `find_candidates` tool: for one block or function (regulator, MCU, sensor, connector, protection …)
@@ -141,8 +155,11 @@ can be checked; an item is done only when all of them pass.
   - The agent shows candidates as a comparison table in the Agent tab (MPN, key values, package, price at
     the project quantity, stock, lifecycle, datasheet with its trust level) with its recommendation and the
     reason; the user picks one with a click or in words, or asks for other options.
-  - The user can let the agent choose by itself within limits (budget per part, preferred distributors,
-    package sizes it may use); choices made by the agent are listed for review.
+  - **The agent chooses by itself by default** (owner's choice), within limits that can be tuned per
+    project: budget per part and per board, preferred distributors and manufacturers, smallest package
+    sizes allowed (for example no 0201, no BGA), minimum stock, lifecycle; the weights of price,
+    availability, size and reuse of parts already in the design. The user can switch to "always ask".
+    Choices made by the agent are listed for review with the candidates it did not take and why.
   - The chosen part gets MPN, manufacturer, datasheet and offers on the schematic and board part, and the
     choice (with the candidates and reasons) is kept in the project's history.
   - Acceptance: browser check of the flow on a new project with three blocks; the choice survives
@@ -258,20 +275,20 @@ that completes it, and adds the commit id after the item name.
 - Every approved change is recorded below, with the date and a short reason, and the document version
   goes up (0.2, 0.3 …).
 
-### Open questions for the owner (before approval)
+### Owner's answers to the open questions (2026-11-16)
 
-1. Which distributors to support first (with Indonesia in mind: LCSC / JLCPCB, Mouser, DigiKey,
-   Farnell?), and will the owner get their API keys?
-2. Web search: needed (it needs a search API with a key), or are distributor data and manufacturer sites
-   enough?
-3. May the agent choose parts by itself within limits (A6), or must the user always pick?
-4. Should AM1–AM3 run before or after PM3's open item (P13's Gerber check)?
+1. Distributors: LCSC and Mouser first; the agent may choose between them itself (A4).
+2. Web search: needed, and the agent should research on its own, finding its own way like an agentic
+   assistant (A2).
+3. The agent may choose parts itself, with limits that can be tuned (A6).
+4. AM1–AM3 start after PM3 is closed (P13).
 
 ### Change log
 
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 0.1 | 2026-11-16 | First draft | — |
+| 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Answers by the owner in chat; approval pending |
 
 ## Approval
 
