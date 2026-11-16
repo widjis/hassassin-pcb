@@ -140,7 +140,7 @@ describe('agent plugins (A1)', () => {
     const ev: AgentEvent[] = [];
     await s.send('find it', (e) => ev.push(e), undefined, { tools, note: 'Plugins for this project: echo' });
     expect(calls[0]!.tools!.map((t) => (t as { name: string }).name)).toContain('echo__echo');
-    expect(JSON.stringify(calls[0]!.messages[0])).toContain('<plugins>');
+    expect(JSON.stringify(calls[0]!.messages[0])).toContain('<context>');
     const results = ev.filter((e) => e.type === 'tool_result') as Extract<AgentEvent, { type: 'tool_result' }>[];
     expect(results.map((r) => [r.name, r.ok])).toEqual([['echo.echo', true], ['echo.crash', false]]);
     expect(results[0]!.detail).toContain('"echo":"datasheet"');

@@ -149,6 +149,18 @@ Notes:
 - Claude Code is Anthropic software under its own license (not open source); Codex is Apache-2.0.
   Both are installed from npm and are not copied into this repository.
 
+### Checklist, questions and AI Full
+
+- The agent keeps a checklist of every piece of work (`update_tasks`), shown at the top of the Agent tab
+  (spinner on the step in progress), and asks decisions with `ask_user`: questions with choices shown as a
+  card with buttons and a free answer; the answers go back as the next message. Both work with every
+  backend (the MCP server offers them to Claude Code and Codex).
+- **New project** asks *AI Full* or *AI Assisted*. AI Full opens a wizard (what to build, requirements,
+  limits for the agent's choices, the AI to use), shares the project and starts the agent, which works one
+  stage at a time (requirements, schematic, components, layout, review) and stops after each with
+  `finish_stage`; the Agent tab shows *Continue to <next stage>* and *Change something*. The mode is in the
+  Project panel.
+
 ## Plugins
 
 Plugins give the built-in agent tools from outside Hassassin (web research, distributor catalogues,

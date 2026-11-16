@@ -2,7 +2,7 @@
  * Project panel: the requirements document and the stage gates
  * (requirements → schematic → components → layout → review → fabrication).
  */
-import { computeGates, SPEC_FIELDS as FIELDS, type Spec } from '@hassassin/tools';
+import { aiFlowOf, AI_STAGES, computeGates, SPEC_FIELDS as FIELDS, STAGE_TITLES, type AiStage, type Spec } from '@hassassin/tools';
 import type { App } from '../app.ts';
 import { clear, h } from './dom.ts';
 
@@ -15,6 +15,22 @@ export function mountProject(app: App, root: HTMLElement): void {
       return;
     }
     const spec = (doc.meta.spec ?? {}) as Spec;
+    // How this project works with the AI (A14): AI Full (stage by stage) or AI Assisted.
+    const flow = aiFlowOf(doc);
+    const gates = computeGates({ doc, erc: app.erc, drc: app.drc, ratsnest: app.ratsnest });
+    const mode = h('select', { title: 'AI Full: the AI takes the project through its stages, stopping after each for your go-ahead. AI Assisted: you work, the AI helps when asked.' }, h('option', { value: 'assisted' }, 'AI Assisted'), h('option', { value: 'full', ...(flow?.mode === 'full' ? { selected: true } : {}) }, 'AI Full')) as HTMLSelectElement;
+    mode.addEventListener('change', () => {
+      if (mode.value === 'full') {
+        // Start at the first stage that is not done yet.
+        const todo = gates.find((g) => g.state === 'todo' && (AI_STAGES as readonly string[]).includes(g.id))?.id as AiStage | undefined;
+        app.apply('AI Full', [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: todo ?? 'review', waiting: false } }]);
+      } else app.apply('AI Assisted', [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'assisted', stage: flow?.stage ?? 'requirements', waiting: false } }]);
+    });
+    root.append(
+      h('div', { class: 'section-title' }, h('span', {}, 'Working with the AI')),
+      h('label', { class: 'spec-field' }, h('span', {}, 'Mode'), mode),
+    );
+    if (flow?.mode === 'full') root.append(h('div', { class: 'dim', style: 'font-size:11.5px;padding:0 2px 6px' }, flow.done ? 'Every stage done.' : `Stage: ${STAGE_TITLES[flow.stage]}${flow.waiting ? ' — finished, waiting for your go-ahead in the Agent tab' : ''}`));
     root.append(h('div', { class: 'section-title' }, h('span', {}, 'Stages')));
     for (const gate of computeGates({ doc, erc: app.erc, drc: app.drc, ratsnest: app.ratsnest, ...(app.collab ? { blockingComments: app.comments().filter((c) => c.props.blocking && !c.props.resolved).length } : {}) })) {
       const icon = gate.state === 'ok' ? '●' : gate.state === 'override' ? '◐' : '○';

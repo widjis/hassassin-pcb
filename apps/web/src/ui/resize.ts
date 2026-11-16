@@ -99,6 +99,11 @@ export function toggleRight(): boolean {
   return rightBefore !== null;
 }
 
+/** Show the left (agent) panel if it is hidden (the AI Full wizard, A14). */
+export function showLeft(): void {
+  if (ws?.classList.contains('no-left')) toggleLeft();
+}
+
 /** Hide / show the left (agent) panel, for more room on the canvas; the rail's top button brings it back. */
 export function toggleLeft(): boolean {
   if (!ws) return false;

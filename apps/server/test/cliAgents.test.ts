@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -34,5 +34,30 @@ describe('CLI agent backends', () => {
     const again: AgentEvent[] = [];
     await s.send('more', (e) => again.push(e));
     expect(again.find((e) => e.type === 'text')).toMatchObject({ text: 'resumed\n' });
+  });
+
+  it('Stop ends the whole CLI, also the program its launcher started', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hcli-stop-'));
+    process.env.FAKE_CHILD_PID = join(dir, 'child.pid');
+    const s = new CliAgentSession({ cli: 'claude', editLink: 'http://127.0.0.1:1/?p=a&t=edit', viewLink: 'http://127.0.0.1:1/?p=a&t=view', workDir: dir, agentName: 'AI', bin: fx('fake-claude-slow.mjs') });
+    const abort = new AbortController();
+    const ev: AgentEvent[] = [];
+    const run = s.send('work', (e) => ev.push(e), abort.signal);
+    for (let i = 0; i < 50 && !existsSync(process.env.FAKE_CHILD_PID); i++) await new Promise((r) => setTimeout(r, 100));
+    const pid = Number(readFileSync(process.env.FAKE_CHILD_PID, 'utf8'));
+    abort.abort();
+    await run;
+    expect(ev.at(-1)).toEqual({ type: 'done', reason: 'stopped' });
+    await new Promise((r) => setTimeout(r, 300));
+    const alive = (() => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    expect(alive).toBe(false);
+    delete process.env.FAKE_CHILD_PID;
   });
 });

@@ -6,7 +6,7 @@
  */
 import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
-import { newProject, saveProject, ToolError, TOOLS, runTool, type Project } from '@hassassin/tools';
+import { ASK_TOOL, newProject, parseQuestions, saveProject, ToolError, TOOLS, runTool, type Project } from '@hassassin/tools';
 import { isHpcb, loadGeometry, NEEDS_GEOMETRY, mtime, readProject, toolContext, writeAny, writeProject } from './io.ts';
 import { openLive, parseLiveLink, runLive, type LiveSession } from './live.ts';
 
@@ -75,6 +75,8 @@ export async function serveMcp(version: string): Promise<void> {
   const callTool = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
     if (BOUND) {
       if (name === 'update_tasks') return { ok: true };
+      // Questions with choices for the user (A14): checked here, shown by the Agent tab from the call itself.
+      if (name === 'ask_user') return (parseQuestions(args), { shown: true, note: 'The user sees the questions with buttons. End your reply now; their answers come as the next message.' });
       const t = TOOLS.find((x) => x.name === name);
       if (!t || !visible(t)) throw new ToolError(READONLY && t?.mutates ? 'Ask mode is read-only; switch the Agent tab to Agent mode to allow edits.' : `Unknown tool ${name}`);
       args = { ...args, project: BOUND };
@@ -141,7 +143,7 @@ export async function serveMcp(version: string): Promise<void> {
       case 'tools/list':
         return reply({
           tools: [
-            ...(BOUND ? [TASKS_TOOL] : EXTRA_TOOLS),
+            ...(BOUND ? [TASKS_TOOL, { name: ASK_TOOL.name, description: ASK_TOOL.description, inputSchema: ASK_TOOL.input_schema }] : EXTRA_TOOLS),
             ...TOOLS.filter(visible).map((t) => ({
               name: t.name,
               description: t.description,

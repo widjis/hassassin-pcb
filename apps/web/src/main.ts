@@ -1,4 +1,5 @@
 import { loadNativeClipperLibInstanceAsync, NativeClipperLibRequestedFormat } from 'js-angusj-clipper/web';
+import { openNewProjectDialog } from './ui/newProject.ts';
 import { describeBackChange, kicadNetlist, kicadPcb, kicadSchematic, planBackAnnotation, SHEET_PIN_SHAPES, type SheetPinShape, annotateOps, compactBlocksOps, localDate, schematicPdf, schematicSvgs, allSheets, sheetPath, setSheetFrameOps, sheetFrame, type AlignMode, schematicGrid, setSchematicGridOp, tidyWiresOps, withJunctionsOps, PART_KINDS, setClipper, type PartKind } from '@hassassin/core';
 import { zip } from '@hassassin/fab';
 import { App, type Mode, type Space } from './app.ts';
@@ -534,11 +535,8 @@ $('tidyBtn').addEventListener('click', () => {
   app.apply('Tidy wires', withJunctionsOps(doc, engine, r.ops));
   app.say(`Bends ${r.before} → ${r.after}: ${r.rerouted} wire${r.rerouted === 1 ? '' : 's'} re-routed${r.moved.length ? `, moved ${r.moved.join(', ')}` : ''}. Connections are unchanged.`);
 });
-$('newBtn').addEventListener('click', () => {
-  if (app.dirty && !confirm('Discard unsaved changes and start a new project?')) return;
-  app.newProject();
-  loaded();
-});
+// New project: AI Full (wizard, then the agent stage by stage) or AI Assisted (A14).
+$('newBtn').addEventListener('click', () => openNewProjectDialog(app, collab, loaded));
 
 // ---- collaboration ----
 const collab = new Collab(app);

@@ -7,7 +7,7 @@
  * the Claude API) and joins the shared project as a collaborator, so its edits are live,
  * undoable and in the history. The conversation is kept per project in this browser.
  */
-import { computeGates } from '@hassassin/tools';
+import { aiFlowOf, computeGates, nextStage, STAGE_TITLES, AI_STAGES, type AgentQuestion } from '@hassassin/tools';
 import type { App } from '../app.ts';
 import type { Collab } from '../collab.ts';
 import { clear, h } from './dom.ts';
@@ -29,6 +29,8 @@ type Item =
   | { kind: 'steps'; steps: Step[] }
   | { kind: 'note'; text: string }
   | { kind: 'error'; text: string }
+  /** Questions with choices from the agent (ask_user, A14); `answered` is what the user sent. */
+  | { kind: 'question'; id: string; questions: AgentQuestion[]; answered?: string; readonly?: boolean }
   /** The edits one reply made, with a button to undo them together. */
   | { kind: 'edits'; chat: string; turn: string; count: number; labels: string[]; state?: 'busy' | 'undone'; error?: string };
 
@@ -164,6 +166,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   const header = h('div', { class: 'agent-head' });
   const loginBox = h('div', { class: 'agent-login' });
   const taskBox = h('div', { class: 'agent-tasks' });
+  const flowBox = h('div', { class: 'agent-flow' });
   const pluginBox = h('div', { class: 'agent-plugins' });
   const log = h('div', { class: 'agent-log' });
   const input = h('textarea', { rows: '1', placeholder: 'Ask about the design, or tell the agent what to do…' });
@@ -185,6 +188,92 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
 
   const persist = () => collab.session && store.save(collab.session.id, { items, chat, tasks, backend });
 
+  // ---------------------------------------------------------------- questions (ask_user, A14)
+  const renderQuestion = (it: Extract<Item, { kind: 'question' }>): HTMLElement => {
+    const card = h('div', { class: `msg question${it.answered ? ' answered' : ''}` });
+    if (it.answered) {
+      card.append(h('div', { class: 'q-head' }, it.readonly ? 'Questions to the user' : 'You answered'), h('pre', { class: 'q-answer' }, it.answered));
+      return card;
+    }
+    const picked = it.questions.map(() => new Set<number>());
+    const other = it.questions.map(() => '');
+    const submit = h('button', { class: 'btn primary', disabled: true }, 'Send answers');
+    const ready = () => it.questions.every((_, i) => picked[i]!.size || other[i]!.trim());
+    it.questions.forEach((q, qi) => {
+      const opts = h('div', { class: 'q-options' });
+      const buttons: HTMLElement[] = [];
+      q.options.forEach((o, oi) => {
+        const b = h('button', { class: 'q-option', title: o.description ?? '' }, h('span', { class: 'q-label' }, o.label), o.description ? h('span', { class: 'q-desc' }, o.description) : null);
+        b.addEventListener('click', () => {
+          if (it.readonly) return;
+          const set = picked[qi]!;
+          if (q.multiSelect) set.has(oi) ? set.delete(oi) : set.add(oi);
+          else (set.clear(), set.add(oi));
+          buttons.forEach((x, k) => x.classList.toggle('on', set.has(k)));
+          (submit as HTMLButtonElement).disabled = !ready();
+        });
+        buttons.push(b);
+        opts.append(b);
+      });
+      const free = h('input', { class: 'q-other', placeholder: 'Other answer…', ...(it.readonly ? { disabled: true } : {}) });
+      free.addEventListener('input', () => ((other[qi] = (free as HTMLInputElement).value), ((submit as HTMLButtonElement).disabled = !ready())));
+      card.append(h('div', { class: 'q-block' }, h('div', { class: 'q-title' }, h('span', { class: 'q-chip' }, q.header), h('span', {}, q.question)), opts, free));
+    });
+    submit.addEventListener('click', () => {
+      if (busy || !ready()) return;
+      const lines = it.questions.map((q, i) => {
+        const chosen = [...picked[i]!].map((k) => q.options[k]!.label);
+        if (other[i]!.trim()) chosen.push(other[i]!.trim());
+        return `- ${q.header}: ${chosen.join(', ')}`;
+      });
+      it.answered = lines.join('\n');
+      updateItem(it);
+      void send(`My answers:\n${it.answered}`);
+    });
+    if (!it.readonly) card.append(h('div', { class: 'q-actions' }, submit));
+    return card;
+  };
+
+  // ---------------------------------------------------------------- AI Full stages (A14)
+  const drawFlow = () => {
+    clear(flowBox);
+    const f = aiFlowOf(app.doc);
+    if (!f || f.mode !== 'full' || !collab.session) return;
+    const n = AI_STAGES.indexOf(f.stage) + 1;
+    const next = nextStage(f.stage);
+    flowBox.append(
+      h(
+        'div',
+        { class: 'flow-head' },
+        h('span', { class: 'flow-badge' }, 'AI Full'),
+        h('span', {}, f.done ? 'Every stage done' : `Stage ${n} of ${AI_STAGES.length} · ${STAGE_TITLES[f.stage]}`),
+        h('span', { class: 'dim' }, f.done ? '' : f.waiting ? '· waiting for you' : busy ? '· working' : ''),
+      ),
+      h('div', { class: 'flow-steps' }, ...AI_STAGES.map((s, i) => h('span', { class: `flow-step${i < n - 1 || f.done || (s === f.stage && f.waiting) ? ' done' : s === f.stage ? ' now' : ''}`, title: STAGE_TITLES[s] }))),
+    );
+    if (f.waiting && !f.done && !busy) {
+      // The stage's summary folded, so the panel keeps room for the conversation.
+      if (f.summary || f.open) {
+        const d = h('details', { class: 'flow-details' }, h('summary', {}, `What the AI did in ${STAGE_TITLES[f.stage]}${f.open ? ' · open points' : ''}`));
+        if (f.summary) d.append(h('div', { class: 'flow-summary' }, renderMarkdown(f.summary)));
+        if (f.open) d.append(h('div', { class: 'flow-open' }, h('b', {}, 'Open: '), f.open));
+        flowBox.append(d);
+      }
+      const go = h('button', { class: 'btn primary' }, next ? `Continue to ${STAGE_TITLES[next]}` : 'Finish');
+      go.addEventListener('click', () => {
+        if (!next) return;
+        app.apply(`AI Full: start ${STAGE_TITLES[next]}`, [{ op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: next, waiting: false } }]);
+        void send(`Continue with the ${STAGE_TITLES[next]} stage.`);
+      });
+      const change = h('button', { class: 'btn' }, 'Change something');
+      change.addEventListener('click', () => {
+        input.placeholder = `What should change in the ${STAGE_TITLES[f.stage]} stage?`;
+        input.focus();
+      });
+      flowBox.append(h('div', { class: 'flow-actions' }, go, change));
+    }
+  };
+
   // ---------------------------------------------------------------- rendering
   const renderItem = (it: Item): HTMLElement => {
     if (it.kind === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, it.text));
@@ -196,6 +285,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       btn.addEventListener('click', () => void undoEdits(it));
       return h('div', { class: 'msg edits' }, h('span', {}, `Agent made ${what}`), btn, it.error ? h('div', { class: 'err-text' }, it.error) : null);
     }
+    if (it.kind === 'question') return renderQuestion(it);
     if (it.kind === 'note') {
       const d = h('details', { class: 'msg note' }, h('summary', {}, 'Thinking'), h('div', { class: 'note-body' }, it.text));
       return d;
@@ -208,7 +298,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       return h('div', { class: 'msg agent' }, body, h('div', { class: 'msg-tools' }, copy));
     }
     // Steps: one foldable row per run of tool calls.
-    const visible = it.steps.filter((s) => s.name !== 'update_tasks');
+    const visible = it.steps.filter((s) => s.name !== 'update_tasks' && s.name !== 'ask_user');
     const running = visible.some((s) => s.ok === undefined);
     const failed = visible.filter((s) => s.ok === false).length;
     const last = visible[visible.length - 1];
@@ -301,6 +391,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     sendBtn.style.display = b ? 'none' : '';
     stopBtn.style.display = b ? '' : 'none';
     drawHints();
+    drawFlow();
   };
 
   // ---------------------------------------------------------------- backend & sign-in
@@ -511,7 +602,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       chat = saved?.chat ?? null;
       if (saved?.backend) backend = saved.backend;
     }
-    root.append(header, loginBox, pluginBox, taskBox, log, bottom);
+    root.append(header, loginBox, pluginBox, flowBox, taskBox, log, bottom);
+    drawFlow();
     drawHeader();
     void loadPlugins();
     drawTasks();
@@ -544,15 +636,16 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   };
 
   // ---------------------------------------------------------------- sending
-  const send = async () => {
-    const prompt = input.value.trim();
-    if (!prompt || busy || !collab.session || sendBtn.disabled) return;
+  const send = async (text?: string) => {
+    const prompt = (text ?? input.value).trim();
+    if (!prompt || busy || !collab.session || (sendBtn.disabled && text === undefined)) return;
+    input.placeholder = 'Ask about the design, or tell the agent what to do…';
     if (viewing) {
       viewing = null;
       drawLog();
       drawTasks();
     }
-    input.value = '';
+    if (text === undefined) input.value = '';
     autoGrow();
     if (!items.length) clear(log), log.append(typing);
     const user: Item = { kind: 'user', text: prompt };
@@ -592,6 +685,10 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
             updateItem(agentItem);
           } else if (e.type === 'note') {
             push({ kind: 'note', text: e.text });
+          } else if (e.type === 'question') {
+            agentItem = null;
+            stepsItem = null;
+            push({ kind: 'question', id: e.id, questions: e.questions });
           } else if (e.type === 'tool') {
             agentItem = null;
             if (!stepsItem) push((stepsItem = { kind: 'steps', steps: [] }));
@@ -626,6 +723,12 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     }
   };
   sendBtn.addEventListener('click', () => void send());
+  // The AI Full wizard starts the work with a first message (A14).
+  app.agentStart = (prompt: string) => {
+    mode = 'agent';
+    drawHeader();
+    void send(prompt);
+  };
   stopBtn.addEventListener('click', () => collab.session && chat && fetch(`/api/agent/${collab.session.id}/stop?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', body: JSON.stringify({ chat }) }));
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -650,6 +753,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       w.agentItem.text += String(e.text ?? '');
       if (show) updateItem(w.agentItem);
     } else if (t === 'note') push({ kind: 'note', text: String(e.text ?? '') });
+    else if (t === 'question') push({ kind: 'question', id: String(e.id), questions: (e.questions as AgentQuestion[]) ?? [], readonly: true, answered: ((e.questions as AgentQuestion[]) ?? []).map((q) => `- ${q.question}`).join('\n') });
     else if (t === 'tool') {
       w.agentItem = null;
       if (!w.stepsItem) push((w.stepsItem = { kind: 'steps', steps: [] }));
@@ -725,7 +829,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   });
   app.on('drc', drawHints);
   // A collaborator may switch plugins; the switches follow the project.
-  app.on('change', () => pluginsOpen && drawPlugins());
+  app.on('change', () => (pluginsOpen && drawPlugins(), drawFlow()));
+  app.on('doc', drawFlow);
   // The intro's button depends on whether a project is open.
   app.on('doc', () => {
     if (!app.collab) void render();

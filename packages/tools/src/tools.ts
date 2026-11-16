@@ -191,6 +191,7 @@ import {
 } from '@hassassin/core';
 import { buildFab, fabZip, zip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
+import { aiFlowOf, nextStage, STAGE_TITLES, type AiFlow } from './aiFlow.ts';
 import type { Project } from './project.ts';
 import { Library } from './library.ts';
 import { parseKicadFootprint, parseKicadSymbolLib } from '@hassassin/kicad-import';
@@ -958,6 +959,31 @@ export const TOOLS: ToolDef[] = [
       const v = String(a.value ?? '');
       apply(p, `Set ${key}`, nodes.map((n) => ({ op: 'setProp', uid: n.uid, key, value: v === '' ? null : v })));
       return { updated: nodes.map((n) => n.name || n.uid), key, value: v };
+    },
+  },
+  {
+    name: 'finish_stage',
+    description: 'AI Full projects (docs/06 A14): end the current stage and wait for the user\'s go-ahead. Give a short summary of what you did in the stage and what is still open or needs their decision. After calling it, end your reply; never start the next stage yourself.',
+    mutates: true,
+    input: {
+      type: 'object',
+      properties: {
+        stage: { type: 'string', enum: ['requirements', 'schematic', 'components', 'layout', 'review'], description: 'The stage you finished (the current one)' },
+        summary: { type: 'string', description: 'What you did in this stage, in a few lines' },
+        open: { type: 'string', description: 'What is still open or needs the user\'s decision (empty if nothing)' },
+      },
+      required: ['stage', 'summary'],
+    },
+    run: (p, a) => {
+      const f = aiFlowOf(p.doc);
+      if (!f || f.mode !== 'full') throw new ToolError('This project is not in AI Full mode; there are no stages to finish.');
+      const stage = str(a.stage, 'stage');
+      if (stage !== f.stage) throw new ToolError(`The current stage is ${STAGE_TITLES[f.stage]}, not ${stage}. Finish ${STAGE_TITLES[f.stage]} first; the user starts the next stage.`);
+      const next = nextStage(f.stage);
+      const value: AiFlow = { ...f, waiting: true, summary: str(a.summary, 'summary').slice(0, 2000), ...(typeof a.open === 'string' && a.open.trim() ? { open: a.open.trim().slice(0, 1000) } : { open: undefined }), ...(next ? {} : { done: true }) };
+      if (!value.open) delete value.open;
+      apply(p, `Finish stage ${STAGE_TITLES[f.stage]}`, [{ op: 'setMeta', key: 'aiFlow', value: value as unknown as Record<string, unknown> }]);
+      return { waiting: true, finished: f.stage, next: next ?? null, note: next ? `Stop here: the user decides when the ${STAGE_TITLES[next]} stage starts.` : 'Every stage is done.' };
     },
   },
   {

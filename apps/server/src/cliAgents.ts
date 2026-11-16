@@ -15,7 +15,7 @@ import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AGENT_SYSTEM, type AgentEvent, type AgentMode, type AgentTask } from '@hassassin/tools';
+import { AGENT_SYSTEM, parseQuestions, type AgentEvent, type AgentMode, type AgentTask } from '@hassassin/tools';
 import { pluginToolName, type ActivePlugin } from './plugins.ts';
 
 export type CliId = 'claude' | 'codex';
@@ -125,7 +125,7 @@ export class LoginJob {
 const READ_ONLY_HINT = 'This conversation is in Ask mode: you can read the project but not change it. If the user asks for a change, describe it and tell them to switch the Agent tab to Agent mode.';
 
 function systemPrompt(mode: AgentMode, note = ''): string {
-  return `${AGENT_SYSTEM}\n\nYou work through the "hassassin" tools; they are already bound to the project the user has open, so never pass a project argument. Publish multi-step plans with hassassin update_tasks.${mode === 'ask' ? `\n\n${READ_ONLY_HINT}` : ''}${note ? `\n\n${note}` : ''}`;
+  return `${AGENT_SYSTEM}\n\nYou work through the "hassassin" tools; they are already bound to the project the user has open, so never pass a project argument. Publish the checklist of every piece of work with hassassin update_tasks and keep it current; ask the user decisions with hassassin ask_user.${mode === 'ask' ? `\n\n${READ_ONLY_HINT}` : ''}${note ? `\n\n${note}` : ''}`;
 }
 
 /** Tool names as the Agent tab shows them: Hassassin's bare, a plugin's as "<plugin>.<tool>". */
@@ -208,7 +208,7 @@ export class CliAgentSession {
     // Codex has no separate system prompt flag here: the instructions lead the first message,
     // and the mode is restated on each later one.
     // The plugins may change between messages, so their note goes with every message.
-    const note = this.pluginNote ? `<plugins>\n${this.pluginNote}\n</plugins>\n\n` : '';
+    const note = this.pluginNote ? `<context>\n${this.pluginNote}\n</context>\n\n` : '';
     const text = this.sessionId ? `${this.mode === 'ask' ? `(${READ_ONLY_HINT})\n\n` : '(Agent mode: you may change the project.)\n\n'}${note}${prompt}` : `<instructions>\n${systemPrompt(this.mode)}\n</instructions>\n\n${note}${prompt}`;
     // Codex's live web search is a flag before the subcommand.
     const search = this.webSearch ? ['--search'] : [];
@@ -219,9 +219,17 @@ export class CliAgentSession {
     if (this.child) throw new Error('The agent is still working on the previous message.');
     await mkdir(this.workDir, { recursive: true });
     // Run on the signed-in subscription, not on API keys this server may have.
-    const child = spawn(this.bin, this.args(prompt), { cwd: this.workDir, stdio: ['ignore', 'pipe', 'pipe'], env: cliEnv() });
+    // Its own process group: the installed `claude` / `codex` commands are launchers that start the real
+    // program as a child, so Stop has to end the whole group, not only the launcher.
+    const child = spawn(this.bin, this.args(prompt), { cwd: this.workDir, stdio: ['ignore', 'pipe', 'pipe'], env: cliEnv(), detached: true });
     this.child = child;
-    const stop = () => child.kill('SIGTERM');
+    const stop = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        child.kill('SIGTERM');
+      }
+    };
     signal?.addEventListener('abort', stop);
     const errLines: string[] = [];
     const names = new Map<string, string>();
@@ -316,6 +324,13 @@ export class CliAgentSession {
       if (Array.isArray(list)) {
         this.tasks = list.map((t) => ({ title: String(t.title), status: (['todo', 'doing', 'done', 'blocked'].includes(t.status) ? t.status : 'todo') as AgentTask['status'], ...(t.stage ? { stage: String(t.stage) } : {}) }));
         emit({ type: 'tasks', tasks: this.tasks });
+      }
+    }
+    if (n === 'ask_user') {
+      try {
+        emit({ type: 'question', id, questions: parseQuestions(input) });
+      } catch {
+        /* a malformed call: the MCP server tells the agent */
       }
     }
     emit({ type: 'tool', id, name: n, input });

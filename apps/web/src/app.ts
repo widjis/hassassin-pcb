@@ -145,6 +145,8 @@ export class App {
   message = '';
   stats: Record<string, number> = {};
   fileName = '';
+  /** Send a message to the agent as the user (set by the Agent tab; used by the AI Full wizard, A14). */
+  agentStart: ((prompt: string) => void) | null = null;
   dirty = false;
   readonly route: RouteTool;
   /** Drawing tools on the board (P6). */

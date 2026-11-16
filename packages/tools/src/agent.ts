@@ -33,9 +33,60 @@ export type AgentEvent =
   | { type: 'tool'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; id: string; name: string; ok: boolean; summary: string; detail?: string }
   | { type: 'tasks'; tasks: AgentTask[] }
+  | { type: 'question'; id: string; questions: AgentQuestion[] }
   | { type: 'usage'; input: number; output: number; cacheRead: number }
   | { type: 'done'; reason: string }
   | { type: 'error'; message: string };
+
+/** A question for the user with choices (the `ask_user` tool, docs/06 A14); answered in the next message. */
+export interface AgentQuestion {
+  question: string;
+  /** A very short label, e.g. "Supply". */
+  header: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+}
+
+/** Schema of `ask_user`, shared by the API backend and the MCP server (Claude Code, Codex). */
+export const ASK_TOOL = {
+  name: 'ask_user',
+  description:
+    'Ask the user one to four questions with choices, shown as a card with buttons (and a free answer). Use it whenever you need a decision or a value only the user can give, instead of asking in prose. Recommend an option by putting it first with "(recommended)" in its label. After calling it, end your reply; the answers come as the user\'s next message.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      questions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 4,
+        items: {
+          type: 'object',
+          properties: {
+            question: { type: 'string', description: 'The full question' },
+            header: { type: 'string', description: 'A label of at most 12 characters' },
+            options: { type: 'array', minItems: 2, maxItems: 4, items: { type: 'object', properties: { label: { type: 'string' }, description: { type: 'string' } }, required: ['label'] } },
+            multiSelect: { type: 'boolean', description: 'More than one option may be chosen' },
+          },
+          required: ['question', 'header', 'options'],
+        },
+      },
+    },
+    required: ['questions'],
+  },
+};
+
+/** Check and tidy the questions of an `ask_user` call (throws a message the model can act on). */
+export function parseQuestions(input: unknown): AgentQuestion[] {
+  const qs = (input as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(qs) || !qs.length || qs.length > 4) throw new ToolError('"questions" must be a list of 1 to 4 questions.');
+  return qs.map((q, i) => {
+    const o = q as Partial<AgentQuestion>;
+    if (!o || typeof o.question !== 'string' || !o.question.trim()) throw new ToolError(`Question ${i + 1} has no text.`);
+    const options = Array.isArray(o.options) ? o.options.filter((x) => x && typeof x.label === 'string' && x.label.trim()) : [];
+    if (options.length < 2 || options.length > 4) throw new ToolError(`Question ${i + 1} needs 2 to 4 options (the user can always give another answer).`);
+    return { question: o.question.trim(), header: String(o.header ?? '').trim().slice(0, 16) || `Q${i + 1}`, options: options.map((x) => ({ label: String(x.label).trim().slice(0, 80), ...(x.description ? { description: String(x.description).slice(0, 300) } : {}) })), ...(o.multiSelect ? { multiSelect: true } : {}) };
+  });
+}
 
 /** Tools the agent may not use: they touch the host's files or bypass the typed tools. */
 const HIDDEN = new Set(['export_fab', 'export_schematic', 'export_netlist', 'export_kicad_schematic', 'export_kicad_pcb', 'import_kicad_library', 'apply_ops']);
@@ -71,7 +122,7 @@ export function agentTools(mode: AgentMode): Anthropic.Beta.BetaTool[] {
     input_schema: t.input as Anthropic.Beta.BetaTool.InputSchema,
     eager_input_streaming: true,
   }));
-  return [...defs, { ...TASK_TOOL, eager_input_streaming: true }];
+  return [...defs, { ...TASK_TOOL, eager_input_streaming: true }, { ...ASK_TOOL, eager_input_streaming: true }];
 }
 
 export const AGENT_SYSTEM = `You are the design assistant inside Hassassin, a browser-based PCB design tool. You help an electronics engineer take a board from requirements to fabrication files, working through the project's stages:
@@ -84,7 +135,8 @@ export const AGENT_SYSTEM = `You are the design assistant inside Hassassin, a br
 
 How to work:
 - Start every request by looking at the project (project_status, then query/inspect/list_parts as needed). Never assume what is in the design.
-- For anything that takes more than two steps, first publish a short plan with update_tasks, then keep it current.
+- For every request that does work (anything more than a short answer), first publish a checklist of its steps with update_tasks, then keep it current: mark the step you are on "doing" and each finished one "done" as you go, so the user can follow along.
+- When you need a decision or a value only the user can give, ask with ask_user (choices as buttons, your recommendation first), then end your reply; do not ask such questions in prose.
 - Use the tools for every change; changes are undoable and visible to collaborators in real time.
 - Prefer library parts (search_parts, place_part) with real footprints over generic ones when the user names a specific part. Use generic parts for passives unless the user wants something else.
 - Never invent manufacturer part numbers, prices, stock, or datasheet values. If you are not sure a value is right, say so and ask, or leave it for the user.
@@ -211,7 +263,7 @@ export class AgentSession {
         role: 'user',
         content: [
           { type: 'text', text: `<project_status mode="${this.mode}">\n${clip(status, 20000)}\n</project_status>` },
-          ...(extras.note ? [{ type: 'text' as const, text: `<plugins>\n${extras.note}\n</plugins>` }] : []),
+          ...(extras.note ? [{ type: 'text' as const, text: `<context>\n${extras.note}\n</context>` }] : []),
           { type: 'text', text: prompt },
         ],
       });
@@ -258,7 +310,11 @@ export class AgentSession {
               emit({ type: 'tool_result', id: u.id, name: shown, ok: true, summary: `${r.text.length} characters`, detail: clip(r.text, 6000) });
               continue;
             }
-            if (u.name === 'update_tasks') {
+            if (u.name === 'ask_user') {
+              const questions = parseQuestions(input);
+              emit({ type: 'question', id: u.id, questions });
+              out = { shown: true, note: 'The user sees the questions with buttons. End your reply now; their answers come as the next message.' };
+            } else if (u.name === 'update_tasks') {
               if (!Array.isArray(input.tasks)) throw new ToolError('"tasks" must be an array');
               this.tasks = (input.tasks as AgentTask[]).map((t) => ({ title: String(t.title), status: (['todo', 'doing', 'done', 'blocked'].includes(t.status) ? t.status : 'todo') as AgentTask['status'], ...(t.stage ? { stage: String(t.stage) } : {}) }));
               emit({ type: 'tasks', tasks: this.tasks });

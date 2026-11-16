@@ -36,7 +36,7 @@ import { openLive, runLive, type LiveSession } from '../../cli/src/live.ts';
 import { CLI_LABEL, CliAgentSession, cliStatus, LoginJob, type CliId } from './cliAgents.ts';
 import { fileURLToPath } from 'node:url';
 import { McpClient, PluginHost, pluginNote, pluginToolName, type ActivePlugin } from './plugins.ts';
-import type { ExternalTool } from '@hassassin/tools';
+import { aiFlowNote, type ExternalTool } from '@hassassin/tools';
 
 interface Client {
   id: string;
@@ -271,6 +271,7 @@ export async function startServer(opts: ServerOptions) {
     };
     // Plugin calls are logged per project (tool, arguments with secrets removed, result size).
     const pluginCalls = new Map<string, { plugin: string; tool: string; input: unknown }>();
+    const pluginLogs: Promise<unknown>[] = [];
     const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend } | { type: 'edits'; turn: string; count: number; labels: string[] }) => {
       res.write(`data: ${JSON.stringify(e)}\n\n`);
       if (e.type !== 'chat') mirror(e as Record<string, unknown>);
@@ -280,9 +281,9 @@ export async function startServer(opts: ServerOptions) {
       } else if (e.type === 'tool_result' && pluginCalls.has(e.id)) {
         const c = pluginCalls.get(e.id)!;
         pluginCalls.delete(e.id);
-        pluginHost
+        pluginLogs.push(pluginHost
           .log(id, { chat: chatId, by: c0.by, plugin: c.plugin, tool: c.tool, args: c.input, ok: e.ok, bytes: (e.detail ?? e.summary ?? '').length })
-          .catch((err) => log(`plugin log: ${(err as Error).message}`));
+          .catch((err) => log(`plugin log: ${(err as Error).message}`)));
       }
     };
     send({ type: 'chat', chat: chatId, mode, backend });
@@ -298,7 +299,8 @@ export async function startServer(opts: ServerOptions) {
       // This project's plugins for this message; those that cannot run are left out with a note.
       const { plugins: active, skipped } = await pluginHost.active(lp.doc.meta.agentPlugins, mode);
       for (const s of skipped) send({ type: 'note', text: `Plugin ${s.id} ${s.reason}.` });
-      const note = pluginNote(active, skipped);
+      // The plugins, and for an AI Full project its stage and limits (A14).
+      const note = [pluginNote(active, skipped), aiFlowNote(lp.doc)].filter(Boolean).join('\n\n');
       if (chat.session instanceof CliAgentSession) {
         chat.session.plugins = active;
         chat.session.pluginNote = note;
@@ -320,6 +322,8 @@ export async function startServer(opts: ServerOptions) {
         chat.turns.set(turnId, { from, to: lp.seq, undone: false });
         send({ type: 'edits', turn: turnId, count: made.length, labels: [...new Set(made.map((e) => e.label))].slice(0, 6) });
       }
+      // Every plugin call of this reply is in the log before the reply ends.
+      await Promise.allSettled(pluginLogs);
       chat.abort = null;
       chat.lastUsed = Date.now();
       mirror({ type: 'end' });

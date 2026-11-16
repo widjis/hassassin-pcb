@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
-| Version | 0.4 |
-| Status | **Approved on 2026-11-16 (0.4, A14 added); A1 and A2 done, AM1 continues (A14, A3, A12, A13)** |
+| Version | 0.5 |
+| Status | **Approved on 2026-11-16 (0.5); A1, A2 and A14 done, AM1 continues (A3, A12, A13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -229,7 +229,7 @@ can be checked; an item is done only when all of them pass.
   - Acceptance: datasheets of ten parts from five manufacturers fetched, stored and read; the pin table
     page of each is found by `find_in_datasheet`; a second request uses the stored copy.
 
-- [ ] **A14. New project: AI Full or AI Assisted.**
+- [x] **A14. New project: AI Full or AI Assisted.**
   - *File → New project* (and the start screen) asks how to work, with two choices:
     - **AI Full:** a wizard, then the agent takes the project through its stages.
     - **AI Assisted:** the schematic opens, as today; the agent is in its panel when the user wants it.
@@ -256,6 +256,54 @@ can be checked; an item is done only when all of them pass.
     project's requirements and limits; the agent stops after every stage with the two buttons and does not
     start the next stage on its own; *Change something* reaches the agent; switching the mode later works;
     AI Full works with Claude Code and with the Claude API backend (a scripted model in the tests).
+  - **Checklist and questions** (added in revision 0.5, with every backend): the agent publishes a checklist
+    for every piece of work (`update_tasks`) and keeps it current, shown in the Agent tab as a coding
+    agent shows it (dashed circle to do, spinner for the step in progress, check when done); a decision only
+    the user can make is asked with `ask_user`: one to four questions, each with two to four choices (the
+    recommended one first) and a free answer, shown as a card with buttons; the answers go back as the
+    user's next message.
+    - Acceptance: the API backend and the MCP server (Claude Code, Codex) offer both; an `ask_user` call
+      gives the card in each and changes nothing in the project; answering it sends the answers.
+  - *Done (2026-11-16).*
+    - **New project** (`apps/web/src/ui/newProject.ts`): File → New project asks AI Full or AI Assisted; AI
+      Full is shown unavailable, with the reason, without the collaboration server or a ready backend. AI
+      Assisted opens the schematic (`aiFlow.mode` assisted).
+    - **Wizard:** what to build; the requirements (each optional, "the AI proposes the rest"); limits
+      (distributors LCSC / Mouser, smallest passive package, packages to avoid, parts budget, copper layers,
+      board size, choosing parts: Ask every time / Automatic within limits / Full); a summary with the backend
+      that will do the work (and the user's name if not known). *Start* records `spec`, `agentLimits`,
+      `aiFlow` (full, Requirements) and switches on the `web` plugin, shares the project (a private link)
+      and sends the first message built from the wizard (`wizardPrompt`).
+    - **Stages** (`packages/tools/src/aiFlow.ts`): each message of an AI Full project carries the stage, what
+      it covers, the limits, and that the agent stops at its end; the `finish_stage` tool (current stage
+      only) records the summary and the open points and sets the project waiting; the last stage marks it
+      done. The Agent tab shows a bar: AI Full, stage n of 5, a progress strip, "waiting for you", the stage's
+      summary folded, *Continue to <next stage>* (sets the next stage, one undo step, and tells the agent)
+      and *Change something* (puts the cursor in the message box). The Project panel has the mode (AI Full
+      / AI Assisted; switching to AI Full starts at the first stage not done) and the stage.
+    - **Found on the way:** *Stop* ended only the launcher of Claude Code / Codex, leaving the program
+      running; the CLI now runs in its own process group and *Stop* ends the whole group.
+    - **Browser check** (test server with a copy of the data folder, Claude Code on the owner's
+      subscription): the dialog, the wizard, *Start* → project shared, the bar "Stage 1 of 5 ·
+      Requirements · working", the checklist; the agent researched the key parts with the web plugin,
+      recorded the requirements (its proposals marked), called `finish_stage` and stopped ("waiting for
+      you", nothing drawn). Asked to put the open decisions as questions, it showed four `ask_user` questions
+      (radio module, sensor, status LED, mounting holes and quantity), each with its recommendation; the
+      answers went back, it updated the requirements and stayed in the stage. *Continue to Schematic* moved
+      the stage and sent "Continue with the Schematic stage." (stopped right after, to save the owner's
+      subscription). AI Assisted and switching the mode (with undo) checked too.
+
+      | New project | Wizard, last step | Stage done, waiting; questions as buttons |
+      |---|---|---|
+      | ![The New project dialog with two choices: AI Full (describe, a short wizard, the AI takes the project through the stages and stops after each) and AI Assisted (an empty schematic, the AI in the Agent tab)](media/a14-new-project.jpg) | ![The AI Full wizard's Start step: the description, the requirements given (USB-C 5 V, ≤ 45 × 35 mm), the limits (LCSC, Mouser, smallest 0402, no BGA, 2 layers, automatic within limits) and the AI that does the work](media/a14-wizard-start.jpg) | ![The Agent tab: the AI Full bar at stage 1 of 5, Requirements, waiting for you, with Continue to Schematic and Change something; below, a question card from the AI about the radio module with three choices and a free answer](media/a14-stage-question.jpg) |
+    - Limits: the stage gates are kept by the agent's instructions and `finish_stage` (Hassassin does not
+      block a later stage's tools while a stage is open); "Choosing parts" is recorded and given to the agent,
+      its full effect comes with A6 and A13.
+    - Tests: `apps/server/test/aiflow.test.ts` (the stage note per mode and state, the wizard's message,
+      `finish_stage` on the current stage only and the last one, `ask_user` checked and offered in both modes
+      and by the MCP server, the card from the API agent and from a CLI call, the checklist rule, a project on
+      the server getting its stage with the message and waiting after `finish_stage`),
+      `cliAgents.test.ts` (Stop ends the launcher's child too).
 - [ ] **A12. Plugin catalog and installing on demand.**
   - A **catalog** of trusted plugins, kept by the owner in a repository they choose (a JSON file): per
     plugin its manifest (A1), version, download address (a GitHub release file or tag), SHA-256 of the
@@ -464,6 +512,7 @@ that completes it, and adds the commit id after the item name.
 | 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Owner (widjis), in chat: "Setuju" |
 | 0.3 | 2026-11-16 | Added A12, a catalog of trusted plugins the agent can install on demand (pinned versions, SHA-256, never anything outside the catalog), and A13, autonomy levels per project (Ask every time / Automatic within limits / Full) with gates that always ask. Reason: the owner asked for an agent that chooses and installs the tools it needs by itself, as desktop coding agents do. | Owner (widjis), in chat: "Ya, tulis revisinya", then "Setuju" |
 | 0.4 | 2026-11-16 | Added A14, a choice at *New project* between AI Full (a wizard, then the agent works stage by stage, stopping for the user's go-ahead after each stage) and AI Assisted (the schematic, the agent on demand); two choices only; done after A2, before A3. Reason: the owner wants the AI-first start of Flux next to working by hand. | Owner (widjis), in chat: choices "stop after each stage", "two choices", "after A2", then "Setuju, push & mulai" |
+| 0.5 | 2026-11-16 | A14 extended: a checklist for every piece of work, shown as in a coding agent, and questions with choices (`ask_user`) shown as cards, with every backend. Reason: the owner wants to follow the work and answer decisions with buttons, as in this chat. | Owner (widjis), in chat: "tambahkan juga, setiap pengerjaan dibuatkan checklist … serta tambahkan interactive question" |
 
 ## Approval
 
@@ -474,6 +523,7 @@ By approving, the owner agrees to the scope, the acceptance criteria and the wor
 | Owner | widjis | 2026-11-16 | 0.2 |
 | Owner | widjis | 2026-11-16 | 0.3 |
 | Owner | widjis | 2026-11-16 | 0.4 |
+| Owner | widjis | 2026-11-16 | 0.5 |
 
 Approval was given by the owner in the working chat ("Setuju" — "Agreed") and recorded here by the
 implementer.
