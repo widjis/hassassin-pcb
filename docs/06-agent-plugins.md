@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
-| Version | 0.2 |
-| Status | **Approved on 2026-11-16 (0.2); work starts after PM3 is closed (P13)** |
+| Version | 0.3 |
+| Status | **Approved on 2026-11-16 (0.2); revision 0.3 (A12 plugin catalog, A13 autonomy levels) waiting for approval** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -63,7 +63,8 @@ so the bar is the same as for DRC: the agent proposes, deterministic checks and 
 ## 3. Scope
 
 Three milestones, in order: AM1 builds the plugin system and safe access to sources, AM2 the
-component selection, AM3 the datasheet reading with verification. Work starts after milestone PM3 of
+component selection, AM3 the datasheet reading with verification. Within AM1 the order is A1, A2, A3, A12,
+A13 (A12 and A13 were added in revision 0.3, numbered after the others so references stay valid). Work starts after milestone PM3 of
 [05-pcb-improvements.md](05-pcb-improvements.md) is closed (P13's third-party Gerber check). Each item has acceptance criteria that
 can be checked; an item is done only when all of them pass.
 
@@ -122,6 +123,46 @@ can be checked; an item is done only when all of them pass.
   - PDF text extraction uses a permissively licensed library (for example pdf.js, Apache-2.0).
   - Acceptance: datasheets of ten parts from five manufacturers fetched, stored and read; the pin table
     page of each is found by `find_in_datasheet`; a second request uses the stored copy.
+
+- [ ] **A12. Plugin catalog and installing on demand.**
+  - A **catalog** of trusted plugins, kept by the owner in a repository they choose (a JSON file): per
+    plugin its manifest (A1), version, download address (a GitHub release file or tag), SHA-256 of the
+    download, license and the oldest Hassassin version it works with. Only permissively licensed plugins are
+    listed. The first-party plugins of this document (web A2, datasheets A3, LCSC and Mouser A4) are
+    published there.
+  - Installing from the catalog: download into `<data>/plugins/<id>/<version>/`, check the SHA-256, add the
+    manifest to `plugins.json`; updating and removing the same way; the Agent tab's *Plugins* section lists
+    what the catalog offers next to what is installed.
+  - The agent knows the catalog's plugins that are not installed (name, what they do, permission, hosts) and
+    asks for one with a `request_plugin` tool (id and reason). What happens then follows the project's
+    autonomy level (A13): installed and switched on for the project at once, or a card for the user. A
+    plugin that needs settings (an API key) always waits for the user to fill them in; the agent never
+    receives or types a secret.
+  - The agent never installs anything outside the catalog: no npm, pip or system packages, no download it
+    picked itself. Every install, update and removal is logged with who or what asked for it.
+  - Acceptance: with no web plugin installed, asking the agent for a datasheet makes it request `web`, which
+    is installed (or offered on a card, per level) and then used, all in the log; a download whose SHA-256
+    does not match is refused; a plugin id not in the catalog cannot be requested; a plugin that needs a key
+    gives a card asking the user and the agent goes on without it meanwhile.
+- [ ] **A13. Autonomy levels.**
+  - A level per project, set in the Agent tab: **Ask every time**, **Automatic within limits** (default) or
+    **Full**. It decides what the agent does without asking:
+
+    | | Ask every time | Automatic within limits | Full |
+    |---|---|---|---|
+    | Install a catalog plugin (A12) | card | `read` plugins at once; `propose` plugins on a card | at once |
+    | Choose parts (A6) | the user picks | within the project's limits | within the project's limits |
+    | Web research (A2) | within the limits | within the limits | within the limits |
+    | Steps and model use per message | as set | as set | as set |
+
+  - Always on a card, at every level: entering a secret, exporting fabrication files while a part is not
+    verified (A10), deleting or replacing more than a set number of parts or nets at once, publishing to the
+    team library, inviting others to the project. Buying, ordering and paying stay out of scope.
+  - The conversation lists what the agent decided on its own (plugins installed, parts chosen, sources
+    used), each with its reason and, for project changes, its undo.
+  - Acceptance: one task (a regulator chosen and placed with its datasheet) run at each level gives cards
+    where the table says and none elsewhere; every gate gives a card even at Full; the list of decisions
+    matches the log.
 
 ### Milestone AM2 — component selection
 
@@ -289,6 +330,7 @@ that completes it, and adds the commit id after the item name.
 |---|---|---|---|
 | 0.1 | 2026-11-16 | First draft | — |
 | 0.2 | 2026-11-16 | Owner's answers: LCSC and Mouser first (A4); A2 becomes agentic web research (the agent searches, follows links and retries on its own, with backend web tools and a `web` plugin), the trust list deciding what may be cited; the agent chooses parts by itself by default within tunable limits (A6); work after PM3. | Owner (widjis), in chat: "Setuju" |
+| 0.3 | 2026-11-16 | Added A12, a catalog of trusted plugins the agent can install on demand (pinned versions, SHA-256, never anything outside the catalog), and A13, autonomy levels per project (Ask every time / Automatic within limits / Full) with gates that always ask. Reason: the owner asked for an agent that chooses and installs the tools it needs by itself, as desktop coding agents do. | Owner (widjis), in chat: "Ya, tulis revisinya" (to write it); approval pending |
 
 ## Approval
 
