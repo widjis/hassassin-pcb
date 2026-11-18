@@ -1,0 +1,10 @@
+{
+  "name": "@hassassin/plugin-datasheets",
+  "version": "0.4.0",
+  "license": "MIT OR Apache-2.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pdfjs-dist": "6.5.438"
+  }
+}

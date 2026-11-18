@@ -308,12 +308,26 @@ export class PluginHost {
   }
 
   /** How to start a plugin: the command (Node for scripts) and its settings as environment. */
-  launch(m: PluginManifest): { command: string; args: string[]; env: Record<string, string> } {
+  /**
+   * A plugin's own storage for one project (A3): `<data>/plugin-data/<plugin>/<project>/`, given to the plugin
+   * as HASSASSIN_PLUGIN_DATA (with HASSASSIN_PROJECT_ID). Never in the repository; kept with the server's
+   * projects.
+   */
+  pluginData(plugin: string, project: string): string {
+    return join(this.dataDir, 'plugin-data', plugin, project.replace(/[^\w-]/g, '_'));
+  }
+
+  launch(m: PluginManifest, project?: string): { command: string; args: string[]; env: Record<string, string> } {
     const base = m.dir ?? dirname(this.file);
     const local = !isAbsolute(m.command) && existsSync(resolve(base, m.command));
     const looksLikePath = m.command.includes('/') || m.command.startsWith('.') || local;
     const cmd = looksLikePath && !isAbsolute(m.command) ? resolve(base, m.command) : m.command;
-    const env = { ...this.values(m.id), HASSASSIN_PLUGIN: m.id, HASSASSIN_TRUST_FILE: this.trustFile };
+    const env = {
+      ...this.values(m.id),
+      HASSASSIN_PLUGIN: m.id,
+      HASSASSIN_TRUST_FILE: this.trustFile,
+      ...(project ? { HASSASSIN_PROJECT_ID: project, HASSASSIN_PLUGIN_DATA: this.pluginData(m.id, project) } : {}),
+    };
     if (/\.(mjs|cjs|js|ts|mts)$/.test(cmd)) return { command: process.execPath, args: [cmd, ...(m.args ?? [])], env };
     return { command: cmd, args: m.args ?? [], env };
   }
@@ -365,7 +379,7 @@ export class PluginHost {
    * The plugins an agent message gets: switched on for the project, allowed in this mode (Ask: `read`
    * only), set up and answering. The others come back in `skipped` with the reason.
    */
-  async active(enabled: unknown, mode: AgentMode): Promise<{ plugins: ActivePlugin[]; skipped: { id: string; reason: string }[] }> {
+  async active(enabled: unknown, mode: AgentMode, project?: string): Promise<{ plugins: ActivePlugin[]; skipped: { id: string; reason: string }[] }> {
     const ids = Array.isArray(enabled) ? enabled.filter((x): x is string => typeof x === 'string') : [];
     const { manifests } = this.manifests();
     const plugins: ActivePlugin[] = [];
@@ -385,7 +399,7 @@ export class PluginHost {
         skipped.push({ id, reason: `is not available (${p.status.error})` });
         continue;
       }
-      plugins.push({ manifest: m, ...this.launch(m), tools: p.tools, ...(p.instructions ? { instructions: p.instructions } : {}) });
+      plugins.push({ manifest: m, ...this.launch(m, project), tools: p.tools, ...(p.instructions ? { instructions: p.instructions } : {}) });
     }
     return { plugins, skipped };
   }

@@ -220,6 +220,19 @@ export async function startServer(opts: ServerOptions) {
       log(`${who} undid ${plan.count} agent change(s) on ${id}`);
       return json(res, 200, { ok: true, undone: plan.count });
     }
+    if (parts[3] === 'datasheets' && parts[4]) {
+      // A datasheet the datasheets plugin keeps for this project (A3): the stored copy, by its SHA-256.
+      const sha = parts[4].toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(sha)) return json(res, 400, { error: 'Not a SHA-256' });
+      const file = join(pluginHost.pluginData('datasheets', id), `${sha}.pdf`);
+      try {
+        const data = await readFile(file);
+        res.writeHead(200, { 'content-type': 'application/pdf', 'content-length': data.length, 'content-disposition': `inline; filename="datasheet-${sha.slice(0, 12)}.pdf"`, 'cache-control': 'private, max-age=86400' });
+        return res.end(data);
+      } catch {
+        return json(res, 404, { error: 'This project keeps no datasheet with that SHA-256.' });
+      }
+    }
     if (parts[3] === 'plugins') {
       // Plugins installed on this server, which this project switched on, and its recent plugin calls.
       const { plugins, problems } = await pluginHost.list(url.searchParams.get('refresh') === '1');
@@ -303,7 +316,7 @@ export async function startServer(opts: ServerOptions) {
     const from = lp.seq;
     try {
       // This project's plugins for this message; those that cannot run are left out with a note.
-      const { plugins: active, skipped } = await pluginHost.active(lp.doc.meta.agentPlugins, mode);
+      const { plugins: active, skipped } = await pluginHost.active(lp.doc.meta.agentPlugins, mode, id);
       for (const s of skipped) send({ type: 'note', text: `Plugin ${s.id} ${s.reason}.` });
       // The plugins, and for an AI Full project its stage and limits (A14).
       // Other agents working on this project at the same time (several may run at once).

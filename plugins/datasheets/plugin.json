@@ -1,0 +1,10 @@
+{
+  "id": "datasheets",
+  "name": "Datasheets",
+  "version": "0.4.0",
+  "publisher": "Hassassin PCB",
+  "description": "Keep the datasheets of the project's parts (downloaded once, stored with the project) and read them: the pages with a phrase, and the text of pages with their tables.",
+  "permission": "read",
+  "hosts": ["the datasheet addresses the agent gives it"],
+  "command": "server.ts"
+}

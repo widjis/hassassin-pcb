@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
 | Version | 0.5 |
-| Status | **Approved on 2026-11-16 (0.5); A1, A2 and A14 done, AM1 continues (A3, A12, A13)** |
+| Status | **Approved on 2026-11-16 (0.5); A1, A2, A14 and A3 done, AM1 continues (A12, A13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -216,7 +216,7 @@ can be checked; an item is done only when all of them pass.
       under the notice; redirect to a PDF; private addresses refused; per-message limits; the search API
       with the key from the settings; Claude Code / Codex flags only while the plugin is on; the API web
       search tool with its limit, shown as `web.search`).
-- [ ] **A3. Datasheet store.**
+- [x] **A3. Datasheet store.**
   - `get_datasheet` (by MPN, or by URL): finds the datasheet URL (distributor data first, then the
     manufacturer's site), downloads it, keeps it in the project's own storage (not in the repository) under
     its content hash with source URL, retrieval date and trust level, and returns its page count.
@@ -228,6 +228,47 @@ can be checked; an item is done only when all of them pass.
   - PDF text extraction uses a permissively licensed library (for example pdf.js, Apache-2.0).
   - Acceptance: datasheets of ten parts from five manufacturers fetched, stored and read; the pin table
     page of each is found by `find_in_datasheet`; a second request uses the stored copy.
+  - *Done (2026-11-18).*
+    - **Bundled plugin `datasheets`** (`plugins/datasheets/`, read-only, a workspace package with
+      `pdfjs-dist` 6.5.438, Apache-2.0): `get_datasheet` (url and mpn: downloaded with the web plugin's
+      checks, kept under its SHA-256 with the address, the final address, the date, the trust level, the
+      page count, the title and the part numbers; asked again by address, part number or the same file, the
+      stored copy, no download), `read_datasheet` (up to 6 pages: lines in reading order, a wide gap inside a
+      line, a table column, as " | "), `find_in_datasheet` (pages with the phrases, ranked: the phrase as a
+      heading, more of the phrases, a table on the page; a table of contents ranked down; with a snippet),
+      `list_datasheets`. The text of every page is extracted once when stored, so reading works offline.
+    - **Plugin storage per project** (A1 host): `<data>/plugin-data/<plugin>/<project>/`, given to every
+      plugin as `HASSASSIN_PLUGIN_DATA` with `HASSASSIN_PROJECT_ID`; not in the repository.
+    - **The part:** `set_part_info` takes `datasheet_sha256` (checked: 64 hex characters) next to
+      `datasheet` (the address), kept as `DatasheetSha256`; the inspector shows *Open the stored copy*,
+      served by `GET /api/agent/:id/datasheets/:sha256` to anyone with a link to the project.
+    - AI Full projects (A14) switch on `datasheets` with `web`.
+    - By part number alone, `get_datasheet` uses a stored copy; finding the address of a new part goes
+      through the web plugin for now (distributor look-up by part number comes with A4).
+    - **Live check** (no agent; the official addresses from A2's check):
+
+      | Part | Maker | Pages | Pin table found on page | Second request |
+      |---|---|---|---|---|
+      | TPS7A02 | Texas Instruments | 48 | 3 (Table 5-1, Pin Functions) | stored |
+      | STM32G031K8 | STMicroelectronics | 126 | 36 (Table 12, pin assignment and description) | stored |
+      | PCA9685 | NXP | 52 | 6 (pin configuration, pin description) | stored |
+      | NCP1117 | onsemi | 20 | 1 (pin configuration) | stored |
+      | ATtiny1616 | Microchip | 598 | 14 (4. Pinout) | stored |
+      | ESP32-C3-MINI-1 | Espressif | 48 | 10 (3.2 Pin Description) | stored |
+      | AP2112K-3.3 | Diodes Inc. | 18 | 2 (Pin Descriptions) | stored |
+      | BME280 | Bosch Sensortec | 60 | 38 (Table 35, pin description) | stored |
+      | SHT40 | Sensirion | 25 | 17 (5.4 Pin Assignment) | stored |
+      | BD9G341AEFJ | ROHM | 30 | 2 (pin configuration) | stored |
+
+      All read in 0–4 s each (598 pages in 3 s). Two MOSFETs (Vishay SI2302CDS, Infineon IRLML6344) were
+      stored and read too; their pins are only a package drawing (G, D, S), with no "pin" heading to find.
+      The first ranking (most phrases) put ATtiny's PORT chapter (page 131) first and AP2112's cover page
+      before its pin table; headings and tables in the ranking fixed both.
+    - Tests: `apps/server/test/datasheets.test.ts` (PDFs made in the test and served locally: a table laid
+      out as cells; get / again by address and part number without a download; the pin table and the typical
+      application found; pages read with their cells; not a PDF, unknown part, page out of range; another
+      project's own storage; reading with the server gone; the stored copy served by the server with the
+      project's link only; `datasheet_sha256` on the part).
 
 - [x] **A14. New project: AI Full or AI Assisted.**
   - *File → New project* (and the start screen) asks how to work, with two choices:

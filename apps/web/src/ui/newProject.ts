@@ -199,7 +199,7 @@ export function openNewProjectDialog(app: App, collab: Collab, loaded: () => voi
       { op: 'setMeta', key: 'agentLimits', value: limits as unknown as Record<string, unknown> },
       { op: 'setMeta', key: 'aiFlow', value: { mode: 'full', stage: 'requirements', waiting: false } },
       // The bundled web plugin for research (A2); left out with a note if a server does not have it.
-      { op: 'setMeta', key: 'agentPlugins', value: ['web'] },
+      { op: 'setMeta', key: 'agentPlugins', value: ['web', 'datasheets'] },
     ]);
     app.fileName = projectNameFrom(description);
     loaded();

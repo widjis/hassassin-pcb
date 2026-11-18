@@ -114,6 +114,14 @@ export function mountInspector(app: App, root: HTMLElement, helpRoot: HTMLElemen
     field('Footprint', 'Footprint', (v) =>
       commit(`Footprint of ${ref}`, () => [...doc.nodes.values()].filter((x) => x.type === 'symbol' && String(x.props.ref ?? x.name) === ref).map((x): Op => ({ op: 'setProp', uid: x.uid, key: 'Footprint', value: v || null }))),
     );
+    // The datasheet the project keeps (datasheets plugin, A3): opened from the server, also offline.
+    const sha = String(n.props.DatasheetSha256 ?? '');
+    const q = new URLSearchParams(location.search);
+    if (/^[0-9a-f]{64}$/i.test(sha) && app.collab && q.get('p') && q.get('t'))
+      form.append(
+        h('label', { class: 'k' }, 'Stored datasheet'),
+        h('a', { href: `/api/agent/${q.get('p')}/datasheets/${sha.toLowerCase()}?token=${encodeURIComponent(q.get('t')!)}`, target: '_blank', rel: 'noopener', title: `SHA-256 ${sha}` }, `Open the stored copy ↗`),
+      );
     const dnp = h('input', { type: 'checkbox', 'aria-label': 'Do not populate' }) as HTMLInputElement;
     dnp.checked = !!n.props.dnp;
     dnp.addEventListener('change', () =>

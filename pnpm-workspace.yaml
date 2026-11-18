@@ -1,5 +1,6 @@
 packages:
   - packages/*
   - apps/*
+  - plugins/*
 onlyBuiltDependencies:
   - "@anthropic-ai/claude-code"

@@ -254,6 +254,16 @@ links to the manufacturer's datasheet, try again with other words, and report th
   by Hassassin (only the Claude API's are limited).
 - It only opens public http(s) addresses: an address that resolves to this machine or a private network is
   refused.
+
+### The bundled datasheets plugin
+
+`datasheets` (`plugins/datasheets/`) keeps the datasheets of a project's parts and reads them:
+`get_datasheet` (an address and the part number: downloaded once and stored with the project under its
+SHA-256, with the address, date and trust level), `find_in_datasheet` (the pages with phrases such as "Pin
+Functions", "Land Pattern", "Typical Application"), `read_datasheet` (the text of up to six pages, table cells
+separated by " | ") and `list_datasheets`. Stored copies are in `plugin-data/datasheets/<project>/` in the
+server's data folder and open from the part's inspector (*Open the stored copy*). Every plugin gets its own
+folder per project in the same way (`HASSASSIN_PLUGIN_DATA`).
 - Everything it returns carries a notice that it is data from the web, not instructions; the agent is told
   the same. Text on a page that addresses an AI agent ("ignore previous instructions", "note to the AI" …)
   is flagged in the result, and the agent tells the user about it.
