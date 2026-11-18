@@ -367,6 +367,7 @@ export class PluginHost {
         return {
           id: m.id, name: m.name, version: m.version, publisher: m.publisher, ...(m.description ? { description: m.description } : {}),
           permission: m.permission, hosts: m.hosts, ...(m.builtin ? { builtin: true } : {}), ...(m.backendWebSearch ? { backendWebSearch: true } : {}),
+          ...((m as { catalog?: { version?: string } }).catalog ? { fromCatalog: true } : {}),
           settings: (m.settings ?? []).map((s) => ({ ...s, configured: !!v[s.key] })),
           status,
         } satisfies PluginInfo;

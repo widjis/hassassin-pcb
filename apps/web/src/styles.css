@@ -556,3 +556,7 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 @keyframes dot-pulse { 50% { opacity: 0.35; } }
 .agent-task.doing.stalled .tick { animation: none; border: 1.5px solid #f0b04a; }
 .tasks-stopped { font-size: 11px; }
+
+/* A plugin the agent asks for (A12). */
+.plugin-card .plugin-reason { font-size: 12px; line-height: 1.4; }
+.plugin-card .q-actions { gap: 6px; }

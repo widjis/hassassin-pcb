@@ -30,6 +30,11 @@ const TASKS_TOOL = {
     required: ['tasks'],
   },
 };
+const REQUEST_PLUGIN_TOOL = {
+  name: 'request_plugin',
+  description: 'Ask for a plugin you need, from the plugins you can ask for (listed in your context): its id and why. The project\'s settings decide whether it is switched on at once (the reply then goes on with its tools) or the user is asked on a card.',
+  inputSchema: { type: 'object', properties: { plugin: { type: 'string' }, reason: { type: 'string' } }, required: ['plugin', 'reason'] },
+};
 const visible = (t: { name: string; mutates: boolean }) => !BOUND || (!HIDDEN_WHEN_BOUND.has(t.name) && (!READONLY || !t.mutates));
 
 const INSTRUCTIONS = `Hassassin PCB: design electronics end to end.
@@ -75,6 +80,20 @@ export async function serveMcp(version: string): Promise<void> {
   const callTool = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
     if (BOUND) {
       if (name === 'update_tasks') return { ok: true };
+      // A plugin the agent needs (A12): the Hassassin server decides (catalog only, the project's settings).
+      if (name === 'request_plugin') {
+        const link = parseLiveLink(BOUND);
+        if (!link) throw new ToolError('request_plugin works on a shared project only.');
+        const u = new URL(BOUND);
+        const r = await fetch(`${u.origin}/api/agent/${link.id}/plugins/request?token=${encodeURIComponent(link.token)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ plugin: String(args.plugin ?? ''), reason: String(args.reason ?? ''), agent: process.env.HASSASSIN_AGENT_NAME ?? '' }),
+        });
+        const d = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!r.ok) throw new ToolError(String(d.error ?? `HTTP ${r.status}`));
+        return d;
+      }
       // Questions with choices for the user (A14): checked here, shown by the Agent tab from the call itself.
       if (name === 'ask_user') return (parseQuestions(args), { shown: true, note: 'The user sees the questions with buttons. End your reply now; their answers come as the next message.' });
       const t = TOOLS.find((x) => x.name === name);
@@ -143,7 +162,7 @@ export async function serveMcp(version: string): Promise<void> {
       case 'tools/list':
         return reply({
           tools: [
-            ...(BOUND ? [TASKS_TOOL, { name: ASK_TOOL.name, description: ASK_TOOL.description, inputSchema: ASK_TOOL.input_schema }] : EXTRA_TOOLS),
+            ...(BOUND ? [TASKS_TOOL, { name: ASK_TOOL.name, description: ASK_TOOL.description, inputSchema: ASK_TOOL.input_schema }, ...(READONLY ? [] : [REQUEST_PLUGIN_TOOL])] : EXTRA_TOOLS),
             ...TOOLS.filter(visible).map((t) => ({
               name: t.name,
               description: t.description,

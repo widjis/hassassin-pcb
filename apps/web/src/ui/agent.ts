@@ -29,6 +29,8 @@ type Item =
   | { kind: 'steps'; steps: Step[] }
   | { kind: 'note'; text: string }
   | { kind: 'error'; text: string }
+  /** The agent asked for a plugin (A12): approve / settings / done / declined. */
+  | { kind: 'plugin'; id: string; plugin: string; name: string; description: string; permission: string; hosts: string[]; reason: string; installed: boolean; state: string; settings?: string[]; error?: string; busy?: boolean }
   /** Questions with choices from the agent (ask_user, A14); `answered` is what the user sent. */
   | { kind: 'question'; id: string; questions: AgentQuestion[]; answered?: string; readonly?: boolean }
   /** The edits one reply made, with a button to undo them together. */
@@ -251,6 +253,46 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     return card;
   };
 
+  // ---------------------------------------------------------------- plugin requests (A12)
+  const renderPluginCard = (it: Extract<Item, { kind: 'plugin' }>): HTMLElement => {
+    const head = h('div', { class: 'q-title' }, h('span', { class: 'q-chip' }, 'Plugin'), h('span', {}, `The agent asks for ${it.name || it.plugin}`));
+    const meta = h('div', { class: 'q-desc' }, `${it.permission}${it.hosts.length ? ` · contacts ${it.hosts.join(', ')}` : ''}${it.installed ? ' · installed, off for this project' : ' · from the plugin catalog'}`);
+    const card = h('div', { class: 'msg question plugin-card' }, head, it.description ? h('div', { class: 'q-desc' }, it.description) : null, meta, it.reason ? h('div', { class: 'plugin-reason' }, `Why: ${it.reason}`) : null);
+    if (it.state === 'approve') {
+      const yes = h('button', { class: 'btn primary', ...(it.busy ? { disabled: true } : {}) }, it.installed ? 'Switch on' : 'Install & switch on');
+      const no = h('button', { class: 'btn' }, 'Not now');
+      const decide = async (decision: 'install' | 'decline') => {
+        if (!collab.session) return;
+        it.busy = true;
+        updateItem(it);
+        const r = await fetch(`/api/agent/${collab.session.id}/plugins/decide?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plugin: it.plugin, request: it.id, chat: viewing ?? chat, decision, user: { name: collab.user.name } }) });
+        it.busy = false;
+        if (!r.ok) it.error = ((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`;
+        else ((it.state = decision === 'install' ? 'done' : 'declined'), (it.error = undefined));
+        updateItem(it);
+        persist();
+        if (pluginsOpen) void loadPlugins();
+      };
+      yes.addEventListener('click', () => void decide('install'));
+      no.addEventListener('click', () => void decide('decline'));
+      card.append(h('div', { class: 'q-actions' }, no, yes));
+    } else if (it.state === 'settings') card.append(h('div', { class: 'err-text plugin-reason' }, `Installed and switched on, but it needs ${(it.settings ?? []).join(', ')}: fill ${it.settings && it.settings.length > 1 ? 'them' : 'it'} in plugin-settings.json on the server. The agent goes on without it meanwhile.`));
+    else card.append(h('div', { class: 'q-head' }, it.state === 'done' ? `✓ ${it.name || it.plugin} is switched on for this project${it.installed ? '' : ' (installed from the catalog)'}` : 'Not now: the plugin stays off.'));
+    if (it.error) card.append(h('div', { class: 'err-text' }, it.error));
+    return card;
+  };
+  /** A plugin_request event: a new card, or the state of one shown already. */
+  const pluginEvent = (list: Item[], e: Record<string, unknown>, push: (it: Item) => void) => {
+    const known = list.find((x): x is Extract<Item, { kind: 'plugin' }> => x.kind === 'plugin' && x.id === e.id);
+    if (known) {
+      known.state = String(e.state ?? known.state);
+      if (Array.isArray(e.settings)) known.settings = e.settings.map(String);
+      updateItem(known);
+      return;
+    }
+    push({ kind: 'plugin', id: String(e.id), plugin: String(e.plugin ?? ''), name: String(e.name ?? e.plugin ?? ''), description: String(e.description ?? ''), permission: String(e.permission ?? ''), hosts: Array.isArray(e.hosts) ? e.hosts.map(String) : [], reason: String(e.reason ?? ''), installed: !!e.installed, state: String(e.state ?? 'approve'), ...(Array.isArray(e.settings) ? { settings: e.settings.map(String) } : {}) });
+  };
+
   // ---------------------------------------------------------------- AI Full stages (A14)
   const drawFlow = () => {
     clear(flowBox);
@@ -302,6 +344,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       return h('div', { class: 'msg edits' }, h('span', {}, `Agent made ${what}`), btn, it.error ? h('div', { class: 'err-text' }, it.error) : null);
     }
     if (it.kind === 'question') return renderQuestion(it);
+    if (it.kind === 'plugin') return renderPluginCard(it);
     if (it.kind === 'note') {
       const d = h('details', { class: 'msg note' }, h('summary', {}, 'Thinking'), h('div', { class: 'note-body' }, it.text));
       return d;
@@ -569,6 +612,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     hosts: string[];
     builtin?: boolean;
     backendWebSearch?: boolean;
+    fromCatalog?: boolean;
     settings: { key: string; label: string; secret?: boolean; required?: boolean; configured: boolean }[];
     status: { ok: true; tools: { name: string; description: string }[] } | { ok: false; error: string };
   }
@@ -581,7 +625,31 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     ok: boolean;
     bytes: number;
   }
-  let plugins: { plugins: PluginInfo[]; problems: { id: string; problems: string[] }[]; log: PluginLog[] } | null = null;
+  interface Offered {
+    id: string;
+    version?: string;
+    license?: string;
+    name: string;
+    description?: string;
+    permission: string;
+    hosts: string[];
+  }
+  interface InstallLog {
+    at: string;
+    action: string;
+    id: string;
+    version: string;
+    by: string;
+    reason?: string;
+  }
+  let plugins: { plugins: PluginInfo[]; problems: { id: string; problems: string[] }[]; log: PluginLog[]; offered?: Offered[]; installs?: InstallLog[]; canInstall?: boolean } | null = null;
+  /** Install or remove a catalog plugin on this server (only from the machine it runs on). */
+  const catalogAction = async (action: 'install' | 'remove', id: string) => {
+    if (!collab.session) return;
+    const r = await fetch(`/api/agent/${collab.session.id}/plugins/${action}?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plugin: id, user: { name: collab.user.name } }) });
+    if (!r.ok) app.say(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`);
+    await loadPlugins(true);
+  };
   /** The server could not list plugins (an older server, or not reachable). */
   let pluginsError = '';
   let pluginsOpen = false;
@@ -646,6 +714,22 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
           missing.some((x) => x.required) ? h('div', { class: 'plugin-meta err-text' }, 'Set it up in plugin-settings.json on the server.') : null,
         ),
       );
+    }
+    // What the catalog offers that is not installed (A12).
+    if (plugins.offered?.length) {
+      pluginBox.append(h('div', { class: 'step-label' }, 'In the plugin catalog'));
+      for (const o of plugins.offered) {
+        const install = plugins.canInstall ? h('button', { class: 'link', onclick: () => void catalogAction('install', o.id) }, 'Install') : null;
+        pluginBox.append(h('div', { class: 'plugin-row' }, h('div', { class: 'plugin-title' }, h('span', { class: 'plugin-name' }, o.name), h('span', { class: `badge ${o.permission}` }, o.permission), install), h('div', { class: 'dim plugin-meta' }, `v${o.version ?? '?'} · ${o.license ?? ''}${o.hosts.length ? ` · contacts ${o.hosts.join(', ')}` : ''}`), o.description ? h('div', { class: 'plugin-desc' }, o.description) : null));
+      }
+      if (!plugins.canInstall) pluginBox.append(h('div', { class: 'dim plugin-note' }, 'Installed by the server\'s owner on its machine, or by the agent when the project allows it.'));
+    }
+    for (const pl of list.filter((x) => x.fromCatalog))
+      if (plugins.canInstall) pluginBox.append(h('button', { class: 'link', onclick: () => confirm(`Remove ${pl.name} from this server?`) && void catalogAction('remove', pl.id) }, `Remove ${pl.name}`));
+    const installs = (plugins.installs ?? []).slice(-5).reverse();
+    if (installs.length) {
+      pluginBox.append(h('div', { class: 'step-label' }, 'Installs'));
+      for (const l of installs) pluginBox.append(h('div', { class: 'plugin-call', title: l.reason ?? '' }, h('span', {}, `${l.action} ${l.id} ${l.version}`), h('span', { class: 'dim' }, ` · ${l.by} · ${new Date(l.at).toLocaleString()}`)));
     }
     for (const pr of plugins.problems) pluginBox.append(h('div', { class: 'err-text plugin-meta' }, `plugins.json, ${pr.id}: ${pr.problems.join('; ')}`));
     const recent = plugins.log.slice(-8).reverse();
@@ -781,6 +865,11 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
             updateItem(agentItem);
           } else if (e.type === 'note') {
             push({ kind: 'note', text: e.text });
+          } else if (e.type === 'plugin_request') {
+            agentItem = null;
+            stepsItem = null;
+            pluginEvent(items, e, push);
+            if (pluginsOpen) void loadPlugins();
           } else if (e.type === 'question') {
             agentItem = null;
             stepsItem = null;
@@ -849,6 +938,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       w.agentItem.text += String(e.text ?? '');
       if (show) updateItem(w.agentItem);
     } else if (t === 'note') push({ kind: 'note', text: String(e.text ?? '') });
+    else if (t === 'plugin_request') pluginEvent(w.items, e, push);
     else if (t === 'question') push({ kind: 'question', id: String(e.id), questions: (e.questions as AgentQuestion[]) ?? [], readonly: true, answered: ((e.questions as AgentQuestion[]) ?? []).map((q) => `- ${q.question}`).join('\n') });
     else if (t === 'tool') {
       w.agentItem = null;

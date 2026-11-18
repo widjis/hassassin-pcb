@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
 | Version | 0.5 |
-| Status | **Approved on 2026-11-16 (0.5); A1, A2, A14 and A3 done, AM1 continues (A12, A13)** |
+| Status | **Approved on 2026-11-16 (0.5); A1, A2, A14, A3 and A12 done, AM1 continues (A13)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -354,7 +354,7 @@ can be checked; an item is done only when all of them pass.
       and by the MCP server, the card from the API agent and from a CLI call, the checklist rule, a project on
       the server getting its stage with the message and waiting after `finish_stage`),
       `cliAgents.test.ts` (Stop ends the launcher's child too).
-- [ ] **A12. Plugin catalog and installing on demand.**
+- [x] **A12. Plugin catalog and installing on demand.**
   - A **catalog** of trusted plugins, kept by the owner in a repository they choose (a JSON file): per
     plugin its manifest (A1), version, download address (a GitHub release file or tag), SHA-256 of the
     download, license and the oldest Hassassin version it works with. Only permissively licensed plugins are
@@ -374,6 +374,41 @@ can be checked; an item is done only when all of them pass.
     is installed (or offered on a card, per level) and then used, all in the log; a download whose SHA-256
     does not match is refused; a plugin id not in the catalog cannot be requested; a plugin that needs a key
     gives a card asking the user and the agent goes on without it meanwhile.
+  - *Done (2026-11-18).* The owner chose this repository for the catalog.
+    - **Catalog** (`plugins/catalog.json`, read by the server from its own copy, so it comes with the app and
+      works offline; `"catalog"` in `plugins.json` may name another file or address,
+      `apps/server/src/catalog.ts`): bundled entries (web, datasheets: nothing to download) and single-file
+      plugins (one `.mjs`, no install step) with version, license (permissive only: MIT, Apache-2.0, BSD,
+      ISC …), oldest Hassassin version, manifest, download address (this repository's GitHub releases) and
+      SHA-256. Entries that break a rule are left out and reported.
+    - **Installing:** only an id the catalog lists; https; the SHA-256 must match; at most 20 MB; into
+      `<data>/plugins/<id>/<version>/plugin.mjs`, its manifest added to `plugins.json` (marked with its
+      catalog version and SHA-256); a newer catalog version is an update (the old folder removed);
+      removing takes the entry and its files away. Every install, update and removal goes to
+      `plugin-log/_installs.jsonl` with who asked and why. By hand from the Agent tab's *Plugins* section
+      (*Install*, *Remove*) on the server's own machine; the section also lists what the catalog offers and
+      the recent installs.
+    - **The agent asks:** its context lists the plugins it can ask for (installed ones the project has off,
+      and catalog plugins not installed: name, what they do, permission, hosts); `request_plugin` (plugin,
+      reason), for the API backend from the server and for Claude Code / Codex from the MCP server (which
+      asks the Hassassin server). The project's setting decides (the "choosing parts" level of the wizard,
+      to be formalised in A13): *Full*, or *Automatic* for read-only plugins: installed if needed and
+      switched on at once (one change of the project, by the agent), and the same reply goes on with the
+      new tools; *Ask every time*, a `propose` plugin under *Automatic*, or a view link: a card in the
+      conversation (*Install & switch on* / *Not now*, editors only). A plugin that needs settings is
+      installed and switched on, and a card asks the user to fill them in on the server; the agent never
+      sees a secret and goes on without it. Anything not in the catalog is refused.
+    - **Live check** (Claude Code, a project with no plugin on, *Automatic*): asked for the official
+      TPS7A02 datasheet, the agent called `request_plugin` for `web` with its reason; it was switched on,
+      the reply went on with `fetch_document` and the web search (limited to ti.com) and gave TI's datasheet
+      address. No catalog plugin to download exists yet (LCSC and Mouser come with A4; publishing their
+      release files waits for the owner's go-ahead); downloads were checked with a local catalog in the
+      tests.
+    - Tests: `apps/server/test/catalog.test.ts` (catalog rules; install, wrong SHA-256, not in the catalog,
+      too old a Hassassin, https only, update, remove, the install log; the repository's catalog; the API
+      agent asking under *Automatic* and going on with the plugin's tool in the same reply; *Ask every time*
+      with the card and the user installing from it (editors only); a plugin that needs a key; a package
+      outside the catalog refused; a view link gets a card).
 - [ ] **A13. Autonomy levels.**
   - A level per project, set in the Agent tab: **Ask every time**, **Automatic within limits** (default) or
     **Full**. It decides what the agent does without asking:

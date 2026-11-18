@@ -255,6 +255,17 @@ links to the manufacturer's datasheet, try again with other words, and report th
 - It only opens public http(s) addresses: an address that resolves to this machine or a private network is
   refused.
 
+### The plugin catalog
+
+`plugins/catalog.json` lists the plugins the owner trusts: the bundled ones and single-file plugins (one
+`.mjs` from this repository's GitHub releases, with its SHA-256 and a permissive license). Only catalog
+plugins are ever installed: by hand in the Agent tab's *Plugins* section (on the server's machine), or when
+the agent asks for one with `request_plugin`. Under *Full*, or *Automatic* for read-only plugins, the plugin
+is installed and switched on at once and the agent goes on with it; otherwise a card in the conversation
+asks the user. A plugin that needs a key waits for the user to fill it in. Installs, updates and removals
+are logged in `plugin-log/_installs.jsonl`. `"catalog"` in `plugins.json` may point at another catalog file
+or address.
+
 ### The bundled datasheets plugin
 
 `datasheets` (`plugins/datasheets/`) keeps the datasheets of a project's parts and reads them:

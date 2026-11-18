@@ -36,6 +36,9 @@ import { openLive, runLive, type LiveSession } from '../../cli/src/live.ts';
 import { CLI_LABEL, CliAgentSession, cliStatus, LoginJob, type CliId } from './cliAgents.ts';
 import { fileURLToPath } from 'node:url';
 import { McpClient, PluginHost, pluginNote, pluginToolName, type ActivePlugin } from './plugins.ts';
+import { Catalog } from './catalog.ts';
+import { limitsOf } from '@hassassin/tools';
+import type { Op } from '@hassassin/core';
 import { aiFlowNote, type ExternalTool } from '@hassassin/tools';
 
 interface Client {
@@ -61,6 +64,8 @@ export interface ServerOptions {
   agentModel?: ModelCall | null;
   /** Folder of the plugins bundled with Hassassin (default `plugins/` of the repository; null for none). */
   builtinPlugins?: string | null;
+  /** Tests: catalog downloads may come over http from this machine. */
+  allowLocalPluginDownloads?: boolean;
 }
 
 type Backend = 'api' | CliId;
@@ -85,6 +90,10 @@ interface Chat {
   lastPrompt?: string;
   /** Running plugin processes of this chat (API backend), started on first use. */
   pluginClients: Map<string, McpClient>;
+  /** While a reply runs: send an event to its stream (and the mirror). */
+  emit?: (e: Record<string, unknown>) => void;
+  /** Plugins switched on during this reply at the agent's request: the reply goes on with them. */
+  pluginsChanged?: string[];
 }
 
 /** Stop a chat's connections: the live project link and its plugin processes. */
@@ -115,7 +124,70 @@ export async function startServer(opts: ServerOptions) {
 
   const agentModel: ModelCall | null = opts.agentModel !== undefined ? opts.agentModel : hasAnthropicCredentials() ? anthropicModel() : null;
   const chats = new Map<string, Chat>();
-  const pluginHost = new PluginHost(opts.dataDir, opts.builtinPlugins !== undefined ? opts.builtinPlugins : fileURLToPath(new URL('../../../plugins', import.meta.url)));
+  const builtinDir = opts.builtinPlugins !== undefined ? opts.builtinPlugins : fileURLToPath(new URL('../../../plugins', import.meta.url));
+  const pluginHost = new PluginHost(opts.dataDir, builtinDir);
+  const catalog = new Catalog({ dataDir: opts.dataDir, builtinDir, ...(opts.allowLocalPluginDownloads ? { allowLocal: true } : {}) });
+
+  /** A change of a project's document made by the server for an agent (switching a plugin on). */
+  const commitFor = async (lp: LiveProject, who: string, label: string, ops: Op[]) => {
+    const user: User = { id: 'agent-plugins', name: who.slice(0, 40), color: '#b48cff', kind: 'person' };
+    const seq = await store.commit(lp, user, label, ops);
+    broadcast(lp, { t: 'tx', seq, clientId: 'server', user, label, ops });
+  };
+  const enabledOf = (lp: LiveProject) => (Array.isArray(lp.doc.meta.agentPlugins) ? (lp.doc.meta.agentPlugins as unknown[]).filter((x): x is string => typeof x === 'string') : []);
+
+  /** Plugins the agent may ask for: catalog plugins not installed, and installed ones this project has off. */
+  const pluginOffers = async (lp: LiveProject) => {
+    const on = new Set(enabledOf(lp));
+    const installed = pluginHost.manifests().manifests;
+    const offers: { id: string; name: string; description: string; permission: string; hosts: string[]; installed: boolean }[] = [];
+    for (const m of installed) if (!on.has(m.id)) offers.push({ id: m.id, name: m.name, description: m.description ?? '', permission: m.permission, hosts: m.hosts, installed: true });
+    for (const e of (await catalog.entries()).entries)
+      if (!e.bundled && e.manifest && !installed.some((m) => m.id === e.id)) offers.push({ id: e.id, name: e.manifest.name, description: e.manifest.description ?? '', permission: e.manifest.permission, hosts: e.manifest.hosts, installed: false });
+    return offers;
+  };
+
+  /** A plugin card in a conversation (A12): sent to the reply's stream while it runs, kept in its transcript. */
+  const pluginCard = (c: Chat | undefined, lp: LiveProject, card: Record<string, unknown>) => {
+    const e = { type: 'plugin_request', ...card };
+    if (c?.emit) return c.emit(e);
+    if (c) {
+      c.events.push(e);
+      broadcast(lp, { t: 'agent', chat: c.id, by: c.by, backend: c.backend, event: e });
+    }
+  };
+
+  /**
+   * The agent asks for a plugin (A12). Only catalog plugins (or installed ones); what happens follows the
+   * project's level (A13 seed: the "choosing parts" setting): Full, or Automatic for read-only plugins,
+   * installs and switches it on at once; otherwise a card asks the user. A plugin that needs settings
+   * always waits for the user to fill them in on the server.
+   */
+  const requestPlugin = async (lp: LiveProject, projectId: string, role: Role, plugin: string, reason: string, c: Chat | undefined) => {
+    const installed = pluginHost.manifests().manifests.find((m) => m.id === plugin);
+    const entry = await catalog.entry(plugin);
+    if (!installed && !entry) throw new Error(`${plugin} is not in the plugin catalog. Only catalog plugins can be added; tell the user what you would need instead.`);
+    if (installed && enabledOf(lp).includes(plugin)) return { plugin, state: 'on', note: 'It is already switched on for this project.' };
+    const m = installed ?? ({ ...entry!.manifest, id: plugin } as NonNullable<typeof installed>);
+    const autonomy = limitsOf(lp.doc).autonomy;
+    const auto = role === 'edit' && (autonomy === 'full' || (autonomy === 'auto' && m.permission === 'read'));
+    const card = { id: `pr-${Math.random().toString(36).slice(2, 10)}`, plugin, name: m.name, description: m.description ?? '', permission: m.permission, hosts: m.hosts, reason, installed: !!installed, by: c?.agentUser ?? 'agent' };
+    if (!auto) {
+      pluginCard(c, lp, { ...card, state: 'approve' });
+      return { plugin, state: 'asked', note: 'The user decides on a card in the Agent tab. Go on without it for now, and tell the user why you asked.' };
+    }
+    if (!installed) await catalog.install(plugin, `${c?.agentUser ?? 'agent'} (${c?.by ?? 'someone'})`, reason);
+    await commitFor(lp, c?.agentUser ?? 'AI agent', `Agent plugin ${plugin} on`, [{ op: 'setMeta', key: 'agentPlugins', value: [...new Set([...enabledOf(lp), plugin])] }]);
+    const missing = (pluginHost.manifests().manifests.find((x) => x.id === plugin)?.settings ?? []).filter((s) => s.required);
+    const probe = await pluginHost.probe(pluginHost.manifests().manifests.find((x) => x.id === plugin)!, true);
+    if (!probe.status.ok && missing.length) {
+      pluginCard(c, lp, { ...card, state: 'settings', settings: missing.map((s) => s.label || s.key) });
+      return { plugin, state: 'needs-settings', note: `Installed and switched on, but it needs ${missing.map((s) => s.label || s.key).join(', ')}, which only the user can fill in on the server. Go on without it.` };
+    }
+    pluginCard(c, lp, { ...card, state: 'done', installedNow: !installed });
+    if (c) c.pluginsChanged = [...(c.pluginsChanged ?? []), plugin];
+    return { plugin, state: 'on', note: 'Switched on for this project. Finish this step; the reply continues with its tools right after.' };
+  };
   let boundPort = opts.port;
   const sweep = setInterval(() => {
     for (const [k, c] of chats) if (!c.abort && Date.now() - c.lastUsed > 20 * 60 * 1000) (closeChat(c), chats.delete(k));
@@ -233,11 +305,59 @@ export async function startServer(opts: ServerOptions) {
         return json(res, 404, { error: 'This project keeps no datasheet with that SHA-256.' });
       }
     }
+    if (parts[3] === 'plugins' && parts[4] === 'request') {
+      // The agent (through the MCP server) asks for a plugin (A12).
+      const agent = String(b.agent ?? '').slice(0, 40);
+      const c = [...chats.values()].find((x) => x.project === id && x.abort && x.agentUser === agent);
+      try {
+        return json(res, 200, await requestPlugin(lp, id, role, String(b.plugin ?? ''), String(b.reason ?? '').slice(0, 300), c));
+      } catch (e) {
+        return json(res, 400, { error: (e as Error).message });
+      }
+    }
+    if (parts[3] === 'plugins' && parts[4] === 'decide') {
+      // The user answers a plugin card: install (if needed) and switch on, or not now.
+      if (role !== 'edit') return json(res, 403, { error: 'Only editors can switch plugins on.' });
+      const plugin = String(b.plugin ?? '');
+      const c = chats.get(String(b.chat ?? ''));
+      const who = String((b.user as { name?: string } | undefined)?.name ?? 'Someone').slice(0, 40);
+      const done = (state: string, extra: Record<string, unknown> = {}) => {
+        if (c) {
+          const e = { type: 'plugin_request', id: String(b.request ?? ''), plugin, state, ...extra };
+          c.events.push(e);
+          broadcast(lp, { t: 'agent', chat: c.id, by: c.by, backend: c.backend, event: e });
+        }
+      };
+      if (b.decision !== 'install') return (done('declined'), json(res, 200, { ok: true }));
+      try {
+        if (!pluginHost.manifests().manifests.some((m) => m.id === plugin)) await catalog.install(plugin, who, 'approved on a card');
+        await commitFor(lp, who, `Agent plugin ${plugin} on`, [{ op: 'setMeta', key: 'agentPlugins', value: [...new Set([...enabledOf(lp), plugin])] }]);
+        done('done');
+        return json(res, 200, { ok: true });
+      } catch (e) {
+        return json(res, 400, { error: (e as Error).message });
+      }
+    }
+    if (parts[3] === 'plugins' && (parts[4] === 'install' || parts[4] === 'remove')) {
+      // Installing or removing a catalog plugin by hand: the server's owner, on this machine.
+      if (!isLocal(req)) return json(res, 403, { error: 'Plugins are installed on the machine the server runs on.' });
+      const who = String((b.user as { name?: string } | undefined)?.name ?? 'Someone').slice(0, 40);
+      try {
+        if (parts[4] === 'install') return json(res, 200, await catalog.install(String(b.plugin ?? ''), who, 'from the Plugins section'));
+        await catalog.remove(String(b.plugin ?? ''), who);
+        return json(res, 200, { ok: true });
+      } catch (e) {
+        return json(res, 400, { error: (e as Error).message });
+      }
+    }
     if (parts[3] === 'plugins') {
-      // Plugins installed on this server, which this project switched on, and its recent plugin calls.
+      // Plugins installed on this server, which this project switched on, its recent plugin calls, and what
+      // the catalog offers that is not installed (A12).
       const { plugins, problems } = await pluginHost.list(url.searchParams.get('refresh') === '1');
       const enabled = Array.isArray(lp.doc.meta.agentPlugins) ? lp.doc.meta.agentPlugins : [];
-      return json(res, 200, { plugins, problems, enabled, log: await pluginHost.readLog(id, 30) });
+      const cat = await catalog.entries();
+      const offered = cat.entries.filter((e) => !e.bundled && e.manifest && !plugins.some((p) => p.id === e.id)).map((e) => ({ id: e.id, version: e.version, license: e.license, ...e.manifest }));
+      return json(res, 200, { plugins, problems: [...problems, ...cat.problems.map((p) => ({ id: 'catalog', problems: [p] }))], enabled, offered, installs: catalog.readInstalls(20), canInstall: isLocal(req), log: await pluginHost.readLog(id, 30) });
     }
     if (parts[3] === 'chats') {
       // Recent agent conversations on this project, newest last.
@@ -307,6 +427,8 @@ export async function startServer(opts: ServerOptions) {
     mirror({ type: 'start', at: Date.now() });
     chat.startedAt = Date.now();
     chat.lastPrompt = prompt;
+    chat.emit = (e) => send(e as unknown as AgentEvent);
+    chat.pluginsChanged = [];
     const abort = new AbortController();
     chat.abort = abort;
     // Closing or reloading the page does not stop the agent: it works on (every open tab follows it through
@@ -315,6 +437,9 @@ export async function startServer(opts: ServerOptions) {
     const turnId = `t${Date.now().toString(36)}`;
     const from = lp.seq;
     try {
+     let turnPrompt = prompt;
+     // A plugin the agent asked for and got (A12) joins the same reply: it goes on with the new tools.
+     for (let round = 0; round < 3; round++) {
       // This project's plugins for this message; those that cannot run are left out with a note.
       const { plugins: active, skipped } = await pluginHost.active(lp.doc.meta.agentPlugins, mode, id);
       for (const s of skipped) send({ type: 'note', text: `Plugin ${s.id} ${s.reason}.` });
@@ -328,19 +453,36 @@ export async function startServer(opts: ServerOptions) {
             'Stay within your own task, do not undo or redo their changes, and avoid editing the same parts or nets they are working on; say so if your task needs them.',
           ].join('\n')
         : '';
-      const note = [pluginNote(active, skipped), aiFlowNote(lp.doc), together].filter(Boolean).join('\n\n');
+      const offers = await pluginOffers(lp);
+      const offerNote = offers.length
+        ? ['Plugins you can ask for with request_plugin (id and why): the project\'s settings decide whether it is switched on at once or the user is asked.', ...offers.map((o) => `- ${o.id}: ${o.name}${o.description ? ` — ${o.description}` : ''} (${o.permission}${o.hosts.length ? `; contacts ${o.hosts.join(', ')}` : ''}${o.installed ? '' : '; installed from the catalog'})`)].join('\n')
+        : '';
+      const note = [pluginNote(active, skipped), offerNote, aiFlowNote(lp.doc), together].filter(Boolean).join('\n\n');
       if (chat.session instanceof CliAgentSession) {
         chat.session.plugins = active;
         chat.session.pluginNote = note;
-        await chat.session.send(prompt, send, abort.signal);
+        await chat.session.send(turnPrompt, send, abort.signal);
       } else {
         // Fresh plugin processes for each message, so their limits count per message.
         for (const c of chat.pluginClients.values()) c.close();
         chat.pluginClients.clear();
         const web = active.find((p) => p.manifest.backendWebSearch);
         const maxUses = web ? Number(web.env.WEB_MAX_SEARCHES) || 10 : 0;
-        await chat.session.send(prompt, send, abort.signal, { tools: externalTools(chat, active), note, ...(web ? { webSearch: { maxUses } } : {}) });
+        const req0 = { name: 'request_plugin', display: 'request_plugin', description: 'Ask for a plugin you need (see the plugins you can ask for): id and the reason. Follow its answer.', input_schema: { type: 'object', properties: { plugin: { type: 'string' }, reason: { type: 'string' } }, required: ['plugin', 'reason'] }, call: async (a: Record<string, unknown>) => {
+          try {
+            return { text: JSON.stringify(await requestPlugin(lp, id, role, String(a.plugin ?? ''), String(a.reason ?? '').slice(0, 300), chat)), isError: false };
+          } catch (e) {
+            return { text: (e as Error).message, isError: true };
+          }
+        } };
+        await chat.session.send(turnPrompt, send, abort.signal, { tools: [...externalTools(chat, active), ...(offers.length && mode === 'agent' ? [req0] : [])], note, ...(web ? { webSearch: { maxUses } } : {}) });
       }
+      const got = chat.pluginsChanged ?? [];
+      if (!got.length || abort.signal.aborted) break;
+      chat.pluginsChanged = [];
+      turnPrompt = `(The plugin${got.length === 1 ? '' : 's'} ${got.join(', ')} ${got.length === 1 ? 'is' : 'are'} now switched on. Continue the task with ${got.length === 1 ? 'it' : 'them'}.)`;
+      send({ type: 'note', text: `Plugin ${got.join(', ')} switched on; the agent goes on with it.` });
+     }
     } catch (e) {
       send({ type: 'error', message: (e as Error).message });
     } finally {
@@ -352,6 +494,7 @@ export async function startServer(opts: ServerOptions) {
       }
       // Every plugin call of this reply is in the log before the reply ends.
       await Promise.allSettled(pluginLogs);
+      chat.emit = undefined;
       chat.abort = null;
       chat.lastUsed = Date.now();
       mirror({ type: 'end' });
