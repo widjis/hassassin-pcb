@@ -160,7 +160,7 @@ describe('stored datasheets on the collaboration server (A3)', () => {
     expect((await fetch(`${base}/api/agent/${id}/datasheets/${SHA}?token=nope`)).status).toBe(403);
     // The bundled plugins: web and datasheets.
     const list = (await (await fetch(`${base}/api/agent/${id}/plugins?token=${tokens.view}`)).json()) as { plugins: { id: string }[] };
-    expect(list.plugins.map((x) => x.id)).toEqual(['datasheets', 'web']);
+    expect(list.plugins.map((x) => x.id)).toEqual(['datasheets', 'mouser', 'web']);
     // set_part_info records the stored copy on the part.
     const p = newProject('t');
     await runTool(p, 'add_part', { kind: 'resistor', x: 0, y: 0 });

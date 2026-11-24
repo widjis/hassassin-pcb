@@ -337,7 +337,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       yes.addEventListener('click', () => void decide('install'));
       no.addEventListener('click', () => void decide('decline'));
       card.append(h('div', { class: 'q-actions' }, no, yes));
-    } else if (it.state === 'settings') card.append(h('div', { class: 'err-text plugin-reason' }, `Installed and switched on, but it needs ${(it.settings ?? []).join(', ')}: fill ${it.settings && it.settings.length > 1 ? 'them' : 'it'} in plugin-settings.json on the server. The agent goes on without it meanwhile.`));
+    } else if (it.state === 'settings') card.append(h('div', { class: 'err-text plugin-reason' }, `Installed and switched on, but it needs ${(it.settings ?? []).join(', ')}: the server's owner fills ${it.settings && it.settings.length > 1 ? 'them' : 'it'} in under Settings in the Plugins section (on the server's machine). The agent goes on without it meanwhile.`));
     else card.append(h('div', { class: 'q-head' }, it.state === 'done' ? `✓ ${it.name || it.plugin} is switched on for this project${it.installed ? '' : ' (installed from the catalog)'}` : 'Not now: the plugin stays off.'));
     if (it.error) card.append(h('div', { class: 'err-text' }, it.error));
     return card;
@@ -743,6 +743,26 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     app.apply(`Agent plugin ${id} ${on ? 'on' : 'off'}`, [{ op: 'setMeta', key: 'agentPlugins', value: next.length ? next : null }]);
     drawPlugins();
   };
+  /** Fill in a plugin's settings (an API key) on the server's own machine; secrets are never shown back. */
+  const settingsForm = (p: PluginInfo): HTMLElement => {
+    const open = p.settings.some((x) => x.required && !x.configured);
+    const box = h('details', { class: 'plugin-settings', ...(open ? { open: true } : {}) }, h('summary', {}, open ? 'Set it up' : 'Settings'));
+    const inputs = p.settings.map((x) => {
+      const inp = h('input', { type: x.secret ? 'password' : 'text', autocomplete: 'off', spellcheck: 'false', placeholder: x.configured ? (x.secret ? 'set ✓ (type to replace)' : 'set ✓') : x.required ? 'required' : 'optional' }) as HTMLInputElement;
+      box.append(h('label', { class: 'plugin-setting' }, h('span', {}, x.label || x.key), inp));
+      return [x, inp] as const;
+    });
+    const save = async () => {
+      if (!collab.session) return;
+      const values = Object.fromEntries(inputs.filter(([, i]) => i.value.trim()).map(([x, i]) => [x.key, i.value.trim()]));
+      if (!Object.keys(values).length) return;
+      const r = await fetch(`/api/agent/${collab.session.id}/plugins/settings?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ plugin: p.id, values }) });
+      if (!r.ok) app.say(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`);
+      await loadPlugins(true);
+    };
+    box.append(h('div', { class: 'dim plugin-meta' }, 'Kept in plugin-settings.json on this server only; never in the project, and never given to the AI.'), h('button', { class: 'btn small', onclick: () => void save() }, 'Save'));
+    return box;
+  };
   const drawPlugins = () => {
     clear(pluginBox);
     const list = plugins?.plugins ?? [];
@@ -775,7 +795,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
           p.description ? h('div', { class: 'plugin-desc' }, p.description) : null,
           h('div', { class: 'plugin-status' }, st, p.status.ok ? h('span', { class: 'dim' }, ` ${p.status.tools.map((t) => t.name).join(', ')}`) : null),
           p.settings.length ? h('div', { class: 'dim plugin-meta' }, `Settings: ${p.settings.map((x) => `${x.label || x.key} ${x.configured ? '✓' : x.required ? '(missing)' : '(not set)'}`).join(' · ')}`) : null,
-          missing.some((x) => x.required) ? h('div', { class: 'plugin-meta err-text' }, 'Set it up in plugin-settings.json on the server.') : null,
+          missing.some((x) => x.required) && !plugins.canInstall ? h('div', { class: 'plugin-meta err-text' }, 'The server\'s owner sets it up on the server\'s machine.') : null,
+          plugins.canInstall && p.settings.length ? settingsForm(p) : null,
         ),
       );
     }

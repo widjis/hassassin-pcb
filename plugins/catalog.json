@@ -2,6 +2,7 @@
   "about": "Plugins the owner trusts (docs/06-agent-plugins.md, A12). Bundled ones come with Hassassin; others are one .mjs file from this repository's GitHub releases, checked by SHA-256. Nothing outside this list is ever installed.",
   "plugins": [
     { "id": "web", "bundled": true },
-    { "id": "datasheets", "bundled": true }
+    { "id": "datasheets", "bundled": true },
+    { "id": "mouser", "bundled": true }
   ]
 }

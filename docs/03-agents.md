@@ -266,6 +266,16 @@ asks the user. A plugin that needs a key waits for the user to fill it in. Insta
 are logged in `plugin-log/_installs.jsonl`. `"catalog"` in `plugins.json` may point at another catalog file
 or address.
 
+### The bundled Mouser plugin
+
+`mouser` (`plugins/mouser/`) searches Mouser's catalogue (`search_parts`) and gets live price breaks, stock,
+lifecycle and links for up to ten part numbers (`get_offers`), with your own Mouser Search API key: apply at
+mouser.com/api-search, then fill it in under *Settings* of the plugin in the Agent tab's *Plugins* section
+(on the server's machine; it is kept in `plugin-settings.json` and never given to the AI). Mouser's terms
+forbid storing its data, so nothing is kept: the agent shows results as Mouser's and stores only the part
+you choose (MPN, manufacturer, Mouser part number, links), and *Live prices (Mouser)* in the Parts panel's
+BOM prices the BOM for that view only. Mouser allows 30 calls a minute and 1,000 a day per key.
+
 ### Autonomy and gates
 
 The Agent tab sets the project's autonomy (*Ask every time*, *Automatic within limits*, *Full*) and how many

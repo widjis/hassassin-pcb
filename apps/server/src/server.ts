@@ -408,6 +408,56 @@ export async function startServer(opts: ServerOptions) {
         return json(res, 400, { error: (e as Error).message });
       }
     }
+    if (parts[3] === 'plugins' && parts[4] === 'settings') {
+      // Filling in a plugin's settings (an API key): the server's owner, on this machine. Secrets are kept in
+      // plugin-settings.json on the server and never sent back.
+      if (!isLocal(req)) return json(res, 403, { error: 'Plugin settings are filled in on the machine the server runs on.' });
+      try {
+        await pluginHost.setValues(String(b.plugin ?? ''), (b.values ?? {}) as Record<string, unknown>);
+        return json(res, 200, { ok: true });
+      } catch (e) {
+        return json(res, 400, { error: (e as Error).message });
+      }
+    }
+    if (parts[3] === 'live-offers') {
+      // Live prices and stock for the BOM from the distributor plugins (A4), for this view only: fetched now,
+      // returned, never stored (Mouser's terms forbid caching its data).
+      const mpns = [...new Set((Array.isArray(b.mpns) ? b.mpns : []).map((x) => String(x).trim()).filter(Boolean))].slice(0, 50);
+      const m = pluginHost.manifests().manifests.find((x) => x.id === 'mouser');
+      if (!m) return json(res, 404, { error: 'The Mouser plugin is not installed on this server.' });
+      const pr = await pluginHost.probe(m);
+      if (!pr.status.ok) return json(res, 400, { error: `Mouser: ${pr.status.error}` });
+      if (!mpns.length) return json(res, 200, { source: 'Mouser Electronics', offers: {}, notFound: [] });
+      const l = pluginHost.launch(m, id);
+      const c = new McpClient(l.command, l.args, { ...l.env, MOUSER_MAX_CALLS: '5' });
+      const offers: Record<string, unknown[]> = {};
+      const notFound: string[] = [];
+      let retrievedAt = '';
+      const who = String((b.user as { name?: string } | undefined)?.name ?? 'Someone').slice(0, 40);
+      try {
+        await c.start();
+        for (let i = 0; i < mpns.length; i += 10) {
+          const chunk = mpns.slice(i, i + 10);
+          const r = await c.callTool('get_offers', { part_numbers: chunk });
+          await pluginHost.log(id, { chat: '', by: `${who} (BOM)`, plugin: 'mouser', tool: 'get_offers', args: { part_numbers: chunk }, ok: !r.isError, bytes: r.text.length });
+          if (r.isError) return json(res, 502, { error: r.text });
+          const j = JSON.parse(r.text) as { retrievedAt: string; results: { partNumber: string; parts: { mpn: string; distributorPartNumber: string | null; stock: number | null; moq: number | null; priceBreaks: { qty: number; price: number; currency: string }[]; productUrl: string | null; retrievedAt: string }[] }[] };
+          retrievedAt = j.retrievedAt;
+          for (const x of j.results) {
+            const list = x.parts
+              .filter((p) => p.priceBreaks.length)
+              .map((p) => ({ supplier: 'Mouser', ...(p.distributorPartNumber ? { sku: p.distributorPartNumber } : {}), ...(p.stock !== null ? { stock: p.stock } : {}), ...(p.moq !== null ? { moq: p.moq } : {}), currency: p.priceBreaks[0]!.currency, breaks: p.priceBreaks.map((q) => ({ qty: q.qty, price: q.price })), ...(p.productUrl ? { url: p.productUrl } : {}), updatedAt: p.retrievedAt, live: true }));
+            if (list.length) offers[x.partNumber.toLowerCase()] = list;
+            else notFound.push(x.partNumber);
+          }
+        }
+      } catch (e) {
+        return json(res, 502, { error: `Mouser: ${(e as Error).message}` });
+      } finally {
+        c.close();
+      }
+      return json(res, 200, { source: 'Mouser Electronics', retrievedAt, offers, notFound });
+    }
     if (parts[3] === 'plugins' && (parts[4] === 'install' || parts[4] === 'remove')) {
       // Installing or removing a catalog plugin by hand: the server's owner, on this machine.
       if (!isLocal(req)) return json(res, 403, { error: 'Plugins are installed on the machine the server runs on.' });

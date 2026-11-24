@@ -569,3 +569,10 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 .msg.decisions { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; }
 .msg.decisions summary { cursor: pointer; font-weight: 600; }
 .msg.decisions ul { margin: 6px 0 4px; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+
+/* A4: live distributor prices in the BOM; plugin settings form */
+.bom-live { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11px; margin: 4px 0 6px; }
+.plugin-settings { margin-top: 4px; font-size: 12px; }
+.plugin-settings summary { cursor: pointer; color: var(--accent, #4a9eff); }
+.plugin-setting { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.plugin-setting input { width: 100%; box-sizing: border-box; }

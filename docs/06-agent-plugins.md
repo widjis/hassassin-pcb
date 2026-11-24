@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
-| Version | 0.5 |
-| Status | **Approved on 2026-11-16 (0.5); AM1 done (A1, A2, A14, A3, A12, A13); AM2 next (A4)** |
+| Version | 0.6 |
+| Status | **Approved on 2026-11-25 (0.6); AM1 done (A1, A2, A14, A3, A12, A13); AM2 in progress (A4)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -463,20 +463,65 @@ can be checked; an item is done only when all of them pass.
 ### Milestone AM2 — component selection
 
 - [ ] **A4. Distributor search plugins.**
-  - Plugins for distributor catalogues that offer an API under terms that allow this use. **First LCSC
-    and Mouser** (owner's choice); others (DigiKey, Farnell, Nexar / Octopart) later. Before each one is
-    built, the implementer checks how API access is granted and its terms, and reports to the owner
+  - Plugins for distributor catalogues that offer an API under terms that allow this use. Before each one
+    is built, the implementer checks how API access is granted and its terms, and reports to the owner
     (working rule 4). No scraping of pages whose terms forbid it.
+  - **Mouser first** (revision 0.6). Its Search API terms (checked 2026-11-25) shape the plugin:
+    - Each user applies for their own key online (the form asks what application it is for); a key may
+      not be shared or used with another application, so it is a setting of the plugin on the user's
+      server, never in the project, the repository or the agent's context.
+    - Mouser data may not be cached, recorded or stored, nor used to build a database: the plugin keeps
+      nothing; prices and stock are fetched when they are needed and shown with their retrieval time, and
+      never written into the project's supplier offers. What the project keeps is the user's own choice:
+      MPN, manufacturer, the Mouser part number and the product and datasheet links.
+    - Every result is attributed to Mouser Electronics, with its links unchanged.
+    - Limits: at most 50 results per call, 30 calls a minute and 1,000 a day; the plugin stays within
+      them and says so when one is reached.
+  - **LCSC is put on hold** (revision 0.6): its API is for business partners (company registration,
+      expected order volume, IP whitelist), keys may not leave the company, and its terms forbid sharing
+      the API's technical details with third parties, which an open-source client in this repository
+      would do. It comes back only with LCSC's written consent, asked for by the owner. Others (DigiKey,
+      Farnell, Nexar / Octopart) are checked the same way later.
   - One common result shape: MPN, manufacturer, description, parameters (as given by the distributor),
     package, lifecycle status, stock, price breaks with currency, datasheet URL, product URL, source and
     retrieval time.
-  - Results are cached per project for a time the owner sets; offers go into the existing supplier offers,
-    so `bom` shows them.
+  - `bom` can show the live prices and stock of the configured distributors next to the offers the user
+    imported (CSV), without storing them.
   - The agent may pick which configured distributor to search and buy from per part (stock, price,
     shipping to the owner's region), within the limits of A6.
-  - Acceptance: with the owner's API keys, a search for "LDO 3.3 V 500 mA SOT-23-5" returns parts with the
-    common shape from LCSC and Mouser; without keys the plugin says what is missing; recorded
-    responses make the tests run without network access.
+  - Acceptance: with the owner's Mouser key, a search for "LDO 3.3 V 500 mA SOT-23-5" returns parts with
+    the common shape; without a key the plugin says what is missing; nothing from Mouser is written to the
+    project or to disk. The tests run without network access on made-up responses in Mouser's format (no
+    recorded Mouser data in the repository, since the terms forbid recording it).
+  - *Built (2026-11-25); the live check waits for the owner's Mouser key.*
+    - **Plugin** `plugins/mouser/` (bundled, in the catalog, permission `read`, contacts api.mouser.com):
+      `search_parts` (keyword, up to 50 parts, in stock / RoHS only) and `get_offers` (up to 10 manufacturer's
+      or Mouser part numbers in one call), both in the common shape with Mouser Electronics as the source,
+      the retrieval time and an attribution note. It keeps nothing: no storage folder, no memory between
+      messages. Its instructions tell the agent to show the data as Mouser's, never to store prices or
+      stock in the project, and to keep only the chosen part (`set_part_info` now takes `mouser`, the Mouser
+      part number). At most 30 calls a minute and `MOUSER_MAX_CALLS` per message (default 20); Mouser's
+      own refusals (wrong key, too many calls) come back as plain messages, never with the key.
+    - **The key** (`MOUSER_API_KEY`, required): without it the plugin is listed as not set up, saying what is
+      missing; the agent asking for it gets the card of A12. The Plugins section now has a *Settings*
+      form for every plugin, on the server's own machine only: values go to `plugin-settings.json`
+      (readable by the server's user only), secrets are never sent back, only settings the manifest
+      declares are accepted.
+    - **Live prices in the BOM:** *Live prices (Mouser)* in the Parts panel fetches price breaks and stock
+      for the BOM's part numbers (up to 50, ten per call) through the server
+      (`POST /api/agent/:id/live-offers`); they are used for this view only (cheapest offer, link to
+      Mouser's page, "live"), labelled "Prices and stock from Mouser Electronics, <time> · not saved", and
+      never written to the project. The calls go to the project's plugin log.
+    - Browser check (a local stand-in for Mouser with made-up parts, since no key was available): the key
+      filled in under *Settings*, the plugin ready with its two tools, the BOM priced live with the
+      attribution and the links.
+    - Tests: `apps/server/test/mouser.test.ts` (prices and the common shape; search and offers against a
+      made-up Mouser in its format, the request Mouser expects, nothing written to disk; without a key it
+      says what is missing; a refused key, too many calls and the per-message budget, never showing the
+      key; on the server: the key filled in and never sent back, settings the plugin does not declare
+      refused, the settings file private, live BOM prices returned and the project file unchanged).
+    - Still to do for the tick: the owner applies for a Mouser Search API key, fills it in, and the live
+      search for "LDO 3.3 V 500 mA SOT-23-5" is checked.
 - [ ] **A5. Candidates from the requirements.**
   - A `find_candidates` tool: for one block or function (regulator, MCU, sensor, connector, protection …)
     it turns the project's spec and the block's needs into parameter filters, searches the configured
@@ -614,7 +659,8 @@ that completes it, and adds the commit id after the item name.
 
 ### Owner's answers to the open questions (2026-11-16)
 
-1. Distributors: LCSC and Mouser first; the agent may choose between them itself (A4).
+1. Distributors: LCSC and Mouser first; the agent may choose between them itself (A4). Revision 0.6:
+   Mouser first, LCSC on hold (terms).
 2. Web search: needed, and the agent should research on its own, finding its own way like an agentic
    assistant (A2).
 3. The agent may choose parts itself, with limits that can be tuned (A6).
@@ -629,6 +675,7 @@ that completes it, and adds the commit id after the item name.
 | 0.3 | 2026-11-16 | Added A12, a catalog of trusted plugins the agent can install on demand (pinned versions, SHA-256, never anything outside the catalog), and A13, autonomy levels per project (Ask every time / Automatic within limits / Full) with gates that always ask. Reason: the owner asked for an agent that chooses and installs the tools it needs by itself, as desktop coding agents do. | Owner (widjis), in chat: "Ya, tulis revisinya", then "Setuju" |
 | 0.4 | 2026-11-16 | Added A14, a choice at *New project* between AI Full (a wizard, then the agent works stage by stage, stopping for the user's go-ahead after each stage) and AI Assisted (the schematic, the agent on demand); two choices only; done after A2, before A3. Reason: the owner wants the AI-first start of Flux next to working by hand. | Owner (widjis), in chat: choices "stop after each stage", "two choices", "after A2", then "Setuju, push & mulai" |
 | 0.5 | 2026-11-16 | A14 extended: a checklist for every piece of work, shown as in a coding agent, and questions with choices (`ask_user`) shown as cards, with every backend. Reason: the owner wants to follow the work and answer decisions with buttons, as in this chat. | Owner (widjis), in chat: "tambahkan juga, setiap pengerjaan dibuatkan checklist … serta tambahkan interactive question" |
+| 0.6 | 2026-11-25 | A4: Mouser first, LCSC on hold. Mouser's Search API terms forbid caching or storing its data, so prices and stock are fetched live and never written to the project (only the user's chosen MPN, manufacturer, Mouser part number and links); tests use made-up responses in Mouser's format. LCSC's API is for business partners and its terms forbid sharing the API's technical details, which an open-source client would do; it waits for LCSC's written consent. Reason: the terms check of working rule 4. | Owner (widjis), in chat: "Setuju, revisi A4" |
 
 ## Approval
 

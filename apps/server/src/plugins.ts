@@ -21,7 +21,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { AgentMode } from '@hassassin/tools';
@@ -300,6 +300,37 @@ export class PluginHost {
     }
   }
 
+  /**
+   * Fill in or clear a plugin's settings (only keys its manifest declares; an empty value clears one).
+   * Written to plugin-settings.json, readable by the server's user only; secrets are never sent back.
+   */
+  async setValues(id: string, values: Record<string, unknown>): Promise<void> {
+    const m = this.manifests().manifests.find((x) => x.id === id);
+    if (!m) throw new Error(`No plugin ${id} is installed.`);
+    const keys = new Set((m.settings ?? []).map((s) => s.key));
+    const bad = Object.keys(values).filter((k) => !keys.has(k));
+    if (bad.length) throw new Error(`${m.name} has no setting ${bad.join(', ')}.`);
+    let all: Record<string, Record<string, string>> = {};
+    if (existsSync(this.settingsFile)) {
+      try {
+        all = JSON.parse(readFileSync(this.settingsFile, 'utf8'));
+      } catch {
+        throw new Error('plugin-settings.json is not valid JSON: fix it by hand first.');
+      }
+    }
+    const cur = { ...(all[id] ?? {}) };
+    for (const [k, v] of Object.entries(values)) {
+      const t = typeof v === 'string' ? v.trim() : '';
+      if (t.length > 500 || /[\r\n]/.test(t)) throw new Error(`${k}: not a valid value.`);
+      if (t) cur[k] = t;
+      else delete cur[k];
+    }
+    all[id] = cur;
+    await writeFile(this.settingsFile, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+    await chmod(this.settingsFile, 0o600).catch(() => {});
+    this.probes.delete(id);
+  }
+
   /** Secret setting values of a plugin, to scrub from logs. */
   secrets(id: string): string[] {
     const m = this.manifests().manifests.find((x) => x.id === id);
@@ -338,7 +369,7 @@ export class PluginHost {
     if (hit && !force && Date.now() - hit.at < 60_000) return hit;
     const missing = (m.settings ?? []).filter((s) => s.required && !this.values(m.id)[s.key]);
     let out: { status: PluginInfo['status']; tools: PluginTool[]; instructions?: string };
-    if (missing.length) out = { status: { ok: false, error: `not set up: ${missing.map((s) => s.label || s.key).join(', ')} missing in plugin-settings.json` }, tools: [] };
+    if (missing.length) out = { status: { ok: false, error: `not set up: ${missing.map((s) => s.label || s.key).join(', ')} missing (the server's owner fills it in under Settings in the Plugins section)` }, tools: [] };
     else {
       const l = this.launch(m);
       const c = new McpClient(l.command, l.args, l.env, 10000);

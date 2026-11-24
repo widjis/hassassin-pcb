@@ -2968,13 +2968,13 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'set_part_info',
-    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet (its address), datasheet_sha256 (the copy kept by the datasheets plugin), lcsc, value, dnp (do not populate), mechanical_pads (pads that need no pin, for the pin ↔ pad check). rename gives the part a new reference (schematic units and board component together).',
+    description: 'Set sourcing properties of a part on both schematic and board: mpn, manufacturer, datasheet (its address), datasheet_sha256 (the copy kept by the datasheets plugin), lcsc, mouser (Mouser part number), value, dnp (do not populate), mechanical_pads (pads that need no pin, for the pin ↔ pad check). rename gives the part a new reference (schematic units and board component together).',
     mutates: true,
-    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, datasheet_sha256: { type: 'string', description: 'SHA-256 of the datasheet stored for this project (get_datasheet)' }, lcsc: { type: 'string' }, value: { type: 'string' }, dnp: { type: 'boolean' }, rename: { type: 'string', description: 'New reference, e.g. R12' }, mechanical_pads: { type: 'string', description: 'Footprint pads that need no symbol pin (mounting tabs, unused exposed pad, no-connect pads), e.g. "MP1, MP2, 25"' } }, required: ['ref'] },
+    input: { type: 'object', properties: { ref: { type: 'string' }, mpn: { type: 'string' }, manufacturer: { type: 'string' }, datasheet: { type: 'string' }, datasheet_sha256: { type: 'string', description: 'SHA-256 of the datasheet stored for this project (get_datasheet)' }, lcsc: { type: 'string' }, mouser: { type: 'string', description: 'Mouser part number' }, value: { type: 'string' }, dnp: { type: 'boolean' }, rename: { type: 'string', description: 'New reference, e.g. R12' }, mechanical_pads: { type: 'string', description: 'Footprint pads that need no symbol pin (mounting tabs, unused exposed pad, no-connect pads), e.g. "MP1, MP2, 25"' } }, required: ['ref'] },
     run: (p, a) => {
       const ref = str(a.ref, 'ref');
       if (typeof a.datasheet_sha256 === 'string' && a.datasheet_sha256.trim() && !/^[0-9a-f]{64}$/i.test(a.datasheet_sha256.trim())) throw new ToolError('datasheet_sha256 must be the 64-character SHA-256 that get_datasheet returned.');
-      const map: Record<string, string> = { mpn: 'MPN', manufacturer: 'Manufacturer', datasheet: 'Datasheet', datasheet_sha256: 'DatasheetSha256', lcsc: 'LCSC', value: 'Value', mechanical_pads: 'MechanicalPads' };
+      const map: Record<string, string> = { mpn: 'MPN', manufacturer: 'Manufacturer', datasheet: 'Datasheet', datasheet_sha256: 'DatasheetSha256', lcsc: 'LCSC', mouser: 'Mouser', value: 'Value', mechanical_pads: 'MechanicalPads' };
       const props: Record<string, string | null> = {};
       for (const [k, key] of Object.entries(map)) if (typeof a[k] === 'string') props[key] = (a[k] as string).trim() || null;
       const ops = setPartPropsOps(p.doc, ref, props);

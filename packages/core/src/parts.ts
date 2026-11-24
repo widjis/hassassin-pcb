@@ -28,6 +28,8 @@ export interface Offer {
   url?: string;
   /** ISO date the numbers were taken. Prices and stock go stale; the UI shows the age. */
   updatedAt?: string;
+  /** Fetched live from a distributor plugin for this view only; never stored in the project (A4). */
+  live?: boolean;
 }
 
 export interface PartUnit {
@@ -314,7 +316,7 @@ export interface BomLine {
   qty: number;
   placeholder: boolean;
   /** Cheapest offer that has enough stock for the build, if any. */
-  best?: { supplier: string; sku?: string; unit: number; total: number; currency: string; stock?: number; updatedAt?: string };
+  best?: { supplier: string; sku?: string; unit: number; total: number; currency: string; stock?: number; updatedAt?: string; url?: string; live?: boolean };
   issues: string[];
 }
 
@@ -336,8 +338,11 @@ export function unitPrice(o: Offer, qty: number): number | null {
   return p;
 }
 
-/** Group components into BOM lines and price them for `boards` boards. */
-export function buildBom(doc: Doc, boards = 1): BomResult {
+/**
+ * Group components into BOM lines and price them for `boards` boards. `live`: offers fetched from a
+ * distributor plugin for this view (by lower-case MPN), used next to the stored ones and never stored.
+ */
+export function buildBom(doc: Doc, boards = 1, live?: Map<string, Offer[]>): BomResult {
   // Component source: PCB components, plus schematic-only symbols (not yet on the board).
   const byRef = new Map<string, Record<string, unknown>>();
   for (const n of doc.nodes.values()) {
@@ -371,7 +376,8 @@ export function buildBom(doc: Doc, boards = 1): BomResult {
     line.refs.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     const need = line.qty * boards;
     const own = line.partId ? (doc.meta[partKey(line.partId)] as PartDef | undefined) : undefined;
-    const offers = own?.offers?.length ? own.offers : line.mpn ? (byMpn.get(line.mpn.toLowerCase())?.offers ?? []) : [];
+    const stored = own?.offers?.length ? own.offers : line.mpn ? (byMpn.get(line.mpn.toLowerCase())?.offers ?? []) : [];
+    const offers = [...stored, ...(line.mpn ? (live?.get(line.mpn.toLowerCase()) ?? []) : [])];
     if (!line.mpn) {
       line.issues.push('no manufacturer part number');
       res.missingMpn++;
@@ -384,7 +390,7 @@ export function buildBom(doc: Doc, boards = 1): BomResult {
       if (unit === null) continue;
       if (o.stock !== undefined && o.stock < need) continue;
       const total = unit * buy;
-      if (!best || total < best.total) best = { supplier: o.supplier, ...(o.sku ? { sku: o.sku } : {}), unit, total, currency: o.currency, ...(o.stock !== undefined ? { stock: o.stock } : {}), ...(o.updatedAt ? { updatedAt: o.updatedAt } : {}) };
+      if (!best || total < best.total) best = { supplier: o.supplier, ...(o.sku ? { sku: o.sku } : {}), unit, total, currency: o.currency, ...(o.stock !== undefined ? { stock: o.stock } : {}), ...(o.updatedAt ? { updatedAt: o.updatedAt } : {}), ...(o.url ? { url: o.url } : {}), ...(o.live ? { live: true } : {}) };
     }
     if (best) {
       line.best = best;

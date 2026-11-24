@@ -1,0 +1,14 @@
+{
+  "id": "mouser",
+  "name": "Mouser",
+  "version": "0.4.0",
+  "publisher": "Hassassin PCB",
+  "description": "Search Mouser's catalogue and get live price breaks, stock, lifecycle and datasheet links by part number, through your own Mouser Search API key. Nothing from Mouser is stored.",
+  "permission": "read",
+  "hosts": ["api.mouser.com"],
+  "command": "server.ts",
+  "settings": [
+    { "key": "MOUSER_API_KEY", "label": "Mouser Search API key (your own, from mouser.com/api-search)", "secret": true, "required": true },
+    { "key": "MOUSER_MAX_CALLS", "label": "Mouser calls per message (default 20; Mouser allows 30 a minute and 1,000 a day)" }
+  ]
+}

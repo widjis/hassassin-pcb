@@ -15,6 +15,7 @@ import {
   storePartOps,
   type FootprintSpec,
   type FpPad,
+  type Offer,
   type Op,
   type PartDef,
   type PartSummary,
@@ -159,6 +160,8 @@ export interface PartsHooks {
   place: (part: PartDef, extra: Op[]) => void;
   /** Edit link of the shared project, for publishing to the team library. */
   shareAuth: () => { project: string; token: string; author: string } | null;
+  /** The shared project this page is connected to (any role), for live distributor prices. */
+  session?: () => { project: string; token: string; user: string } | null;
 }
 
 export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void {
@@ -168,6 +171,26 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
   let selFp: FootprintSpec | null = null;
   let boards = 10;
   let seq = 0;
+  /** Live offers from the distributor plugins (A4): kept in this page only, never written to the project. */
+  let live: { offers: Map<string, Offer[]>; at: string; notFound: string[] } | null = null;
+  let liveBusy = false;
+  const fetchLive = async (mpns: string[]) => {
+    const s = hooks.session?.();
+    if (!s || liveBusy) return;
+    liveBusy = true;
+    renderBom();
+    try {
+      const r = await fetch(`/api/agent/${s.project}/live-offers?token=${encodeURIComponent(s.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mpns, user: { name: s.user } }) });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; offers?: Record<string, Offer[]>; retrievedAt?: string; notFound?: string[] };
+      if (!r.ok) app.say(j.error ?? `HTTP ${r.status}`);
+      else live = { offers: new Map(Object.entries(j.offers ?? {})), at: j.retrievedAt ?? new Date().toISOString(), notFound: j.notFound ?? [] };
+    } catch (e) {
+      app.say(`Live prices: ${(e as Error).message}`);
+    } finally {
+      liveBusy = false;
+      renderBom();
+    }
+  };
 
   const search = async () => {
     const my = ++seq;
@@ -353,7 +376,7 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
     clear(bomEl);
     const doc = app.doc;
     if (!doc) return;
-    const bom = buildBom(doc, boards);
+    const bom = buildBom(doc, boards, live?.offers);
     const boardsIn = h('input', { type: 'number', min: '1', value: String(boards), style: 'width:64px' });
     boardsIn.addEventListener('change', () => ((boards = Math.max(1, Number(boardsIn.value) || 1)), renderBom()));
     const total = Object.entries(bom.total).map(([c, v]) => `${v.toFixed(2)} ${c}`).join(' + ') || '—';
@@ -366,6 +389,17 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
         [bom.missingMpn && `${bom.missingMpn} without MPN`, bom.noOffer && `${bom.noOffer} without price data`, bom.shortStock && `${bom.shortStock} short on stock`].filter(Boolean).join(' · ') || 'Every line has an MPN and a priced offer.',
       ),
     );
+    const mpns = [...new Set(bom.lines.map((l) => l.mpn).filter(Boolean))];
+    if (hooks.session?.())
+      bomEl.append(
+        h(
+          'div',
+          { class: 'bom-live' },
+          h('button', { class: 'btn small', ...(liveBusy || !mpns.length ? { disabled: true } : {}), title: 'Fetch current price breaks and stock from Mouser for the part numbers in this BOM (the Mouser plugin with your own key). Shown here only; never saved in the project.', onclick: () => void fetchLive(mpns.slice(0, 50)) }, liveBusy ? 'Fetching…' : live ? 'Refresh live prices' : 'Live prices (Mouser)'),
+          live ? h('span', { class: 'dim' }, `Prices and stock from Mouser Electronics, ${new Date(live.at).toLocaleString()} · not saved${live.notFound.length ? ` · not found: ${live.notFound.join(', ')}` : ''}`) : null,
+          live ? h('button', { class: 'link', onclick: () => ((live = null), renderBom()) }, 'Hide') : null,
+        ),
+      );
     const fpList = h('datalist', { id: 'fpNames' });
     bomEl.append(fpList);
     for (const line of bom.lines) {
@@ -388,7 +422,12 @@ export function mountParts(app: App, root: HTMLElement, hooks: PartsHooks): void
           h('div', { class: 'bom-head' }, h('strong', { title: line.refs.join(', ') }, line.refs.length > 3 ? `${line.refs.slice(0, 3).join(', ')} +${line.refs.length - 3}` : line.refs.join(', ')), h('span', {}, line.value), h('span', { class: 'dim' }, `×${line.qty}`)),
           h('div', { class: 'bom-fields' }, fpIn, mpnIn),
           best
-            ? h('div', { class: 'dim', style: 'font-size:11px' }, `${best.supplier}${best.sku ? ` ${best.sku}` : ''}: ${best.unit} ${best.currency}/pc · ${best.total.toFixed(2)} ${best.currency}${best.stock !== undefined ? ` · stock ${best.stock}` : ''}${best.updatedAt ? ` · as of ${best.updatedAt}` : ''}`)
+            ? h(
+                'div',
+                { class: 'dim', style: 'font-size:11px' },
+                best.url ? h('a', { href: best.url, target: '_blank', rel: 'noopener noreferrer' }, `${best.supplier}${best.sku ? ` ${best.sku}` : ''}`) : `${best.supplier}${best.sku ? ` ${best.sku}` : ''}`,
+                `: ${best.unit} ${best.currency}/pc · ${best.total.toFixed(2)} ${best.currency}${best.stock !== undefined ? ` · stock ${best.stock}` : ''}${best.live ? ' · live' : best.updatedAt ? ` · as of ${best.updatedAt}` : ''}`,
+              )
             : null,
           line.issues.length ? h('div', { class: 'err-text', style: 'font-size:11px' }, line.issues.join(' · ')) : null,
         ),

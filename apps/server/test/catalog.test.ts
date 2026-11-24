@@ -81,7 +81,7 @@ describe('the plugin catalog (A12)', () => {
 
   it('the repository\'s catalog lists the bundled plugins', async () => {
     const c = new Catalog({ dataDir: mkdtempSync(join(tmpdir(), 'hcat0-')), builtinDir: join(import.meta.dirname, '..', '..', '..', 'plugins') });
-    expect((await c.entries()).entries.map((e) => e.id)).toEqual(['web', 'datasheets']);
+    expect((await c.entries()).entries.map((e) => e.id)).toEqual(['web', 'datasheets', 'mouser']);
   });
 });
 

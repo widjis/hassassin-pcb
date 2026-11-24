@@ -579,6 +579,7 @@ mountParts(app, $('partsPanel'), {
     sch.placePart(part, extra);
   },
   shareAuth: () => (app.collab && collab.session && app.collab.role === 'edit' ? { project: collab.session.id, token: collab.session.token, author: collab.user.name } : null),
+  session: () => (app.collab && collab.session ? { project: collab.session.id, token: collab.session.token, user: collab.user.name } : null),
 });
 app.on('comments', () => {
   const open = app.comments().filter((c) => !c.props.resolved).length;
