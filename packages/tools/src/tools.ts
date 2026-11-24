@@ -192,6 +192,7 @@ import {
 import { buildFab, fabZip, zip } from '@hassassin/fab';
 import { computeGates, SPEC_FIELDS, type Spec } from './gates.ts';
 import { aiFlowOf, nextStage, STAGE_TITLES, type AiFlow } from './aiFlow.ts';
+import { checkGate, GateError } from './agentGate.ts';
 import type { Project } from './project.ts';
 import { Library } from './library.ts';
 import { parseKicadFootprint, parseKicadSymbolLib } from '@hassassin/kicad-import';
@@ -264,6 +265,8 @@ const vec = (v: unknown): Vec2 | undefined => (v && typeof v === 'object' && 'x'
 
 function apply(p: Project, label: string, ops: Op[]): void {
   if (!ops.length) return;
+  // An agent's change past a gate (A13) waits for the user's OK.
+  checkGate(p, label, ops);
   // Schematic edits also add / remove junction dots where wires meet.
   p.history.apply(label, withJunctionsOps(p.doc, p.engine, ops));
 }
@@ -3111,7 +3114,8 @@ export async function runTool(p: Project, name: string, args: Record<string, unk
   try {
     return await t.run(p, args, ctx);
   } catch (e) {
-    if (e instanceof ToolError) throw e;
+    // A gate (A13) reaches the caller as it is: it asks the user, then runs the tool again.
+    if (e instanceof ToolError || e instanceof GateError) throw e;
     throw new ToolError(`${name} failed: ${(e as Error).message}`);
   }
 }

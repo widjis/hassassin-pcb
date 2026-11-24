@@ -266,6 +266,16 @@ asks the user. A plugin that needs a key waits for the user to fill it in. Insta
 are logged in `plugin-log/_installs.jsonl`. `"catalog"` in `plugins.json` may point at another catalog file
 or address.
 
+### Autonomy and gates
+
+The Agent tab sets the project's autonomy (*Ask every time*, *Automatic within limits*, *Full*) and how many
+parts or nets the agent may remove in one change (default 5). The level decides whether plugins the agent
+asks for are switched on at once or offered on a card, and whether it may choose parts itself. At every
+level a change by the agent that removes more than the limit is held and a card asks the user (*Allow* lets
+one such change through, within 15 minutes). Fabrication export, publishing, invites and secrets are never
+offered to the agent. At the end of each reply the conversation lists what the agent decided on its own
+(plugins, parts, sources), also kept in `agent-log/<project>.jsonl`.
+
 ### The bundled datasheets plugin
 
 `datasheets` (`plugins/datasheets/`) keeps the datasheets of a project's parts and reads them:

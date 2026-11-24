@@ -54,11 +54,29 @@ export interface AgentLimits {
   /** Packages the agent must not use (e.g. BGA, QFN). */
   avoid?: string[];
   autonomy: Autonomy;
+  /** Removing more parts or nets than this at once always needs the user's OK (A13 gate; default 5). */
+  bulkLimit?: number;
 }
 
 export const DEFAULT_LIMITS: AgentLimits = { distributors: ['LCSC', 'Mouser'], smallestPackage: '0402', layers: 2, avoid: ['BGA'], autonomy: 'auto' };
 
 export const AUTONOMY_LABEL: Record<Autonomy, string> = { ask: 'Ask every time', auto: 'Automatic within limits', full: 'Full' };
+
+/**
+ * What the project's autonomy level (A13) lets the agent do without asking, told with every message (all
+ * projects, AI Full or not).
+ */
+export function autonomyNote(doc: Doc | null | undefined): string {
+  const l = limitsOf(doc);
+  const bulk = l.bulkLimit ?? 5;
+  const lines = [`Autonomy level of this project: ${AUTONOMY_LABEL[l.autonomy]}.`];
+  if (l.autonomy === 'ask') lines.push('- Choosing parts: propose candidates and let the user pick each part (ask_user). Plugins: ask for them with request_plugin; the user decides on a card.');
+  else if (l.autonomy === 'auto') lines.push('- Choosing parts: choose within the project\'s limits and list what you chose and why. Plugins: read-only ones you ask for are switched on at once; others need the user on a card.');
+  else lines.push('- Choosing parts: choose within the project\'s limits and list what you chose and why. Plugins you ask for are switched on at once.');
+  lines.push(`- Always ask the user first, whatever the level: removing or replacing more than ${bulk} parts or nets at once (the change is held for their OK on a card). Fabrication files, publishing to the team library, inviting people and secrets are not yours to handle.`);
+  lines.push('- At the end of a reply, say what you decided on your own (plugins, parts, sources) and why; the user sees it listed.');
+  return lines.join('\n');
+}
 
 export function aiFlowOf(doc: Doc | null | undefined): AiFlow | null {
   const v = doc?.meta.aiFlow as Partial<AiFlow> | undefined;

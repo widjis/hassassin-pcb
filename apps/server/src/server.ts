@@ -20,7 +20,7 @@
  * WebSocket: /ws  (messages in @hassassin/sync/protocol)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fromFile, toFile, type DocFile } from '@hassassin/core';
 import { opsAllowed, type ClientMsg, type Presence, type Role, type ServerMsg, type User } from '@hassassin/sync';
@@ -37,7 +37,7 @@ import { CLI_LABEL, CliAgentSession, cliStatus, LoginJob, type CliId } from './c
 import { fileURLToPath } from 'node:url';
 import { McpClient, PluginHost, pluginNote, pluginToolName, type ActivePlugin } from './plugins.ts';
 import { Catalog } from './catalog.ts';
-import { limitsOf } from '@hassassin/tools';
+import { autonomyNote, GateError, limitsOf, type GateInfo } from '@hassassin/tools';
 import type { Op } from '@hassassin/core';
 import { aiFlowNote, type ExternalTool } from '@hassassin/tools';
 
@@ -94,6 +94,11 @@ interface Chat {
   emit?: (e: Record<string, unknown>) => void;
   /** Plugins switched on during this reply at the agent's request: the reply goes on with them. */
   pluginsChanged?: string[];
+  /** Gates (A13): cards waiting for the user, and OKs given (each for one change, for a while). */
+  pendingGates?: Map<string, GateInfo>;
+  gateOks?: { kind: GateInfo['kind']; max: number; until: number }[];
+  /** What the agent decided on its own in the reply now running (A13). */
+  decisions?: { kind: 'plugin' | 'part' | 'source'; what: string; reason?: string }[];
 }
 
 /** Stop a chat's connections: the live project link and its plugin processes. */
@@ -133,6 +138,19 @@ export async function startServer(opts: ServerOptions) {
     const user: User = { id: 'agent-plugins', name: who.slice(0, 40), color: '#b48cff', kind: 'person' };
     const seq = await store.commit(lp, user, label, ops);
     broadcast(lp, { t: 'tx', seq, clientId: 'server', user, label, ops });
+  };
+  /** The decisions agents made on their own per project (A13): `<data>/agent-log/<project>.jsonl`. */
+  const decisionFile = (project: string) => join(opts.dataDir, 'agent-log', `${project.replace(/[^\w-]/g, '_')}.jsonl`);
+  const logDecisions = async (project: string, entry: Record<string, unknown>) => {
+    await mkdir(join(opts.dataDir, 'agent-log'), { recursive: true });
+    await appendFile(decisionFile(project), `${JSON.stringify(entry)}\n`);
+  };
+  const readDecisions = async (project: string, last: number) => {
+    try {
+      return (await readFile(decisionFile(project), 'utf8')).split('\n').filter(Boolean).slice(-Math.max(1, Math.min(500, last || 50))).map((l) => JSON.parse(l) as Record<string, unknown>);
+    } catch {
+      return [];
+    }
   };
   const enabledOf = (lp: LiveProject) => (Array.isArray(lp.doc.meta.agentPlugins) ? (lp.doc.meta.agentPlugins as unknown[]).filter((x): x is string => typeof x === 'string') : []);
 
@@ -185,6 +203,7 @@ export async function startServer(opts: ServerOptions) {
       return { plugin, state: 'needs-settings', note: `Installed and switched on, but it needs ${missing.map((s) => s.label || s.key).join(', ')}, which only the user can fill in on the server. Go on without it.` };
     }
     pluginCard(c, lp, { ...card, state: 'done', installedNow: !installed });
+    c?.decisions?.push({ kind: 'plugin', what: `switched on ${m.name || plugin}${installed ? '' : ' (installed from the catalog)'}`, ...(reason ? { reason } : {}) });
     if (c) c.pluginsChanged = [...(c.pluginsChanged ?? []), plugin];
     return { plugin, state: 'on', note: 'Switched on for this project. Finish this step; the reply continues with its tools right after.' };
   };
@@ -212,6 +231,30 @@ export async function startServer(opts: ServerOptions) {
    * POST /api/agent/:id/stop?token= {chat}
    * The agent joins the shared project as a collaborator, so its edits reach everyone live.
    */
+  /**
+   * An agent's change held by a gate (A13): an OK the user gave for this conversation lets it through (once);
+   * otherwise a card asks the user.
+   */
+  const resolveGate = (c: Chat | undefined, lp: LiveProject, gate: GateInfo): { allowed: boolean } => {
+    const now = Date.now();
+    if (c) {
+      c.gateOks = (c.gateOks ?? []).filter((o) => o.until > now);
+      const ok = c.gateOks.find((o) => o.kind === gate.kind && gate.count <= o.max);
+      if (ok) {
+        c.gateOks.splice(c.gateOks.indexOf(ok), 1);
+        return { allowed: true };
+      }
+    }
+    const id = `gate-${Math.random().toString(36).slice(2, 10)}`;
+    if (c) (c.pendingGates ??= new Map()).set(id, gate);
+    const e = { type: 'gate', id, ...gate, state: 'ask' };
+    if (c?.emit) c.emit(e);
+    else if (c) (c.events.push(e), broadcast(lp, { t: 'agent', chat: c.id, by: c.by, backend: c.backend, event: e }));
+    return { allowed: false };
+  };
+  /** A project an agent works on carries the gates of its project's limits. */
+  const guardOf = (lp: LiveProject) => ({ bulkLimit: limitsOf(lp.doc).bulkLimit ?? 5 });
+
   /** Plugin tools for the API backend: each call goes to the chat's plugin process, started (again) when needed. */
   const externalTools = (chat: Chat, active: ActivePlugin[]): ExternalTool[] =>
     active.flatMap((p) =>
@@ -305,6 +348,33 @@ export async function startServer(opts: ServerOptions) {
         return json(res, 404, { error: 'This project keeps no datasheet with that SHA-256.' });
       }
     }
+    if (parts[3] === 'gates' && !parts[4]) {
+      // The MCP server (Claude Code, Codex) reports a change held by a gate.
+      const agent = String(b.agent ?? '').slice(0, 40);
+      const c = [...chats.values()].find((x) => x.project === id && x.abort && x.agentUser === agent);
+      const g = b.gate as GateInfo | undefined;
+      if (!g || g.kind !== 'bulk-remove' || typeof g.count !== 'number') return json(res, 400, { error: 'gate missing' });
+      return json(res, 200, resolveGate(c, lp, { kind: g.kind, count: g.count, parts: (g.parts ?? []).map(String), nets: (g.nets ?? []).map(String), label: String(g.label ?? ''), summary: String(g.summary ?? '') }));
+    }
+    if (parts[3] === 'gates' && parts[4] === 'decide') {
+      // The user answers a gate card: allow that change once (for the next quarter of an hour), or not.
+      if (role !== 'edit') return json(res, 403, { error: 'Only editors can allow it.' });
+      const c = chats.get(String(b.chat ?? ''));
+      const gid = String(b.id ?? '');
+      const g = c?.pendingGates?.get(gid);
+      if (!c || !g) return json(res, 410, { error: 'This request is no longer known (the server restarted or it was answered). Ask the agent again.' });
+      c.pendingGates!.delete(gid);
+      const allow = b.decision === 'allow';
+      if (allow) (c.gateOks ??= []).push({ kind: g.kind, max: g.count, until: Date.now() + 15 * 60 * 1000 });
+      const e = { type: 'gate', id: gid, state: allow ? 'allowed' : 'declined', by: String((b.user as { name?: string } | undefined)?.name ?? '').slice(0, 40) };
+      c.events.push(e);
+      broadcast(lp, { t: 'agent', chat: c.id, by: c.by, backend: c.backend, event: e });
+      return json(res, 200, { ok: true });
+    }
+    if (parts[3] === 'decisions') {
+      // What agents decided on their own on this project (A13), newest last.
+      return json(res, 200, await readDecisions(id, Number(url.searchParams.get('last') ?? 50)));
+    }
     if (parts[3] === 'plugins' && parts[4] === 'request') {
       // The agent (through the MCP server) asks for a plugin (A12).
       const agent = String(b.agent ?? '').slice(0, 40);
@@ -380,7 +450,20 @@ export async function startServer(opts: ServerOptions) {
         const live = await openLive({ ws: `ws://127.0.0.1:${boundPort}/ws`, id, token: tok }, { id: `agent-${chatId}`, name: agentName, color: '#b48cff' });
         const session = new AgentSession({
           model: agentModel!,
-          runTool: (name, args) => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false),
+          runTool: async (name, args) => {
+            const run = () => runLive(live, () => runTool(live.project, name, args, { library }), TOOLS.find((t) => t.name === name)?.mutates ?? false);
+            // The project's gates (A13) hold changes that need the user's OK.
+            live.project.guard = guardOf(lp);
+            try {
+              return await run();
+            } catch (e) {
+              if (!(e instanceof GateError) || !resolveGate(chats.get(chatId), lp, e.gate).allowed) throw e;
+              live.project.guard.allow = { kind: e.gate.kind, max: e.gate.count };
+              return await run();
+            } finally {
+              live.project.guard = undefined;
+            }
+          },
         });
         chat = { id: chatId, project: id, backend, session, live, abort: null, lastUsed: Date.now(), by: who || 'Someone', events: [], agentUser: agentName.slice(0, 40), turns: new Map(), pluginClients: new Map() };
       } else {
@@ -411,6 +494,18 @@ export async function startServer(opts: ServerOptions) {
     const send = (e: AgentEvent | { type: 'chat'; chat: string; mode: AgentMode; backend: Backend } | { type: 'edits'; turn: string; count: number; labels: string[] }) => {
       if (!res.destroyed && !res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`);
       if (e.type !== 'chat') mirror(e as Record<string, unknown>);
+      // What the agent decides on its own (A13): parts it sets, sources it uses.
+      if (e.type === 'tool' && (e.name === 'set_part_info' || e.name === 'place_part')) {
+        const i = (e.input ?? {}) as Record<string, unknown>;
+        if (e.name === 'set_part_info' && typeof i.mpn === 'string' && i.mpn) c0.decisions?.push({ kind: 'part', what: `${String(i.ref ?? '')}: ${i.mpn}${typeof i.manufacturer === 'string' && i.manufacturer ? ` (${i.manufacturer})` : ''}` });
+        if (e.name === 'place_part' && typeof i.id === 'string') c0.decisions?.push({ kind: 'part', what: `placed ${i.id}${typeof i.ref === 'string' ? ` as ${i.ref}` : ''}` });
+      }
+      if (e.type === 'tool_result' && e.ok && (e.name === 'web.fetch_document' || e.name === 'datasheets.get_datasheet')) {
+        const d = e.detail ?? '';
+        const src = /"finalUrl":\s*"([^"]+)"/.exec(d)?.[1] ?? /"url":\s*"([^"]+)"/.exec(d)?.[1];
+        const trust = /"trust":\s*"(\w+)"/.exec(d)?.[1];
+        if (src && !c0.decisions?.some((x) => x.kind === 'source' && x.what.startsWith(src))) c0.decisions?.push({ kind: 'source', what: `${src}${trust ? ` (${trust})` : ''}` });
+      }
       if (e.type === 'tool' && e.name.includes('.')) {
         const [plugin, ...rest] = e.name.split('.');
         pluginCalls.set(e.id, { plugin: plugin!, tool: rest.join('.'), input: e.input });
@@ -429,6 +524,7 @@ export async function startServer(opts: ServerOptions) {
     chat.lastPrompt = prompt;
     chat.emit = (e) => send(e as unknown as AgentEvent);
     chat.pluginsChanged = [];
+    chat.decisions = [];
     const abort = new AbortController();
     chat.abort = abort;
     // Closing or reloading the page does not stop the agent: it works on (every open tab follows it through
@@ -457,7 +553,7 @@ export async function startServer(opts: ServerOptions) {
       const offerNote = offers.length
         ? ['Plugins you can ask for with request_plugin (id and why): the project\'s settings decide whether it is switched on at once or the user is asked.', ...offers.map((o) => `- ${o.id}: ${o.name}${o.description ? ` — ${o.description}` : ''} (${o.permission}${o.hosts.length ? `; contacts ${o.hosts.join(', ')}` : ''}${o.installed ? '' : '; installed from the catalog'})`)].join('\n')
         : '';
-      const note = [pluginNote(active, skipped), offerNote, aiFlowNote(lp.doc), together].filter(Boolean).join('\n\n');
+      const note = [autonomyNote(lp.doc), pluginNote(active, skipped), offerNote, aiFlowNote(lp.doc), together].filter(Boolean).join('\n\n');
       if (chat.session instanceof CliAgentSession) {
         chat.session.plugins = active;
         chat.session.pluginNote = note;
@@ -486,6 +582,13 @@ export async function startServer(opts: ServerOptions) {
     } catch (e) {
       send({ type: 'error', message: (e as Error).message });
     } finally {
+      // What the agent decided on its own in this reply (A13): listed in the conversation and logged.
+      const decided = chat.decisions ?? [];
+      if (decided.length) {
+        send({ type: 'decisions', items: decided } as unknown as AgentEvent);
+        await logDecisions(id, { at: new Date().toISOString(), chat: chatId, by: chat.by, agent: chat.agentUser, items: decided }).catch((e) => log(`decision log: ${(e as Error).message}`));
+      }
+      chat.decisions = [];
       // The edits of this reply, so the person can undo them together.
       const made = agentEdits(lp, from, lp.seq, chat.agentUser);
       if (made.length) {

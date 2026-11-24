@@ -560,3 +560,12 @@ details.step pre { margin: 2px 9px 6px 28px; max-height: 220px; overflow: auto; 
 /* A plugin the agent asks for (A12). */
 .plugin-card .plugin-reason { font-size: 12px; line-height: 1.4; }
 .plugin-card .q-actions { gap: 6px; }
+
+/* Autonomy level, gates and decisions (A13). */
+.agent-autonomy { margin: 6px 10px 0; display: flex; gap: 6px; align-items: center; font-size: 12px; flex-wrap: wrap; }
+.agent-autonomy:empty { display: none; }
+.agent-autonomy select { font-size: 12px; }
+.gate-card { border-color: #f0b04a; }
+.msg.decisions { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12px; }
+.msg.decisions summary { cursor: pointer; font-weight: 600; }
+.msg.decisions ul { margin: 6px 0 4px; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 3px; }

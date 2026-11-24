@@ -2,6 +2,7 @@
  * A loaded project with everything tools need: document, style engine, history, layers.
  * Shared by the CLI, the MCP server and (later) the in-app agent.
  */
+import type { AgentGuard } from './agentGate.ts';
 import {
   applyOps,
   createDoc,
@@ -32,6 +33,8 @@ export interface Project {
   copper: string[];
   /** Set when a tool changed the document since it was loaded/saved. */
   dirty: boolean;
+  /** While an agent works on it: the gates its changes are checked against (A13). */
+  guard?: AgentGuard;
 }
 
 /** Wrap a document as a tool-ready project (style engine + history). */

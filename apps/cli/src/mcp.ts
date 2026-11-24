@@ -6,7 +6,7 @@
  */
 import { createInterface } from 'node:readline';
 import { resolve } from 'node:path';
-import { ASK_TOOL, newProject, parseQuestions, saveProject, ToolError, TOOLS, runTool, type Project } from '@hassassin/tools';
+import { ASK_TOOL, GateError, limitsOf, newProject, parseQuestions, saveProject, ToolError, TOOLS, runTool, type Project } from '@hassassin/tools';
 import { isHpcb, loadGeometry, NEEDS_GEOMETRY, mtime, readProject, toolContext, writeAny, writeProject } from './io.ts';
 import { openLive, parseLiveLink, runLive, type LiveSession } from './live.ts';
 
@@ -127,7 +127,27 @@ export async function serveMcp(version: string): Promise<void> {
       delete rest.project;
       if (NEEDS_GEOMETRY.has(name)) await loadGeometry();
       const session = s;
-      return runLive(session, () => runTool(session.project, name, rest, toolContext()), TOOLS.find((t) => t.name === name)?.mutates ?? false);
+      const run = () => runLive(session, () => runTool(session.project, name, rest, toolContext()), TOOLS.find((t) => t.name === name)?.mutates ?? false);
+      if (!BOUND) return run();
+      // Bound to a project for the in-app agent: its changes go through the project's gates (A13).
+      session.project.guard = { bulkLimit: limitsOf(session.project.doc).bulkLimit ?? 5 };
+      try {
+        return await run();
+      } catch (e) {
+        if (!(e instanceof GateError)) throw e;
+        const u = new URL(BOUND);
+        const r = await fetch(`${u.origin}/api/agent/${link.id}/gates?token=${encodeURIComponent(link.token)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ agent: process.env.HASSASSIN_AGENT_NAME ?? '', gate: e.gate }),
+        }).catch(() => null);
+        const d = r && r.ok ? ((await r.json()) as { allowed?: boolean }) : {};
+        if (!d.allowed) throw e;
+        session.project.guard.allow = { kind: e.gate.kind, max: e.gate.count };
+        return await run();
+      } finally {
+        session.project.guard = undefined;
+      }
     }
     const p = await getProject(path);
     const rest = { ...args };

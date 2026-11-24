@@ -7,7 +7,7 @@
  * the Claude API) and joins the shared project as a collaborator, so its edits are live,
  * undoable and in the history. The conversation is kept per project in this browser.
  */
-import { aiFlowOf, computeGates, isGoAhead, nextStage, STAGE_TITLES, AI_STAGES, type AgentQuestion } from '@hassassin/tools';
+import { aiFlowOf, AUTONOMY_LABEL, computeGates, isGoAhead, limitsOf, nextStage, STAGE_TITLES, AI_STAGES, type AgentQuestion, type Autonomy } from '@hassassin/tools';
 import type { App } from '../app.ts';
 import type { Collab } from '../collab.ts';
 import { clear, h } from './dom.ts';
@@ -29,6 +29,10 @@ type Item =
   | { kind: 'steps'; steps: Step[] }
   | { kind: 'note'; text: string }
   | { kind: 'error'; text: string }
+  /** A change held by a gate (A13): ask / allowed / declined. */
+  | { kind: 'gate'; id: string; summary: string; parts: string[]; nets: string[]; state: string; busy?: boolean; error?: string }
+  /** What the agent decided on its own in a reply (A13). */
+  | { kind: 'decisions'; items: { kind: string; what: string; reason?: string }[] }
   /** The agent asked for a plugin (A12): approve / settings / done / declined. */
   | { kind: 'plugin'; id: string; plugin: string; name: string; description: string; permission: string; hosts: string[]; reason: string; installed: boolean; state: string; settings?: string[]; error?: string; busy?: boolean }
   /** Questions with choices from the agent (ask_user, A14); `answered` is what the user sent. */
@@ -170,6 +174,22 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   const taskBox = h('div', { class: 'agent-tasks' });
   const flowBox = h('div', { class: 'agent-flow' });
   const statusBox = h('div', { class: 'agent-status' });
+  const autonomyBox = h('div', { class: 'agent-autonomy' });
+  /** The project's autonomy level and its gate (A13), editors only. */
+  const drawAutonomy = () => {
+    clear(autonomyBox);
+    if (!app.doc || !collab.session) return;
+    const l = limitsOf(app.doc);
+    const set = (patch: Record<string, unknown>, label: string) => app.apply(label, [{ op: 'setMeta', key: 'agentLimits', value: { ...((app.doc!.meta.agentLimits as object) ?? {}), ...l, ...patch } }]);
+    const sel = h('select', { title: 'What the agent may do without asking you', ...(canEdit ? {} : { disabled: true }) }, ...(['ask', 'auto', 'full'] as Autonomy[]).map((v) => h('option', { value: v, ...(v === l.autonomy ? { selected: true } : {}) }, AUTONOMY_LABEL[v]))) as HTMLSelectElement;
+    sel.addEventListener('change', () => set({ autonomy: sel.value }, `Autonomy: ${AUTONOMY_LABEL[sel.value as Autonomy]}`));
+    const bulk = h('input', { type: 'number', min: '1', max: '100', value: String(l.bulkLimit ?? 5), title: 'Removing more parts or nets than this at once always needs your OK', style: 'width:46px', ...(canEdit ? {} : { disabled: true }) }) as HTMLInputElement;
+    bulk.addEventListener('change', () => {
+      const v = Math.max(1, Math.min(100, Math.round(Number(bulk.value) || 5)));
+      set({ bulkLimit: v }, `Agent asks before removing more than ${v}`);
+    });
+    autonomyBox.append(h('span', { class: 'dim' }, 'Autonomy'), sel, h('span', { class: 'dim', title: 'Removing or replacing more parts or nets than this at once always waits for your OK, at every level' }, 'asks before removing >'), bulk);
+  };
   /**
    * Agents running on this project, as the server reports them (its mirror of every conversation), so the
    * panel always says whether an agent works, whose, since when and on what, also after a reload or when
@@ -251,6 +271,47 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     });
     if (!it.readonly) card.append(h('div', { class: 'q-actions' }, submit));
     return card;
+  };
+
+  // ---------------------------------------------------------------- gates and decisions (A13)
+  const renderGateCard = (it: Extract<Item, { kind: 'gate' }>): HTMLElement => {
+    const card = h('div', { class: 'msg question gate-card' }, h('div', { class: 'q-title' }, h('span', { class: 'q-chip' }, 'Needs your OK'), h('span', {}, it.summary)));
+    if (it.state === 'ask') {
+      const allow = h('button', { class: 'btn primary', ...(it.busy ? { disabled: true } : {}) }, 'Allow');
+      const no = h('button', { class: 'btn' }, "Don't");
+      const decide = async (decision: 'allow' | 'decline') => {
+        if (!collab.session) return;
+        it.busy = true;
+        updateItem(it);
+        const r = await fetch(`/api/agent/${collab.session.id}/gates/decide?token=${encodeURIComponent(collab.session.token)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chat: viewing ?? chat, id: it.id, decision, user: { name: collab.user.name } }) });
+        it.busy = false;
+        if (!r.ok) it.error = ((await r.json().catch(() => ({}))) as { error?: string }).error ?? `HTTP ${r.status}`;
+        else it.state = decision === 'allow' ? 'allowed' : 'declined';
+        updateItem(it);
+        persist();
+        // My own conversation: tell the agent, so it goes on (or not).
+        if (r.ok && !viewing) void send(decision === 'allow' ? `Allowed: go ahead with "${it.summary}".` : `Not allowed: do not do "${it.summary}". Suggest another way.`);
+      };
+      allow.addEventListener('click', () => void decide('allow'));
+      no.addEventListener('click', () => void decide('decline'));
+      card.append(h('div', { class: 'q-desc' }, 'The agent waits for you. Allowing lets this change through once.'), h('div', { class: 'q-actions' }, no, allow));
+    } else card.append(h('div', { class: 'q-head' }, it.state === 'allowed' ? '✓ Allowed once' : 'Not allowed'));
+    if (it.error) card.append(h('div', { class: 'err-text' }, it.error));
+    return card;
+  };
+  const DECISION_LABEL: Record<string, string> = { plugin: 'Plugin', part: 'Part', source: 'Source' };
+  const renderDecisions = (it: Extract<Item, { kind: 'decisions' }>): HTMLElement =>
+    h(
+      'details',
+      { class: 'msg decisions', open: true },
+      h('summary', {}, `Decided by the agent (${it.items.length})`),
+      h('ul', {}, ...it.items.map((d) => h('li', {}, h('span', { class: 'q-chip' }, DECISION_LABEL[d.kind] ?? d.kind), ` ${d.what}`, d.reason ? h('span', { class: 'dim' }, ` — ${d.reason}`) : null))),
+      h('div', { class: 'dim', style: 'font-size:11px' }, 'Changes to the project are undone with "Undo these changes" below.'),
+    );
+  const gateEvent = (list: Item[], e: Record<string, unknown>, push: (it: Item) => void) => {
+    const known = list.find((x): x is Extract<Item, { kind: 'gate' }> => x.kind === 'gate' && x.id === e.id);
+    if (known) return ((known.state = String(e.state ?? known.state)), updateItem(known));
+    push({ kind: 'gate', id: String(e.id), summary: String(e.summary ?? ''), parts: Array.isArray(e.parts) ? e.parts.map(String) : [], nets: Array.isArray(e.nets) ? e.nets.map(String) : [], state: String(e.state ?? 'ask') });
   };
 
   // ---------------------------------------------------------------- plugin requests (A12)
@@ -345,6 +406,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     }
     if (it.kind === 'question') return renderQuestion(it);
     if (it.kind === 'plugin') return renderPluginCard(it);
+    if (it.kind === 'gate') return renderGateCard(it);
+    if (it.kind === 'decisions') return renderDecisions(it);
     if (it.kind === 'note') {
       const d = h('details', { class: 'msg note' }, h('summary', {}, 'Thinking'), h('div', { class: 'note-body' }, it.text));
       return d;
@@ -670,6 +733,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
     plugins = list;
     if (list) pluginsError = '';
     canEdit = info?.role === 'edit';
+    drawAutonomy();
     drawPlugins();
   };
   /** Switch a plugin on or off for this project: a change of the project (one undo step), editors only. */
@@ -774,7 +838,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       chat = saved?.chat ?? null;
       if (saved?.backend) backend = saved.backend;
     }
-    root.append(header, loginBox, statusBox, pluginBox, flowBox, taskBox, log, bottom);
+    root.append(header, loginBox, statusBox, autonomyBox, pluginBox, flowBox, taskBox, log, bottom);
+    drawAutonomy();
     drawFlow();
     drawHeader();
     void loadPlugins();
@@ -865,6 +930,12 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
             updateItem(agentItem);
           } else if (e.type === 'note') {
             push({ kind: 'note', text: e.text });
+          } else if (e.type === 'gate') {
+            agentItem = null;
+            stepsItem = null;
+            gateEvent(items, e, push);
+          } else if (e.type === 'decisions') {
+            push({ kind: 'decisions', items: e.items ?? [] });
           } else if (e.type === 'plugin_request') {
             agentItem = null;
             stepsItem = null;
@@ -939,6 +1010,8 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
       if (show) updateItem(w.agentItem);
     } else if (t === 'note') push({ kind: 'note', text: String(e.text ?? '') });
     else if (t === 'plugin_request') pluginEvent(w.items, e, push);
+    else if (t === 'gate') gateEvent(w.items, e, push);
+    else if (t === 'decisions') push({ kind: 'decisions', items: (e.items as { kind: string; what: string; reason?: string }[]) ?? [] });
     else if (t === 'question') push({ kind: 'question', id: String(e.id), questions: (e.questions as AgentQuestion[]) ?? [], readonly: true, answered: ((e.questions as AgentQuestion[]) ?? []).map((q) => `- ${q.question}`).join('\n') });
     else if (t === 'tool') {
       w.agentItem = null;
@@ -1022,7 +1095,7 @@ export function mountAgent(app: App, collab: Collab, root: HTMLElement, onShare:
   });
   app.on('drc', drawHints);
   // A collaborator may switch plugins; the switches follow the project.
-  app.on('change', () => (pluginsOpen && drawPlugins(), drawFlow()));
+  app.on('change', () => (pluginsOpen && drawPlugins(), drawFlow(), drawAutonomy()));
   app.on('doc', drawFlow);
   // The intro's button depends on whether a project is open.
   app.on('doc', () => {

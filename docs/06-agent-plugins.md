@@ -4,7 +4,7 @@
 |---|---|
 | Document | `docs/06-agent-plugins.md` |
 | Version | 0.5 |
-| Status | **Approved on 2026-11-16 (0.5); A1, A2, A14, A3 and A12 done, AM1 continues (A13)** |
+| Status | **Approved on 2026-11-16 (0.5); AM1 done (A1, A2, A14, A3, A12, A13); AM2 next (A4)** |
 | Owner | Repository owner (widjis) |
 | Implementer | AI coding agent working in this repository |
 | Based on | Hassassin PCB 0.4.0 (tag `v0.4.0`) |
@@ -409,7 +409,7 @@ can be checked; an item is done only when all of them pass.
       agent asking under *Automatic* and going on with the plugin's tool in the same reply; *Ask every time*
       with the card and the user installing from it (editors only); a plugin that needs a key; a package
       outside the catalog refused; a view link gets a card).
-- [ ] **A13. Autonomy levels.**
+- [x] **A13. Autonomy levels.**
   - A level per project, set in the Agent tab: **Ask every time**, **Automatic within limits** (default) or
     **Full**. It decides what the agent does without asking:
 
@@ -428,6 +428,37 @@ can be checked; an item is done only when all of them pass.
   - Acceptance: one task (a regulator chosen and placed with its datasheet) run at each level gives cards
     where the table says and none elsewhere; every gate gives a card even at Full; the list of decisions
     matches the log.
+  - *Done (2026-11-24).*
+    - **Level and limit** in the Agent tab, under the agent picker (editors only; others see it): *Autonomy*
+      (Ask every time / Automatic within limits / Full, the same setting the AI Full wizard asks for) and
+      *asks before removing > N* (default 5). Both are kept in the project (`agentLimits.autonomy`,
+      `agentLimits.bulkLimit`). Every message tells the agent its level, what it may do alone and the gates
+      (`autonomyNote` in `packages/tools/src/aiFlow.ts`).
+    - **Bulk gate** (`packages/tools/src/agentGate.ts`): a project worked on by an agent carries a guard;
+      every change is checked before it is applied, and one that removes more parts (by reference, not
+      power symbols) and nets than the limit is held with a `GateError`. The server shows a card (*Needs
+      your OK*: what and how many; *Allow* / *Don't*, editors only); the agent is told to stop and say why.
+      *Allow* gives one OK for one change of at most that size, kept 15 minutes in that chat, and sends
+      "Allowed: go ahead" in the conversation; the next try goes through and the OK is used up. The same
+      for the API backend and for Claude Code / Codex (the MCP server asks the Hassassin server,
+      `POST /api/agent/:id/gates`). People's own edits are never held.
+    - **The other gates are out of the agent's reach**, which is stricter than a card: fabrication and file
+      exports are not offered to it (`export_fab` is hidden for the built-in agent and for a live project
+      over MCP), publishing to the team library and inviting people are not tools, and it never receives a
+      secret (A12: a plugin's key is filled in by the user on the server). A10 adds the "parts not
+      verified" check on the user's own fabrication export.
+    - **Decisions:** at the end of each reply the conversation lists what the agent decided on its own:
+      plugins switched on or installed (with the agent's reason), parts chosen (`set_part_info` with a part
+      number, `place_part`) and sources used (`fetch_document`, `get_datasheet`, with their trust level).
+      The edits of the reply stay undoable together as before. The same list is appended to
+      `agent-log/<project>.jsonl` in the server's data folder (`GET /api/agent/:id/decisions`).
+    - **Live check** (Claude Code, *Full*, seven resistors): "delete R1 to R7" was held: card "Delete 7
+      object(s): removing 7 parts (R1 … R7) at once (more than 5)", the agent stopped and explained, all
+      seven stayed; after *Allow* it deleted them in one change.
+    - Tests: `apps/server/test/autonomy.test.ts` (the gate holds an agent and lets one allowed change
+      through, people never held; the note per level; one task at each level gives the plugin card only
+      under *Ask every time*, no gate, and the decisions listed equal the log; the bulk gate gives a card
+      even at *Full*, *Allow* lets the next try through once, a second decide is refused).
 
 ### Milestone AM2 — component selection
 
